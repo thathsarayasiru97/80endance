@@ -1,0 +1,158 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Student profile, A/L academic details, reminder preferences, starting balance, and summary counters.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the student." },
+        "firstName": { "type": "string", "description": "Student first name." },
+        "lastName": { "type": "string", "description": "Student last name." },
+        "nickname": { "type": "string", "description": "Optional preferred nickname for greetings." },
+        "email": { "type": "string", "description": "Google account email address." },
+        "schoolName": { "type": "string", "description": "School name (defaults to Royal College, Colombo)." },
+        "grade": { "type": "string", "enum": ["Grade 12", "Grade 13"], "description": "A/L grade level." },
+        "alStream": { "type": "string", "enum": ["Physical Science", "Bio Science", "Commerce", "Arts", "Technology"], "description": "GCE A/L stream." },
+        "className": { "type": "string", "description": "Class code such as 13M2 or 12B1." },
+        "alExamYear": { "type": "integer", "description": "Target GCE A/L exam year." },
+        "subjects": { "type": "array", "description": "Up to 6 A/L subjects (3 primary subjects)." },
+        "reminderEnabled": { "type": "boolean", "description": "Whether daily check-in reminders are enabled." },
+        "reminderHour": { "type": "integer", "description": "Preferred daily reminder hour (0-23)." },
+        "reminderMinute": { "type": "integer", "description": "Preferred daily reminder minute (0-59)." },
+        "countExcusedAsPresent": { "type": "boolean", "description": "Whether Medical and School Event days count toward 80% eligibility." },
+        "priorPresentCount": { "type": "integer", "description": "Optional prior days attended before joining mid-term." },
+        "priorAbsentCount": { "type": "integer", "description": "Optional prior days missed before joining mid-term." },
+        "setupCompleted": { "type": "boolean", "description": "Whether initial academic setup is finished." },
+        "presentCount": { "type": "integer", "description": "Denormalized count of logged present days." },
+        "absentCount": { "type": "integer", "description": "Denormalized count of logged absent days." },
+        "medicalCount": { "type": "integer", "description": "Denormalized count of logged medical excused days." },
+        "schoolEventCount": { "type": "integer", "description": "Denormalized count of logged school event days." },
+        "lastCheckInDate": { "type": "string", "description": "Optional ISO date string (YYYY-MM-DD) of last check-in." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": [
+        "userId", "firstName", "lastName", "email", "schoolName", "grade",
+        "alStream", "className", "alExamYear", "subjects", "reminderEnabled",
+        "reminderHour", "reminderMinute", "countExcusedAsPresent",
+        "priorPresentCount", "priorAbsentCount", "setupCompleted",
+        "presentCount", "absentCount", "medicalCount", "schoolEventCount",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Single school-day attendance entry keyed by ISO date (YYYY-MM-DD).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID matching parent user document." },
+        "dateKey": { "type": "string", "description": "ISO date YYYY-MM-DD matching document ID." },
+        "termId": { "type": "string", "description": "Associated academic term identifier." },
+        "status": { "type": "string", "enum": ["present", "absent", "medical", "school_event", "holiday"], "description": "Daily attendance status." },
+        "subjectTags": { "type": "array", "description": "Optional bounded list of A/L subject tags." },
+        "note": { "type": "string", "description": "Optional short note or excuse reason." },
+        "markedBy": { "type": "string", "enum": ["student", "admin"], "description": "Source of the attendance entry." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "dateKey", "termId", "status", "subjectTags", "markedBy", "createdAt", "updatedAt"]
+    },
+    "Notice": {
+      "title": "Notice",
+      "description": "School-wide or stream/class-targeted notice or pinned dashboard slide.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Short notice headline." },
+        "message": { "type": "string", "description": "Full notice body text." },
+        "category": { "type": "string", "enum": ["teacher_absent", "school_event", "schedule_change", "exam", "general"], "description": "Notice category." },
+        "pinned": { "type": "boolean", "description": "Whether displayed in the 5-second dashboard slideshow." },
+        "targetType": { "type": "string", "enum": ["all", "stream", "class"], "description": "Target audience scope." },
+        "targetValue": { "type": "string", "description": "Optional stream name or class code when targeted." },
+        "eventDate": { "type": "string", "description": "Optional related event date (YYYY-MM-DD)." },
+        "priority": { "type": "string", "enum": ["normal", "urgent"], "description": "Visual urgency level." },
+        "published": { "type": "boolean", "description": "Whether visible to signed-in students." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["title", "message", "category", "pinned", "targetType", "priority", "published", "createdAt", "updatedAt"]
+    },
+    "AcademicTerm": {
+      "title": "AcademicTerm",
+      "description": "Sri Lankan school term date range and eligibility requirement.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Display term name such as Term 1 2026." },
+        "startDate": { "type": "string", "description": "ISO start date YYYY-MM-DD." },
+        "endDate": { "type": "string", "description": "ISO end date YYYY-MM-DD." },
+        "academicYear": { "type": "integer", "description": "Academic year integer." },
+        "minEligibilityPercent": { "type": "integer", "description": "Required attendance percentage (default 80)." },
+        "active": { "type": "boolean", "description": "Whether this term is currently active." },
+        "published": { "type": "boolean", "description": "Whether published to students." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["name", "startDate", "endDate", "academicYear", "minEligibilityPercent", "active", "published", "createdAt", "updatedAt"]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "Sri Lankan Full Moon Poya day, public holiday, term break, or exam date.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Event name such as Vesak Full Moon Poya Day." },
+        "dateKey": { "type": "string", "description": "ISO date YYYY-MM-DD." },
+        "eventType": { "type": "string", "enum": ["poya", "public_holiday", "term_break", "school_holiday", "exam"], "description": "Category of calendar event." },
+        "academicYear": { "type": "integer", "description": "Calendar year integer." },
+        "description": { "type": "string", "description": "Optional extra details." },
+        "published": { "type": "boolean", "description": "Whether published to students." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["title", "dateKey", "eventType", "academicYear", "published", "createdAt", "updatedAt"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Global application defaults and GCE A/L exam target dates.",
+      "type": "object",
+      "properties": {
+        "defaultEligibilityPercent": { "type": "integer", "description": "Default minimum eligibility percentage (80)." },
+        "defaultReminderHour": { "type": "integer", "description": "Default reminder hour (14)." },
+        "defaultReminderMinute": { "type": "integer", "description": "Default reminder minute (0)." },
+        "currentAcademicYear": { "type": "integer", "description": "Active academic year." },
+        "al2026ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2026 A/L exam start." },
+        "al2027ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2027 A/L exam start." },
+        "al2028ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2028 A/L exam start." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": [
+        "defaultEligibilityPercent", "defaultReminderHour", "defaultReminderMinute",
+        "currentAcademicYear", "al2026ExamDate", "al2027ExamDate", "al2028ExamDate", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Student profile and denormalized attendance counters isolated per authenticated user or verified admin."
+    },
+    "/users/{userId}/attendance/{dateKey}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Per-day attendance records scoped to each student."
+    },
+    "/notices/{noticeId}": {
+      "schema": { "$ref": "#/entities/Notice" },
+      "description": "School-wide and stream/class-targeted notices and pinned dashboard slides."
+    },
+    "/academic_terms/{termId}": {
+      "schema": { "$ref": "#/entities/AcademicTerm" },
+      "description": "Shared Sri Lankan school terms."
+    },
+    "/calendar_events/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "Shared Sri Lankan Poya days, public holidays, and school calendar dates."
+    },
+    "/app_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/AppSettings" },
+      "description": "Global application defaults document (global)."
+    }
+  }
+}

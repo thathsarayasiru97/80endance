@@ -1,0 +1,359 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPER PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email == 'thathsarayasiru97@gmail.com' &&
+             request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDateKey(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidBoundedStringList(arr, maxLen) {
+      return arr is list &&
+             arr.size() <= maxLen &&
+             (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 60));
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.firstName is string && data.firstName.size() >= 1 && data.firstName.size() <= 50 &&
+             data.lastName is string && data.lastName.size() >= 1 && data.lastName.size() <= 50 &&
+             (!('nickname' in data) || data.nickname == null || (data.nickname is string && data.nickname.size() <= 40)) &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 100 &&
+             data.grade in ['Grade 12', 'Grade 13'] &&
+             data.alStream in ['Physical Science', 'Bio Science', 'Commerce', 'Arts', 'Technology'] &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 20 &&
+             data.alExamYear is int && data.alExamYear >= 2025 && data.alExamYear <= 2035 &&
+             isValidBoundedStringList(data.subjects, 6) &&
+             data.reminderEnabled is bool &&
+             data.reminderHour is int && data.reminderHour >= 0 && data.reminderHour <= 23 &&
+             data.reminderMinute is int && data.reminderMinute >= 0 && data.reminderMinute <= 59 &&
+             data.countExcusedAsPresent is bool &&
+             data.priorPresentCount is int && data.priorPresentCount >= 0 && data.priorPresentCount <= 500 &&
+             data.priorAbsentCount is int && data.priorAbsentCount >= 0 && data.priorAbsentCount <= 500 &&
+             data.setupCompleted is bool &&
+             data.presentCount is int && data.presentCount >= 0 && data.presentCount <= 1000 &&
+             data.absentCount is int && data.absentCount >= 0 && data.absentCount <= 1000 &&
+             data.medicalCount is int && data.medicalCount >= 0 && data.medicalCount <= 1000 &&
+             data.schoolEventCount is int && data.schoolEventCount >= 0 && data.schoolEventCount <= 1000 &&
+             (!('lastCheckInDate' in data) || data.lastCheckInDate == null || data.lastCheckInDate == '' || isValidDateKey(data.lastCheckInDate));
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             isValidDateKey(data.dateKey) &&
+             data.termId is string && data.termId.size() >= 1 && data.termId.size() <= 60 &&
+             data.status in ['present', 'absent', 'medical', 'school_event', 'holiday'] &&
+             isValidBoundedStringList(data.subjectTags, 6) &&
+             (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 200)) &&
+             data.markedBy in ['student', 'admin'];
+    }
+
+    function isValidNotice(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+             data.category in ['teacher_absent', 'school_event', 'schedule_change', 'exam', 'general'] &&
+             data.pinned is bool &&
+             data.targetType in ['all', 'stream', 'class'] &&
+             (!('targetValue' in data) || data.targetValue == null || (data.targetValue is string && data.targetValue.size() <= 60)) &&
+             (!('eventDate' in data) || data.eventDate == null || data.eventDate == '' || isValidDateKey(data.eventDate)) &&
+             data.priority in ['normal', 'urgent'] &&
+             data.published is bool;
+    }
+
+    function isValidAcademicTerm(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             isValidDateKey(data.startDate) &&
+             isValidDateKey(data.endDate) &&
+             data.academicYear is int && data.academicYear >= 2024 && data.academicYear <= 2035 &&
+             data.minEligibilityPercent is int && data.minEligibilityPercent >= 50 && data.minEligibilityPercent <= 100 &&
+             data.active is bool &&
+             data.published is bool;
+    }
+
+    function isValidCalendarEvent(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             isValidDateKey(data.dateKey) &&
+             data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'exam'] &&
+             data.academicYear is int && data.academicYear >= 2024 && data.academicYear <= 2035 &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 200)) &&
+             data.published is bool;
+    }
+
+    function isValidAppSettings(data) {
+      return data.defaultEligibilityPercent is int && data.defaultEligibilityPercent >= 50 && data.defaultEligibilityPercent <= 100 &&
+             data.defaultReminderHour is int && data.defaultReminderHour >= 0 && data.defaultReminderHour <= 23 &&
+             data.defaultReminderMinute is int && data.defaultReminderMinute >= 0 && data.defaultReminderMinute <= 59 &&
+             data.currentAcademicYear is int && data.currentAcademicYear >= 2024 && data.currentAcademicYear <= 2035 &&
+             isValidDateKey(data.al2026ExamDate) &&
+             isValidDateKey(data.al2027ExamDate) &&
+             isValidDateKey(data.al2028ExamDate);
+    }
+
+    // --- COLLECTION 1: USER PROFILES (PII STRICTLY ISOLATED) ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == userId &&
+                       (isOwner(userId) || isAdmin()) &&
+                       incoming().keys().hasAll([
+                         'userId', 'firstName', 'lastName', 'email', 'schoolName', 'grade',
+                         'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
+                         'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
+                         'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                         'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
+                         'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
+                         'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
+                         'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                         'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
+                         'lastCheckInDate', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
+                         'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
+                         'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
+                         'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                         'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
+                         'lastCheckInDate', 'createdAt', 'updatedAt'
+                       ]) &&
+                       (
+                         isAdmin() ||
+                         (
+                           isOwner(userId) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
+                             'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
+                             'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
+                             'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                             'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
+                             'lastCheckInDate', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      // --- COLLECTION 2: PER-DAY ATTENDANCE SUBCOLLECTION ---
+      match /attendance/{dateKey} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidDateKey(dateKey) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+
+        allow create: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidDateKey(dateKey) &&
+                         isValidAttendanceRecord(incoming()) &&
+                         incoming().userId == userId &&
+                         incoming().dateKey == dateKey &&
+                         (isOwner(userId) || isAdmin()) &&
+                         (isAdmin() || incoming().markedBy == 'student') &&
+                         incoming().keys().hasAll([
+                           'userId', 'dateKey', 'termId', 'status', 'subjectTags', 'markedBy', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'dateKey', 'termId', 'status', 'subjectTags', 'note', 'markedBy', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt);
+
+        allow update: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidDateKey(dateKey) &&
+                         isValidAttendanceRecord(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().dateKey == existing().dateKey &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'dateKey', 'termId', 'status', 'subjectTags', 'note', 'markedBy', 'createdAt', 'updatedAt'
+                         ]) &&
+                         (
+                           isAdmin() ||
+                           (
+                             isOwner(userId) &&
+                             incoming().markedBy == 'student' &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'termId', 'status', 'subjectTags', 'note', 'markedBy', 'updatedAt'
+                             ])
+                           )
+                         );
+
+        allow delete: if isSignedIn() && isValidId(userId) && isValidDateKey(dateKey) && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    // --- COLLECTION 3: NOTICES & PINNED SLIDES ---
+    match /notices/{noticeId} {
+      allow get: if isSignedIn() && isValidId(noticeId) && (existing().published == true || isAdmin());
+      allow list: if isSignedIn() && (existing().published == true || isAdmin());
+
+      allow create: if isAdmin() &&
+                       isValidId(noticeId) &&
+                       isValidNotice(incoming()) &&
+                       incoming().keys().hasAll([
+                         'title', 'message', 'category', 'pinned', 'targetType', 'priority', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isAdmin() &&
+                       isValidId(noticeId) &&
+                       isValidNotice(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().keys().hasOnly([
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'updatedAt'
+                       ]);
+
+      allow delete: if isAdmin() && isValidId(noticeId);
+    }
+
+    // --- COLLECTION 4: ACADEMIC TERMS ---
+    match /academic_terms/{termId} {
+      allow get: if isSignedIn() && isValidId(termId) && (existing().published == true || isAdmin());
+      allow list: if isSignedIn() && (existing().published == true || isAdmin());
+
+      allow create: if isAdmin() &&
+                       isValidId(termId) &&
+                       isValidAcademicTerm(incoming()) &&
+                       incoming().keys().hasAll([
+                         'name', 'startDate', 'endDate', 'academicYear', 'minEligibilityPercent', 'active', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'name', 'startDate', 'endDate', 'academicYear', 'minEligibilityPercent', 'active', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isAdmin() &&
+                       isValidId(termId) &&
+                       isValidAcademicTerm(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'startDate', 'endDate', 'academicYear', 'minEligibilityPercent', 'active', 'published', 'updatedAt'
+                       ]);
+
+      allow delete: if isAdmin() && isValidId(termId);
+    }
+
+    // --- COLLECTION 5: SRI LANKAN POYA & HOLIDAY CALENDAR EVENTS ---
+    match /calendar_events/{eventId} {
+      allow get: if isSignedIn() && isValidId(eventId) && (existing().published == true || isAdmin());
+      allow list: if isSignedIn() && (existing().published == true || isAdmin());
+
+      allow create: if isAdmin() &&
+                       isValidId(eventId) &&
+                       isValidCalendarEvent(incoming()) &&
+                       incoming().keys().hasAll([
+                         'title', 'dateKey', 'eventType', 'academicYear', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'published', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isAdmin() &&
+                       isValidId(eventId) &&
+                       isValidCalendarEvent(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'published', 'updatedAt'
+                       ]);
+
+      allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    // --- COLLECTION 6: GLOBAL APP SETTINGS ---
+    match /app_settings/{settingId} {
+      allow get: if isSignedIn() && settingId == 'global';
+      allow list: if false;
+
+      allow create: if isAdmin() &&
+                       settingId == 'global' &&
+                       isValidAppSettings(incoming()) &&
+                       incoming().keys().hasAll([
+                         'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isAdmin() &&
+                       settingId == 'global' &&
+                       isValidAppSettings(incoming()) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate', 'updatedAt'
+                       ]);
+
+      allow delete: if false;
+    }
+  }
+}

@@ -1,0 +1,539 @@
+package com.example.ui.calendar
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.example.data.AttendanceStatus
+import com.example.data.CalendarEventType
+import com.example.data.DateUtils
+import com.example.ui.theme.LocalAttendanceColors
+import com.example.viewmodel.StudentAppState
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CalendarScreen(
+    state: StudentAppState,
+    onEditDate: (String) -> Unit,
+    onDeleteDate: (String) -> Unit
+) {
+    val semantic = LocalAttendanceColors.current
+    val initialYm = remember { DateUtils.currentYearMonth() }
+    var displayYear by remember { mutableIntStateOf(initialYm.first) }
+    var displayMonth by remember { mutableIntStateOf(initialYm.second) }
+    var selectedDateKey by remember { mutableStateOf<String?>(null) }
+
+    val recordMap = remember(state.attendanceRecords) {
+        state.attendanceRecords.associateBy { it.dateKey }
+    }
+    val eventMap = remember(state.calendarEvents) {
+        state.calendarEvents.groupBy { it.dateKey }
+    }
+    val todayKey = remember { DateUtils.todayKey() }
+    val monthPrefix = remember(displayYear, displayMonth) {
+        String.format("%04d-%02d-", displayYear, displayMonth)
+    }
+    val monthEvents = remember(state.calendarEvents, monthPrefix) {
+        state.calendarEvents.filter { it.dateKey.startsWith(monthPrefix) }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = 600.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Column {
+                    Text(
+                        text = "Calendar & Poya Days",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Tap any day to log or edit attendance • ${state.activeTerm.name}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Monthly Grid Card
+            item {
+                Card(
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // Month Header
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    if (displayMonth == 1) {
+                                        displayMonth = 12
+                                        displayYear--
+                                    } else {
+                                        displayMonth--
+                                    }
+                                },
+                                modifier = Modifier.testTag("calendar_prev_month")
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "Previous month")
+                            }
+                            Text(
+                                text = DateUtils.formatMonthYear(displayYear, displayMonth),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            IconButton(
+                                onClick = {
+                                    if (displayMonth == 12) {
+                                        displayMonth = 1
+                                        displayYear++
+                                    } else {
+                                        displayMonth++
+                                    }
+                                },
+                                modifier = Modifier.testTag("calendar_next_month")
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = "Next month")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Weekday headers
+                        val weekHeaders = listOf("M", "T", "W", "T", "F", "S", "S")
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            weekHeaders.forEachIndexed { idx, label ->
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (idx >= 5) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        val firstDow = DateUtils.firstDayOfWeekMonZero(displayYear, displayMonth)
+                        val daysCount = DateUtils.daysInMonth(displayYear, displayMonth)
+                        val totalCells = ((firstDow + daysCount + 6) / 7) * 7
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            for (row in 0 until (totalCells / 7)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    for (col in 0 until 7) {
+                                        val cellIdx = row * 7 + col
+                                        val dayNum = cellIdx - firstDow + 1
+                                        if (dayNum < 1 || dayNum > daysCount) {
+                                            Box(modifier = Modifier.weight(1f).aspectRatio(1f))
+                                        } else {
+                                            val dateKey = DateUtils.formatDateKey(displayYear, displayMonth, dayNum)
+                                            val rec = recordMap[dateKey]
+                                            val dayEvents = eventMap[dateKey].orEmpty()
+                                            val isPoya = dayEvents.any { it.eventTypeEnum == CalendarEventType.POYA }
+                                            val isHoliday = dayEvents.any { it.nonSchoolDay }
+                                            val isToday = dateKey == todayKey
+
+                                            val cellBg = when {
+                                                rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.presentContainer
+                                                rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.absentContainer
+                                                rec?.statusEnum == AttendanceStatus.MEDICAL -> semantic.medicalContainer
+                                                rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEventContainer
+                                                isPoya || isHoliday -> semantic.poyaContainer.copy(alpha = 0.7f)
+                                                col >= 5 -> MaterialTheme.colorScheme.surfaceContainerLow
+                                                else -> Color.Transparent
+                                            }
+                                            val textColor = when {
+                                                rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.onPresentContainer
+                                                rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.onAbsentContainer
+                                                rec?.statusEnum == AttendanceStatus.MEDICAL -> semantic.onMedicalContainer
+                                                rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.onSchoolEventContainer
+                                                isPoya || isHoliday -> semantic.onPoyaContainer
+                                                col >= 5 -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                                else -> MaterialTheme.colorScheme.onSurface
+                                            }
+
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .aspectRatio(1f)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(cellBg)
+                                                    .then(
+                                                        if (isToday) {
+                                                            Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                                                        } else {
+                                                            Modifier
+                                                        }
+                                                    )
+                                                    .clickable { selectedDateKey = dateKey }
+                                            ) {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Text(
+                                                        text = dayNum.toString(),
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        color = textColor,
+                                                        fontWeight = if (isToday || rec != null) FontWeight.Bold else FontWeight.Medium
+                                                    )
+                                                    if (isPoya) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(5.dp)
+                                                                .clip(CircleShape)
+                                                                .background(semantic.poya)
+                                                        )
+                                                    } else if (dayEvents.isNotEmpty()) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(5.dp)
+                                                                .clip(CircleShape)
+                                                                .background(MaterialTheme.colorScheme.primary)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Compact Color Legend
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            LegendItem("Present", semantic.present)
+                            LegendItem("Absent", semantic.absent)
+                            LegendItem("Medical", semantic.medical)
+                            LegendItem("Event", semantic.schoolEvent)
+                            LegendItem("Poya", semantic.poya)
+                        }
+                    }
+                }
+            }
+
+            // Sri Lankan Poya Days & Holidays this month
+            item {
+                Text(
+                    text = "Sri Lankan Holidays & Milestones",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
+
+            if (monthEvents.isEmpty()) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "No Poya days or school holidays listed for this month.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            } else {
+                items(monthEvents, key = { it.id }) { ev ->
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedDateKey = ev.dateKey }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = semantic.poyaContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (ev.eventTypeEnum == CalendarEventType.POYA) Icons.Rounded.NightsStay else Icons.Rounded.Event,
+                                        contentDescription = ev.title,
+                                        tint = semantic.onPoyaContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = ev.title,
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Active School Terms Card
+            item {
+                Text(
+                    text = "Sri Lankan School Terms",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
+            items(state.terms.filter { it.academicYear == displayYear }.ifEmpty { state.terms.take(3) }, key = { it.id }) { term ->
+                Surface(
+                    color = if (term.id == state.activeTerm.id) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLowest
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(term.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                text = "${DateUtils.formatReadableShort(term.startDate)} → ${DateUtils.formatReadableShort(term.endDate)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                text = "${term.minEligibilityPercent}% rule",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(16.dp)) }
+        }
+    }
+
+    // Day Detail Bottom Sheet
+    selectedDateKey?.let { dateKey ->
+        val record = recordMap[dateKey]
+        val events = eventMap[dateKey].orEmpty()
+        ModalBottomSheet(onDismissRequest = { selectedDateKey = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = DateUtils.formatReadableFull(dateKey),
+                    style = MaterialTheme.typography.titleLarge
+                )
+
+                events.forEach { ev ->
+                    Surface(
+                        color = semantic.poyaContainer,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.NightsStay,
+                                contentDescription = null,
+                                tint = semantic.onPoyaContainer
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(ev.title, style = MaterialTheme.typography.titleSmall, color = semantic.onPoyaContainer)
+                                Text(ev.eventTypeEnum.label, style = MaterialTheme.typography.bodySmall, color = semantic.onPoyaContainer)
+                            }
+                        }
+                    }
+                }
+
+                if (record != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Logged Status: ${record.statusEnum.label}",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (record.subjectTags.isNotEmpty()) {
+                                Text(
+                                    text = "Subjects: ${record.subjectTags.joinToString(", ")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (!record.note.isNullOrBlank()) {
+                                Text(
+                                    text = "Note: ${record.note}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "No attendance recorded for this date yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    if (record != null) {
+                        OutlinedButton(
+                            onClick = {
+                                onDeleteDate(dateKey)
+                                selectedDateKey = null
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Clear")
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            selectedDateKey = null
+                            onEditDate(dateKey)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.weight(1.4f)
+                    ) {
+                        Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (record == null) "Log Attendance" else "Edit Entry")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegendItem(label: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}

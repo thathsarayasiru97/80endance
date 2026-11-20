@@ -1,0 +1,6 @@
+{
+  "name": "80endance",
+  "description": "An offline-capable GCE A/L attendance tracker for Royal College Colombo students to monitor the 80% exam eligibility rule with daily check-in reminders, Poya and term calendars, attendance streaks, and class notices.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

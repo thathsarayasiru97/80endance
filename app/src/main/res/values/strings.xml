@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">80endance</string>
+    <string name="welcome_subtitle">Your personal GCE A/L attendance companion for Royal College, Colombo.</string>
+    <string name="sign_in_google">Continue with Google</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_calendar">Calendar</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_settings">Settings</string>
+    <string name="checkin_question">Did you attend school today?</string>
+    <string name="checkin_yes">Yes, I Attended</string>
+    <string name="checkin_no">No, I Missed</string>
+    <string name="notification_channel_name">Daily Attendance Reminder</string>
+    <string name="notification_channel_desc">Reminds you after school to log your daily attendance.</string>
+    <string name="notification_title">Did you attend school today?</string>
+    <string name="notification_body">Tap Yes or No to keep your 80% A/L eligibility up to date.</string>
+</resources>

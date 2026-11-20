@@ -1,0 +1,160 @@
+name: Release 80endance APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release version tag (e.g., v1.0, v1.1). Leave blank to use versionName from app/build.gradle.kts.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-apk:
+    name: Build & Publish 80endance Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Accept Android SDK licenses
+        run: |
+          if [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          fi
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Configure Google Services JSON (if stored as secret)
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+            echo "Restored app/google-services.json from repository secret."
+          elif [ ! -f app/google-services.json ]; then
+            echo "::error::app/google-services.json not found. Commit it or set the GOOGLE_SERVICES_JSON_BASE64 repository secret."
+            exit 1
+          fi
+
+      - name: Determine release version and signing mode
+        id: meta
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          INPUT_TAG: ${{ inputs.version_tag }}
+        run: |
+          APP_VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)"/\1/')
+          APP_VERSION="${APP_VERSION:-1.0}"
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          elif [ -n "$INPUT_TAG" ]; then
+            RELEASE_TAG="$INPUT_TAG"
+          else
+            RELEASE_TAG="v${APP_VERSION}"
+          fi
+
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            BUILD_MODE="release"
+          else
+            BUILD_MODE="debug"
+          fi
+
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "build_mode=${BUILD_MODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed Release APK
+        if: steps.meta.outputs.build_mode == 'release'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+        run: |
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "${KEYSTORE_PATH}"
+          gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Build APK with bundled signing key (fallback if release secrets are not configured)
+        if: steps.meta.outputs.build_mode == 'debug'
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 --decode debug.keystore.base64 > debug.keystore
+          else
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare Release APK artifact
+        id: artifact
+        run: |
+          MODE="${{ steps.meta.outputs.build_mode }}"
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          mkdir -p release-output
+
+          if [ "$MODE" = "release" ]; then
+            SRC_APK="app/build/outputs/apk/release/app-release.apk"
+          else
+            SRC_APK="app/build/outputs/apk/debug/app-debug.apk"
+          fi
+
+          if [ ! -f "$SRC_APK" ]; then
+            echo "::error::Expected APK not found at ${SRC_APK}"
+            exit 1
+          fi
+
+          APK_NAME="80endance-${TAG}.apk"
+          cp "$SRC_APK" "release-output/${APK_NAME}"
+          sha256sum "release-output/${APK_NAME}" > "release-output/${APK_NAME}.sha256"
+
+          echo "apk_path=release-output/${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=release-output/${APK_NAME}.sha256" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: 80endance ${{ steps.meta.outputs.release_tag }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          body: |
+            ## 80endance ${{ steps.meta.outputs.release_tag }}
+
+            ### How to Install
+            1. Download **`${{ steps.artifact.outputs.apk_name }}`** from the Assets section below on your Android phone (Android 7.0 / API 24 or higher).
+            2. Open the downloaded `.apk` file and allow installation from your browser or file manager if prompted.
+          files: |
+            ${{ steps.artifact.outputs.apk_path }}
+            ${{ steps.artifact.outputs.checksum_path }}
+
+      - name: Clean up temporary keystore files
+        if: always()
+        run: rm -f my-upload-key.jks debug.keystore
