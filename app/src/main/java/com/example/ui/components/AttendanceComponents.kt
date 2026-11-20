@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -96,6 +97,8 @@ import com.example.data.NoticeTargetType
 import com.example.data.SyncStatus
 import com.example.data.WeekDaySummary
 import com.example.ui.theme.LocalAttendanceColors
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.PI
@@ -604,15 +607,37 @@ fun DailyCheckInDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogBackdrop = rememberLayerBackdrop()
+        val surfaceBase = MaterialTheme.colorScheme.surfaceContainerLowest
+        val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        val secondaryGlow = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            color = surfaceBase,
             tonalElevation = 4.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
         ) {
-            Column(modifier = Modifier.padding(22.dp)) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                // Local dialog-window backdrop captured behind foreground controls
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .layerBackdrop(dialogBackdrop)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    surfaceBase,
+                                    primaryGlow,
+                                    secondaryGlow,
+                                    surfaceBase
+                                )
+                            )
+                        )
+                )
+                Column(modifier = Modifier.padding(22.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -667,36 +692,32 @@ fun DailyCheckInDialog(
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Button(
+                                    LiquidGlassButton(
                                         onClick = { step = CheckInStep.YES_DETAILS },
-                                        shape = RoundedCornerShape(18.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = semantic.present,
-                                            contentColor = Color.White
-                                        ),
+                                        backdrop = dialogBackdrop,
+                                        tint = semantic.present,
+                                        contentColor = semantic.onPresentContainer,
+                                        minHeight = 60.dp,
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(60.dp)
                                             .testTag("checkin_yes_button")
                                     ) {
-                                        Icon(Icons.Rounded.CheckCircle, contentDescription = null)
+                                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = semantic.present)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("Yes", style = MaterialTheme.typography.titleMedium)
                                     }
 
-                                    Button(
+                                    LiquidGlassButton(
                                         onClick = { step = CheckInStep.NO_DETAILS },
-                                        shape = RoundedCornerShape(18.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = semantic.absentContainer,
-                                            contentColor = semantic.onAbsentContainer
-                                        ),
+                                        backdrop = dialogBackdrop,
+                                        tint = semantic.absent,
+                                        contentColor = semantic.onAbsentContainer,
+                                        minHeight = 60.dp,
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(60.dp)
                                             .testTag("checkin_no_button")
                                     ) {
-                                        Icon(Icons.Rounded.EventBusy, contentDescription = null)
+                                        Icon(Icons.Rounded.EventBusy, contentDescription = null, tint = semantic.absent)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("No", style = MaterialTheme.typography.titleMedium)
                                     }
@@ -763,7 +784,7 @@ fun DailyCheckInDialog(
                                         shape = RoundedCornerShape(14.dp),
                                         modifier = Modifier.weight(1f)
                                     ) { Text("Back") }
-                                    Button(
+                                    LiquidGlassButton(
                                         onClick = {
                                             onSave(
                                                 AttendanceStatus.PRESENT,
@@ -771,12 +792,12 @@ fun DailyCheckInDialog(
                                                 note.trim().ifEmpty { null }
                                             )
                                         },
+                                        backdrop = dialogBackdrop,
                                         enabled = !isSaving,
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = semantic.present,
-                                            contentColor = Color.White
-                                        ),
+                                        tint = semantic.present,
+                                        contentColor = semantic.onPresentContainer,
+                                        minHeight = 48.dp,
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                                         modifier = Modifier
                                             .weight(1.4f)
                                             .testTag("checkin_confirm_present_button")
@@ -860,7 +881,7 @@ fun DailyCheckInDialog(
                                         shape = RoundedCornerShape(14.dp),
                                         modifier = Modifier.weight(1f)
                                     ) { Text("Back") }
-                                    Button(
+                                    LiquidGlassButton(
                                         onClick = {
                                             onSave(
                                                 selectedNoStatus,
@@ -868,8 +889,12 @@ fun DailyCheckInDialog(
                                                 note.trim().ifEmpty { null }
                                             )
                                         },
+                                        backdrop = dialogBackdrop,
                                         enabled = !isSaving,
-                                        shape = RoundedCornerShape(14.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.primary,
+                                        minHeight = 48.dp,
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                                         modifier = Modifier
                                             .weight(1.4f)
                                             .testTag("checkin_confirm_no_button")
@@ -878,6 +903,7 @@ fun DailyCheckInDialog(
                             }
                         }
                     }
+                }
                 }
             }
         }

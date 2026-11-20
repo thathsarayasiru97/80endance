@@ -51,11 +51,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceStatus
 import com.example.data.DateUtils
 import com.example.data.Notice
 import com.example.ui.components.AnimatedEligibilityGauge
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
 import com.example.ui.components.StreakAndWeeklyCard
@@ -70,7 +72,8 @@ fun HomeScreen(
     scopeMode: DashboardScopeMode,
     onScopeModeChange: (DashboardScopeMode) -> Unit,
     onOpenCheckIn: (String) -> Unit,
-    onSyncClick: () -> Unit
+    onSyncClick: () -> Unit,
+    bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
     val semantic = LocalAttendanceColors.current
@@ -94,7 +97,12 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 600.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 16.dp,
+                bottom = bottomBarPadding
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 1. Greeting Header + A/L Countdown + Sync Status
@@ -339,9 +347,12 @@ fun HomeScreen(
                             }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Button(
+                        LiquidGlassButton(
                             onClick = { onOpenCheckIn(todayKey) },
-                            shape = RoundedCornerShape(14.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.primary,
+                            minHeight = 48.dp,
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                             modifier = Modifier.testTag("home_checkin_button")
                         ) {
                             Icon(

@@ -78,6 +78,19 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.graphics.Color
+import com.example.ui.components.LiquidGlassBackdropHost
+import com.example.ui.components.LiquidGlassBottomBar
+import com.example.ui.components.LiquidGlassNavItem
+import com.example.ui.components.LiquidGlassNavigationRail
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+
 class MainActivity : ComponentActivity() {
     private var openCheckInTrigger by mutableStateOf(false)
 
@@ -130,16 +143,18 @@ private fun AppRoot(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
-        val user = currentUser
-        if (user == null) {
-            AuthScreen(onAuthSuccess = {})
-        } else {
-            key(user.uid) {
-                AuthenticatedAppShell(
-                    user = user,
-                    openCheckInFromNotification = openCheckInFromNotification,
-                    onConsumeNotificationTrigger = onConsumeNotificationTrigger
-                )
+        LiquidGlassBackdropHost {
+            val user = currentUser
+            if (user == null) {
+                AuthScreen(onAuthSuccess = {})
+            } else {
+                key(user.uid) {
+                    AuthenticatedAppShell(
+                        user = user,
+                        openCheckInFromNotification = openCheckInFromNotification,
+                        onConsumeNotificationTrigger = onConsumeNotificationTrigger
+                    )
+                }
             }
         }
     }
@@ -261,113 +276,127 @@ private fun AuthenticatedAppShell(
         BackHandler { currentTab = AppTab.HOME }
     }
 
-    // Adaptive Layout: NavigationBar on Compact phones, NavigationRail on Medium/Expanded screens
+    val navItems = remember {
+        AppTab.entries.map { tab ->
+            LiquidGlassNavItem(
+                label = tab.label,
+                selectedIcon = tab.selectedIcon,
+                unselectedIcon = tab.unselectedIcon,
+                testTag = tab.tag
+            )
+        }
+    }
+
+    // Adaptive Layout: Floating LiquidGlassBottomBar on Compact phones,
+    // Floating LiquidGlassNavigationRail on Medium/Expanded screens (>= 600dp)
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
+        val contentBackdrop = rememberLayerBackdrop()
+        val navBarInsetBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val bottomScrollPadding = if (useRail) navBarInsetBottom + 24.dp else navBarInsetBottom + 106.dp
 
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            bottomBar = {
-                if (!useRail) {
-                    NavigationBar {
-                        AppTab.entries.forEach { tab ->
-                            val selected = currentTab == tab
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { currentTab = tab },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = tab.label
-                                    )
-                                },
-                                label = { Text(tab.label) },
-                                modifier = Modifier.testTag(tab.tag)
-                            )
-                        }
-                    }
-                }
-            }
-        ) { innerPadding ->
-            Row(
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Layer 1: Ambient background + scrollable screens captured into contentBackdrop so
+            // cards visibly scroll and refract underneath the floating Liquid Glass bar/rail,
+            // while LiquidGlassButtons inside sample their sibling ambientBackdrop without recursion.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
+                    .layerBackdrop(contentBackdrop)
             ) {
-                if (useRail) {
-                    NavigationRail {
-                        AppTab.entries.forEach { tab ->
-                            val selected = currentTab == tab
-                            NavigationRailItem(
-                                selected = selected,
-                                onClick = { currentTab = tab },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = tab.label
-                                    )
-                                },
-                                label = { Text(tab.label) },
-                                modifier = Modifier.testTag(tab.tag)
-                            )
-                        }
+                LiquidGlassBackdropHost {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .padding(start = if (useRail) 104.dp else 0.dp)
+                    ) {
+                        Crossfade(
+                            targetState = currentTab,
+                            animationSpec = tween(220),
+                            label = "tab_crossfade"
+                        ) { tab ->
+                    when (tab) {
+                        AppTab.HOME -> HomeScreen(
+                            state = state,
+                            scopeMode = scopeMode,
+                            onScopeModeChange = { attendanceViewModel.setScopeMode(it) },
+                            onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
+                            onSyncClick = { attendanceViewModel.triggerManualSync() },
+                            bottomBarPadding = bottomScrollPadding
+                        )
+
+                        AppTab.CALENDAR -> CalendarScreen(
+                            state = state,
+                            onEditDate = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
+                            onDeleteDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
+                            bottomBarPadding = bottomScrollPadding
+                        )
+
+                        AppTab.REPORTS -> ReportsScreen(
+                            state = state,
+                            onToggleCountExcused = { count ->
+                                val p = state.profile
+                                attendanceViewModel.updateReminderAndExcused(
+                                    reminderEnabled = p?.reminderEnabled ?: true,
+                                    reminderHour = p?.reminderHour ?: 14,
+                                    reminderMinute = p?.reminderMinute ?: 0,
+                                    countExcusedAsPresent = count
+                                )
+                            },
+                            bottomBarPadding = bottomScrollPadding
+                        )
+
+                        AppTab.SETTINGS -> SettingsScreen(
+                            state = state,
+                            isVerifiedAdmin = isAdmin,
+                            onEditProfile = { editingProfileInSettings = true },
+                            onUpdatePreferences = { enabled, hour, minute, countExc ->
+                                attendanceViewModel.updateReminderAndExcused(enabled, hour, minute, countExc)
+                            },
+                            onPreviewCheckInPopup = {
+                                attendanceViewModel.openCheckInPopup(DateUtils.todayKey())
+                            },
+                            onManualSync = { attendanceViewModel.triggerManualSync() },
+                            onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
+                            onSignOut = {
+                                signOutGoogle(credentialManager, scope)
+                            },
+                            bottomBarPadding = bottomScrollPadding
+                        )
                     }
-                }
-
-                Box(modifier = Modifier.weight(1f)) {
-                    Crossfade(
-                        targetState = currentTab,
-                        animationSpec = tween(220),
-                        label = "tab_crossfade"
-                    ) { tab ->
-                        when (tab) {
-                            AppTab.HOME -> HomeScreen(
-                                state = state,
-                                scopeMode = scopeMode,
-                                onScopeModeChange = { attendanceViewModel.setScopeMode(it) },
-                                onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
-                                onSyncClick = { attendanceViewModel.triggerManualSync() }
-                            )
-
-                            AppTab.CALENDAR -> CalendarScreen(
-                                state = state,
-                                onEditDate = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
-                                onDeleteDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) }
-                            )
-
-                            AppTab.REPORTS -> ReportsScreen(
-                                state = state,
-                                onToggleCountExcused = { count ->
-                                    val p = state.profile
-                                    attendanceViewModel.updateReminderAndExcused(
-                                        reminderEnabled = p?.reminderEnabled ?: true,
-                                        reminderHour = p?.reminderHour ?: 14,
-                                        reminderMinute = p?.reminderMinute ?: 0,
-                                        countExcusedAsPresent = count
-                                    )
-                                }
-                            )
-
-                            AppTab.SETTINGS -> SettingsScreen(
-                                state = state,
-                                isVerifiedAdmin = isAdmin,
-                                onEditProfile = { editingProfileInSettings = true },
-                                onUpdatePreferences = { enabled, hour, minute, countExc ->
-                                    attendanceViewModel.updateReminderAndExcused(enabled, hour, minute, countExc)
-                                },
-                                onPreviewCheckInPopup = {
-                                    attendanceViewModel.openCheckInPopup(DateUtils.todayKey())
-                                },
-                                onManualSync = { attendanceViewModel.triggerManualSync() },
-                                onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
-                                onSignOut = {
-                                    signOutGoogle(credentialManager, scope)
-                                }
-                            )
                         }
                     }
                 }
             }
+
+            // Layer 2: Floating Liquid Glass Navigation (sibling overlay sampling contentBackdrop)
+            if (useRail) {
+                LiquidGlassNavigationRail(
+                    backdrop = contentBackdrop,
+                    items = navItems,
+                    selectedIndex = currentTab.ordinal,
+                    onItemSelected = { idx -> currentTab = AppTab.entries[idx] },
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+            } else {
+                LiquidGlassBottomBar(
+                    backdrop = contentBackdrop,
+                    items = navItems,
+                    selectedIndex = currentTab.ordinal,
+                    onItemSelected = { idx -> currentTab = AppTab.entries[idx] },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+
+            // Layer 3: Snackbar positioned safely above the floating glass bar
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = if (useRail) 16.dp else 94.dp, start = 16.dp, end = 16.dp)
+            )
         }
     }
 

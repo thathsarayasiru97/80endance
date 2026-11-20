@@ -48,23 +48,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(
     state: StudentAppState,
     onEditDate: (String) -> Unit,
-    onDeleteDate: (String) -> Unit
+    onDeleteDate: (String) -> Unit,
+    bottomBarPadding: Dp = 24.dp
 ) {
     val semantic = LocalAttendanceColors.current
     val initialYm = remember { DateUtils.currentYearMonth() }
@@ -94,7 +100,12 @@ fun CalendarScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 600.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 16.dp,
+                bottom = bottomBarPadding
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
@@ -409,12 +420,26 @@ fun CalendarScreen(
         val record = recordMap[dateKey]
         val events = eventMap[dateKey].orEmpty()
         ModalBottomSheet(onDismissRequest = { selectedDateKey = null }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            val sheetBackdrop = rememberLayerBackdrop()
+            val sheetSurface = MaterialTheme.colorScheme.surfaceContainerLow
+            val sheetGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .layerBackdrop(sheetBackdrop)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(sheetSurface, sheetGlow, sheetSurface)
+                            )
+                        )
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Text(
                     text = DateUtils.formatReadableFull(dateKey),
                     style = MaterialTheme.typography.titleLarge
@@ -502,12 +527,16 @@ fun CalendarScreen(
                             Text("Clear")
                         }
                     }
-                    Button(
+                    LiquidGlassButton(
                         onClick = {
                             selectedDateKey = null
                             onEditDate(dateKey)
                         },
-                        shape = RoundedCornerShape(14.dp),
+                        backdrop = sheetBackdrop,
+                        tint = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                        minHeight = 48.dp,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                         modifier = Modifier.weight(1.4f)
                     ) {
                         Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -515,6 +544,7 @@ fun CalendarScreen(
                         Text(if (record == null) "Log Attendance" else "Edit Entry")
                     }
                 }
+            }
             }
         }
     }

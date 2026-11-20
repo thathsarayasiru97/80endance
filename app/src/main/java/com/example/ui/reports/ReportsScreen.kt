@@ -41,10 +41,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
 import java.util.Locale
@@ -53,7 +55,8 @@ import java.util.Locale
 @Composable
 fun ReportsScreen(
     state: StudentAppState,
-    onToggleCountExcused: (Boolean) -> Unit
+    onToggleCountExcused: (Boolean) -> Unit,
+    bottomBarPadding: Dp = 24.dp
 ) {
     val context = LocalContext.current
     val semantic = LocalAttendanceColors.current
@@ -106,7 +109,12 @@ fun ReportsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 600.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 16.dp,
+                bottom = bottomBarPadding
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
@@ -298,7 +306,7 @@ fun ReportsScreen(
 
             // Native Android Share Report Button
             item {
-                Button(
+                LiquidGlassButton(
                     onClick = {
                         if (profile != null) {
                             val reportText = AttendanceCalculator.buildShareableReport(
@@ -315,10 +323,11 @@ fun ReportsScreen(
                             context.startActivity(Intent.createChooser(sendIntent, "Share Attendance Report"))
                         }
                     },
-                    shape = RoundedCornerShape(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    minHeight = 54.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
                         .testTag("share_report_button")
                 ) {
                     Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))

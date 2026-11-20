@@ -57,9 +57,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import com.example.data.AppConstants
 import com.example.data.DateUtils
 import com.example.data.UserProfile
+import com.example.ui.components.LiquidGlassButton
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -129,7 +131,7 @@ fun AcademicSetupScreen(
         modifier = Modifier
             .fillMaxSize()
             .safeDrawingPadding(),
-        color = MaterialTheme.colorScheme.background
+        color = Color.Transparent
     ) {
         Column(
             modifier = Modifier
@@ -441,7 +443,7 @@ fun AcademicSetupScreen(
                     }
                 }
 
-                Button(
+                LiquidGlassButton(
                     onClick = {
                         val s1 = subject1.trim()
                         val s2 = subject2.trim()
@@ -477,16 +479,17 @@ fun AcademicSetupScreen(
                         }
                     },
                     enabled = !isSaving,
-                    shape = RoundedCornerShape(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    minHeight = 56.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
                         .testTag("complete_setup_button")
                 ) {
                     if (isSaving) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(22.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.dp
                         )
                     } else {

@@ -53,8 +53,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.DateUtils
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.SyncStatusPill
 import com.example.viewmodel.StudentAppState
@@ -69,7 +71,8 @@ fun SettingsScreen(
     onPreviewCheckInPopup: () -> Unit,
     onManualSync: () -> Unit,
     onOpenAdminPanel: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
     val reminderEnabled = profile?.reminderEnabled ?: true
@@ -93,7 +96,12 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 600.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 16.dp,
+                bottom = bottomBarPadding
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
@@ -238,9 +246,12 @@ fun SettingsScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(DateUtils.formatTime12Hour(reminderHour, reminderMinute))
                             }
-                            OutlinedButton(
+                            LiquidGlassButton(
                                 onClick = onPreviewCheckInPopup,
-                                shape = RoundedCornerShape(14.dp),
+                                tint = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                minHeight = 48.dp,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("settings_preview_popup_button")
@@ -282,9 +293,11 @@ fun SettingsScreen(
                             SyncStatusPill(syncStatus = state.syncStatus, onClick = onManualSync)
                         }
 
-                        OutlinedButton(
+                        LiquidGlassButton(
                             onClick = onManualSync,
-                            shape = RoundedCornerShape(14.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.primary,
+                            minHeight = 48.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Rounded.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))

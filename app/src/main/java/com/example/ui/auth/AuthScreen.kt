@@ -62,6 +62,7 @@ import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.auth.attemptAutoSignIn
 import com.example.auth.onGoogleSignInClicked
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.theme.LocalAttendanceColors
 
 @Composable
@@ -92,15 +93,6 @@ fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                        MaterialTheme.colorScheme.background
-                    )
-                )
-            )
             .safeDrawingPadding(),
         contentAlignment = Alignment.Center
     ) {
@@ -240,7 +232,7 @@ fun AuthScreen(
                     }
                 }
 
-                Button(
+                LiquidGlassButton(
                     onClick = {
                         errorMessage = null
                         isLoading = true
@@ -262,20 +254,17 @@ fun AuthScreen(
                         )
                     },
                     enabled = !isLoading,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
+                    tint = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    minHeight = 56.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
                         .testTag("google_sign_in_button")
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(22.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 2.5.dp
                         )
                     } else {
