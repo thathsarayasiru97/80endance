@@ -9,6 +9,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
 import com.example.R
 import com.example.data.AppConstants
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
@@ -123,8 +124,34 @@ fun onGoogleSignInClicked(
                 onAuthError("Unexpected credential type received")
             }
         } catch (e: GetCredentialCancellationException) {
-            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-            onAuthCancelled()
+            val detail = (e.errorMessage?.toString() ?: e.message).orEmpty()
+            Log.w("Auth", "Google Sign-In cancelled/dismissed: $detail", e)
+            val isConfigError = detail.contains("28444", ignoreCase = true) ||
+                detail.contains("developer", ignoreCase = true) ||
+                detail.contains("reauth", ignoreCase = true) ||
+                detail.contains("sha", ignoreCase = true) ||
+                detail.contains("16:", ignoreCase = true) ||
+                detail.contains("10:", ignoreCase = true)
+            if (isConfigError) {
+                onAuthError(
+                    "Google Sign-In config error ($detail). Verify this APK's package name (${context.packageName}) and SHA-1 fingerprint are registered in Firebase."
+                )
+            } else {
+                onAuthCancelled()
+            }
+        } catch (e: GetCredentialException) {
+            val detail = (e.errorMessage?.toString() ?: e.localizedMessage).orEmpty()
+            Log.e("Auth", "Google Sign-In credential error: $detail", e)
+            val hint = if (
+                detail.contains("28444", ignoreCase = true) ||
+                detail.contains("developer", ignoreCase = true) ||
+                detail.contains("NoCredential", ignoreCase = true)
+            ) {
+                " Verify ${context.packageName} and its signing SHA-1 are added in Firebase."
+            } else {
+                ""
+            }
+            onAuthError((detail.ifBlank { "Google Sign-In failed." }) + hint)
         } catch (e: Exception) {
             Log.e("Auth", "Google Sign-In failed", e)
             onAuthError(e.localizedMessage ?: "Sign-in failed. Please try again.")

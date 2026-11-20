@@ -72,35 +72,63 @@ jobs:
           fi
 
       - name: Build 80endance-dev APK
+        id: build
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
         run: |
-          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
-            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > debug.keystore
-          elif [ -f debug.keystore.base64 ]; then
-            tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
-          else
-            keytool -genkey -v -keystore debug.keystore \
-              -storepass android -alias androiddebugkey -keypass android \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
           GRADLE_FLAGS="-PdevLabel=true"
           if [ "${{ steps.dev_check.outputs.side_by_side }}" = "true" ]; then
             GRADLE_FLAGS="${GRADLE_FLAGS} -PdevPackage=true"
           fi
 
-          gradle :app:assembleDebug ${GRADLE_FLAGS} --no-daemon --stacktrace
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > debug.keystore
+            echo "signing_source=DEBUG_KEYSTORE_BASE64 secret" >> "$GITHUB_OUTPUT"
+            echo "apk_src=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            gradle :app:assembleDebug ${GRADLE_FLAGS} --no-daemon --stacktrace
+          elif [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
+            echo "signing_source=debug.keystore.base64 file" >> "$GITHUB_OUTPUT"
+            echo "apk_src=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            gradle :app:assembleDebug ${GRADLE_FLAGS} --no-daemon --stacktrace
+          elif [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "${KEYSTORE_PATH}"
+            echo "signing_source=RELEASE_KEYSTORE_BASE64 secret" >> "$GITHUB_OUTPUT"
+            echo "apk_src=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            gradle :app:assembleRelease ${GRADLE_FLAGS} --no-daemon --stacktrace
+          else
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "signing_source=ephemeral random debug keystore (Google Sign-In will fail!)" >> "$GITHUB_OUTPUT"
+            echo "apk_src=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            gradle :app:assembleDebug ${GRADLE_FLAGS} --no-daemon --stacktrace
+          fi
 
-      - name: Package 80endance-dev APK
+      - name: Package & verify 80endance-dev APK
         id: artifact
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
           APK_NAME="80endance-dev-build.${GITHUB_RUN_NUMBER}-${SHORT_SHA}.apk"
           mkdir -p dev-output
-          cp app/build/outputs/apk/debug/app-debug.apk "dev-output/${APK_NAME}"
+          cp "${{ steps.build.outputs.apk_src }}" "dev-output/${APK_NAME}"
+
+          APK_SHA1=$(keytool -printcert -jarfile "dev-output/${APK_NAME}" | grep -E 'SHA1:' | head -n1 | sed -E 's/.*SHA1:[[:space:]]*//')
+          APK_SHA1_LOWER=$(echo "$APK_SHA1" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          if grep -qi "$APK_SHA1_LOWER" app/google-services.json; then
+            SHA1_IN_JSON="true"
+          else
+            SHA1_IN_JSON="false"
+          fi
+
           echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apk_sha1=${APK_SHA1}" >> "$GITHUB_OUTPUT"
+          echo "sha1_in_json=${SHA1_IN_JSON}" >> "$GITHUB_OUTPUT"
 
       - name: Upload 80endance-dev APK Artifact
         uses: actions/upload-artifact@v4
@@ -119,15 +147,18 @@ jobs:
             echo "- **App Name:** \`80endance-dev\`"
             echo "- **Package ID:** \`${{ steps.dev_check.outputs.package_id }}\`"
             echo "- **Side-by-Side Install Enabled:** \`${{ steps.dev_check.outputs.side_by_side }}\`"
+            echo "- **Signed With:** \`${{ steps.build.outputs.signing_source }}\`"
+            echo "- **APK SHA-1:** \`${{ steps.artifact.outputs.apk_sha1 }}\`"
+            echo "- **SHA-1 Present in google-services.json:** \`${{ steps.artifact.outputs.sha1_in_json }}\`"
             echo "- **Commit:** \`${GITHUB_SHA}\`"
             echo ""
-            echo "Download the APK from the **Artifacts** section at the bottom of this workflow run."
-            if [ "${{ steps.dev_check.outputs.side_by_side }}" = "false" ]; then
+            if [ "${{ steps.artifact.outputs.sha1_in_json }}" = "false" ]; then
+              echo "> **Warning — Google Sign-In SHA-1 mismatch:** \`${{ steps.artifact.outputs.apk_sha1 }}\` was not found in \`app/google-services.json\`. Add this SHA-1 to \`${{ steps.dev_check.outputs.package_id }}\` in Firebase Console and update your \`GOOGLE_SERVICES_JSON\` secret."
               echo ""
-              echo "> **Tip for side-by-side installation:** To install \`80endance-dev\` alongside the main \`80endance\` app on the same phone, register \`com.aistudio.eightyendance.rcxkmv.dev\` as an Android app in the same Firebase project (with the debug SHA-1 fingerprint) and update \`app/google-services.json\`. This workflow will automatically switch to the \`.dev\` package ID once detected."
             fi
+            echo "Download the APK from the **Artifacts** section at the bottom of this workflow run."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Clean up temporary keystore
+      - name: Clean up temporary keystores
         if: always()
-        run: rm -f debug.keystore
+        run: rm -f debug.keystore my-upload-key.jks
