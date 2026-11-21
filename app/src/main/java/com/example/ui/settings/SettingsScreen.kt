@@ -28,7 +28,10 @@ import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -80,6 +83,8 @@ fun SettingsScreen(
     onOpenAdminPanel: () -> Unit,
     onSignOut: () -> Unit,
     onSaveCustomAvatar: (String?) -> Unit = {},
+    onOpenBaselineImport: () -> Unit = {},
+    onClearBaseline: () -> Unit = {},
     isCheckingUpdates: Boolean = false,
     onCheckForUpdates: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
@@ -193,11 +198,116 @@ fun SettingsScreen(
                             )
                         }
                         if ((profile?.priorPresentCount ?: 0) > 0 || (profile?.priorAbsentCount ?: 0) > 0) {
+                            val lockSuffix = if (profile?.hasLockedBaseline == true) {
+                                " (${DateUtils.formatReadableShort(profile.baselineStartDate!!)} – ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} locked)"
+                            } else {
+                                ""
+                            }
                             Text(
-                                text = "Starting Balance: ${profile?.priorPresentCount} present, ${profile?.priorAbsentCount} absent",
+                                text = "Starting Balance: ${profile?.priorPresentCount} present, ${profile?.priorAbsentCount} absent$lockSuffix",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+            }
+
+            // Import Attendance % From Day 1 Card
+            item {
+                val hasLocked = profile?.hasLockedBaseline == true
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_import_baseline_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Surface(
+                                color = if (hasLocked) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.size(42.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (hasLocked) Icons.Rounded.Lock else Icons.Rounded.Percent,
+                                        contentDescription = "Import attendance percentage",
+                                        tint = if (hasLocked) {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Import Attendance Percentage",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = if (hasLocked) {
+                                        val pctText = profile?.baselinePercent?.let {
+                                            String.format(java.util.Locale.US, "%.1f%%", it)
+                                        } ?: ""
+                                        "Imported $pctText (${profile!!.priorPresentCount}P / ${profile.priorAbsentCount}A) • ${DateUtils.formatReadableShort(profile.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} locked"
+                                    } else {
+                                        "Enter your % from Day 1 up to a past date (e.g., from your class teacher). Included days are locked automatically."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (hasLocked) {
+                                OutlinedButton(
+                                    onClick = onClearBaseline,
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("settings_unlock_baseline_button")
+                                ) {
+                                    Icon(Icons.Rounded.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Unlock")
+                                }
+                            }
+                            LiquidGlassButton(
+                                onClick = onOpenBaselineImport,
+                                tint = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                minHeight = 48.dp,
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1.3f)
+                                    .testTag("settings_import_baseline_button")
+                            ) {
+                                Icon(Icons.Rounded.Percent, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (hasLocked) "Update %" else "Enter Attendance %")
+                            }
                         }
                     }
                 }

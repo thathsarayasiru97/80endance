@@ -122,7 +122,7 @@ test("Student profile: owner CRUD succeeds, shadow/extra keys & cross-user acces
   await assertSucceeds(studentA.collection("users").doc(STUDENT_A_UID).set(payload));
   await assertSucceeds(studentA.collection("users").doc(STUDENT_A_UID).get());
 
-  // Partial update preserves createdAt and allows bounded avatar fields
+  // Partial update preserves createdAt and allows bounded avatar + percentage baseline lock fields
   await assertSucceeds(
     studentA.collection("users").doc(STUDENT_A_UID).update({
       nickname: "KP",
@@ -130,7 +130,26 @@ test("Student profile: owner CRUD succeeds, shadow/extra keys & cross-user acces
       lastCheckInDate: "2026-11-20",
       photoUrl: "https://lh3.googleusercontent.com/a/example-avatar",
       customAvatarBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+      priorPresentCount: 35,
+      priorAbsentCount: 7,
+      baselineStartDate: "2026-09-07",
+      baselineEndDate: "2026-11-13",
+      baselinePercent: 83.3,
       updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Reject out-of-range baselinePercent (> 100) or malformed baselineEndDate
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      baselinePercent: 105,
+      updatedAt: new Date(Date.now() - 450),
+    })
+  );
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      baselineEndDate: "11/13/2026",
+      updatedAt: new Date(Date.now() - 440),
     })
   );
 

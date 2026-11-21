@@ -267,7 +267,11 @@ class AttendanceRepository(
         priorAbsentCount: Int,
         setupCompleted: Boolean,
         isExisting: Boolean,
-        photoUrl: String? = null
+        photoUrl: String? = null,
+        baselineStartDate: String? = null,
+        baselineEndDate: String? = null,
+        baselinePercent: Double? = null,
+        updateBaselineFields: Boolean = false
     ): Result<Unit> {
         val path = "users/$targetUserId"
         return try {
@@ -285,6 +289,12 @@ class AttendanceRepository(
             require(cleanFirst.isNotEmpty()) { "First name is required" }
             require(cleanLast.isNotEmpty()) { "Last name is required" }
             require(cleanClass.isNotEmpty()) { "Class is required" }
+
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            val cleanBaseStart = baselineStartDate?.trim()?.takeIf { it.matches(dateRegex) }
+            val cleanBaseEnd = baselineEndDate?.trim()?.takeIf { it.matches(dateRegex) }
+            val cleanBasePct = baselinePercent?.coerceIn(0.0, 100.0)
+            val hasValidBaseline = cleanBaseStart != null && cleanBaseEnd != null && cleanBaseStart <= cleanBaseEnd
 
             val docRef = db.collection("users").document(targetUserId)
             val shouldUpdate = isExisting || runCatching { docRef.get().await().exists() }.getOrDefault(false)
@@ -307,8 +317,23 @@ class AttendanceRepository(
                     put("reminderHour", reminderHour.coerceIn(0, 23))
                     put("reminderMinute", reminderMinute.coerceIn(0, 59))
                     put("countExcusedAsPresent", countExcusedAsPresent)
-                    put("priorPresentCount", priorPresentCount.coerceIn(0, 500))
-                    put("priorAbsentCount", priorAbsentCount.coerceIn(0, 500))
+                    put("priorPresentCount", priorPresentCount.coerceIn(0, 600))
+                    put("priorAbsentCount", priorAbsentCount.coerceIn(0, 600))
+                    if (updateBaselineFields) {
+                        if (hasValidBaseline) {
+                            put("baselineStartDate", cleanBaseStart!!)
+                            put("baselineEndDate", cleanBaseEnd!!)
+                            if (cleanBasePct != null) {
+                                put("baselinePercent", cleanBasePct)
+                            } else {
+                                put("baselinePercent", FieldValue.delete())
+                            }
+                        } else {
+                            put("baselineStartDate", FieldValue.delete())
+                            put("baselineEndDate", FieldValue.delete())
+                            put("baselinePercent", FieldValue.delete())
+                        }
+                    }
                     put("setupCompleted", setupCompleted)
                     if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
                     put("updatedAt", FieldValue.serverTimestamp())
@@ -331,8 +356,11 @@ class AttendanceRepository(
                     "reminderHour" to reminderHour.coerceIn(0, 23),
                     "reminderMinute" to reminderMinute.coerceIn(0, 59),
                     "countExcusedAsPresent" to countExcusedAsPresent,
-                    "priorPresentCount" to priorPresentCount.coerceIn(0, 500),
-                    "priorAbsentCount" to priorAbsentCount.coerceIn(0, 500),
+                    "priorPresentCount" to priorPresentCount.coerceIn(0, 600),
+                    "priorAbsentCount" to priorAbsentCount.coerceIn(0, 600),
+                    "baselineStartDate" to if (hasValidBaseline) cleanBaseStart else null,
+                    "baselineEndDate" to if (hasValidBaseline) cleanBaseEnd else null,
+                    "baselinePercent" to if (hasValidBaseline) cleanBasePct else null,
                     "setupCompleted" to setupCompleted,
                     "presentCount" to 0,
                     "absentCount" to 0,
@@ -350,6 +378,104 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveAttendancePercentageBaseline(
+        userId: String,
+        startDateKey: String,
+        endDateKey: String,
+        percentage: Double,
+        presentDays: Int,
+        absentDays: Int,
+        existingRecords: List<AttendanceRecord>
+    ): Result<Int> {
+        val path = "users/$userId"
+        return try {
+            requireUserId()
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            require(startDateKey.matches(dateRegex) && endDateKey.matches(dateRegex)) {
+                "Choose valid start and end dates (YYYY-MM-DD)"
+            }
+            require(startDateKey <= endDateKey) { "End date must be on or after start date" }
+            require(endDateKey <= DateUtils.todayKey()) { "End date cannot be in the future" }
+
+            val cleanPresent = presentDays.coerceIn(0, 600)
+            val cleanAbsent = absentDays.coerceIn(0, 600)
+            require(cleanPresent + cleanAbsent > 0) { "Selected period must include at least 1 school day" }
+
+            val cleanPct = percentage.coerceIn(0.0, 100.0)
+            val overlappingRecords = existingRecords.filter {
+                it.dateKey >= startDateKey && it.dateKey <= endDateKey
+            }
+            val remainingRecords = existingRecords.filterNot {
+                it.dateKey >= startDateKey && it.dateKey <= endDateKey
+            }
+
+            val batch = db.batch()
+            val userDocRef = db.collection("users").document(userId)
+            for (rec in overlappingRecords) {
+                batch.delete(userDocRef.collection("attendance").document(rec.dateKey))
+            }
+
+            val present = remainingRecords.count { it.statusEnum == AttendanceStatus.PRESENT }
+            val absent = remainingRecords.count { it.statusEnum == AttendanceStatus.ABSENT }
+            val medical = remainingRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }
+            val schoolEvent = remainingRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
+            val lastDate = remainingRecords.maxOfOrNull { it.dateKey } ?: ""
+
+            batch.update(
+                userDocRef,
+                mapOf(
+                    "priorPresentCount" to cleanPresent,
+                    "priorAbsentCount" to cleanAbsent,
+                    "baselineStartDate" to startDateKey,
+                    "baselineEndDate" to endDateKey,
+                    "baselinePercent" to cleanPct,
+                    "presentCount" to present,
+                    "absentCount" to absent,
+                    "medicalCount" to medical,
+                    "schoolEventCount" to schoolEvent,
+                    "lastCheckInDate" to lastDate,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            batch.commit().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(overlappingRecords.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun clearAttendancePercentageBaseline(
+        userId: String,
+        resetPriorCounts: Boolean = true
+    ): Result<Unit> {
+        val path = "users/$userId"
+        return try {
+            requireUserId()
+            val updates = buildMap<String, Any> {
+                put("baselineStartDate", FieldValue.delete())
+                put("baselineEndDate", FieldValue.delete())
+                put("baselinePercent", FieldValue.delete())
+                if (resetPriorCounts) {
+                    put("priorPresentCount", 0)
+                    put("priorAbsentCount", 0)
+                }
+                put("updatedAt", FieldValue.serverTimestamp())
+            }
+            db.collection("users").document(userId).update(updates).awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }

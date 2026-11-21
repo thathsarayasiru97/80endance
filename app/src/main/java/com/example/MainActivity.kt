@@ -71,6 +71,7 @@ import com.example.system.WidgetSnapshot
 import com.example.ui.admin.AdminPanelScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.calendar.CalendarScreen
+import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
 import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.home.HomeScreen
@@ -286,6 +287,7 @@ private fun AuthenticatedAppShell(
     var currentTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
     var editingProfileInSettings by rememberSaveable { mutableStateOf(false) }
     var showAdminPanel by rememberSaveable { mutableStateOf(false) }
+    var showBaselineImportDialog by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(snackbarMessage) {
@@ -428,6 +430,7 @@ private fun AuthenticatedAppShell(
                             state = state,
                             onEditDate = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onDeleteDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
+                            onOpenBaselineImport = { showBaselineImportDialog = true },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -454,6 +457,8 @@ private fun AuthenticatedAppShell(
                                 signOutGoogle(credentialManager, scope)
                             },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
+                            onOpenBaselineImport = { showBaselineImportDialog = true },
+                            onClearBaseline = { attendanceViewModel.clearAttendancePercentageBaseline() },
                             isCheckingUpdates = isCheckingUpdates,
                             onCheckForUpdates = onCheckForUpdates,
                             bottomBarPadding = bottomScrollPadding
@@ -514,6 +519,31 @@ private fun AuthenticatedAppShell(
             },
             onSave = { status, subjectTags, note ->
                 attendanceViewModel.logAttendance(activeCheckInDate, status, subjectTags, note)
+            }
+        )
+    }
+
+    if (showBaselineImportDialog) {
+        AttendanceBaselineDialog(
+            profile = state.profile,
+            activeTerm = state.activeTerm,
+            terms = state.terms,
+            calendarEvents = state.calendarEvents,
+            existingRecords = state.attendanceRecords,
+            isSaving = isSaving,
+            onDismiss = { showBaselineImportDialog = false },
+            onSave = { startKey, endKey, pct, presentDays, absentDays ->
+                attendanceViewModel.saveAttendancePercentageBaseline(
+                    startDateKey = startKey,
+                    endDateKey = endKey,
+                    percentage = pct,
+                    presentDays = presentDays,
+                    absentDays = absentDays,
+                    onComplete = { showBaselineImportDialog = false }
+                )
+            },
+            onClearBaseline = {
+                attendanceViewModel.clearAttendancePercentageBaseline()
             }
         )
     }

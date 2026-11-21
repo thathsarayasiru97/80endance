@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LocalHospital
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.PushPin
@@ -520,6 +521,16 @@ fun StreakAndWeeklyCard(
                 weeklySummary.forEach { day ->
                     val (bg, fg, symbol) = when {
                         day.holidayLabel != null -> Triple(semantic.poyaContainer, semantic.onPoyaContainer, "P")
+                        day.isLocked -> Triple(
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                            MaterialTheme.colorScheme.onSecondaryContainer,
+                            ""
+                        )
+                        day.isFuture -> Triple(
+                            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f),
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            "·"
+                        )
                         day.status == AttendanceStatus.PRESENT -> Triple(semantic.presentContainer, semantic.present, "✓")
                         day.status == AttendanceStatus.ABSENT -> Triple(semantic.absentContainer, semantic.absent, "✕")
                         day.status == AttendanceStatus.MEDICAL -> Triple(semantic.medicalContainer, semantic.medical, "M")
@@ -527,18 +538,29 @@ fun StreakAndWeeklyCard(
                         day.status == AttendanceStatus.HOLIDAY -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, "H")
                         else -> Triple(MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.colorScheme.onSurfaceVariant, "·")
                     }
+                    val canTapDay = !day.isFuture && !day.isLocked
 
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { onDayClick(day.dateKey) }
+                            .then(
+                                if (canTapDay) {
+                                    Modifier.clickable { onDayClick(day.dateKey) }
+                                } else {
+                                    Modifier
+                                }
+                            )
                             .padding(horizontal = 6.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = day.dayLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (day.isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = when {
+                                day.isToday -> MaterialTheme.colorScheme.primary
+                                day.isFuture -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             fontWeight = if (day.isToday) FontWeight.Bold else FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(6.dp))
@@ -556,12 +578,21 @@ fun StreakAndWeeklyCard(
                                     }
                                 )
                         ) {
-                            Text(
-                                text = symbol,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = fg,
-                                fontWeight = FontWeight.Bold
-                            )
+                            if (day.isLocked && day.holidayLabel == null) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Lock,
+                                    contentDescription = "Locked imported attendance day",
+                                    tint = fg,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = symbol,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = fg,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }

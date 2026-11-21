@@ -1,8 +1,7 @@
 package com.example.data
 
-import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 data class AttendanceStats(
     val percentage: Double,
@@ -26,7 +25,19 @@ data class WeekDaySummary(
     val dateKey: String,
     val status: AttendanceStatus?,
     val holidayLabel: String?,
-    val isToday: Boolean
+    val isToday: Boolean,
+    val isFuture: Boolean = false,
+    val isLocked: Boolean = false
+)
+
+data class PercentageBaselineEstimate(
+    val startDateKey: String,
+    val endDateKey: String,
+    val totalSchoolDays: Int,
+    val presentDays: Int,
+    val absentDays: Int,
+    val enteredPercent: Double,
+    val effectivePercent: Double
 )
 
 data class SkipSimulationResult(
@@ -91,7 +102,8 @@ object AttendanceCalculator {
         priorPresent: Int,
         priorAbsent: Int,
         termFilter: AcademicTerm? = null,
-        monthPrefixFilter: String? = null
+        monthPrefixFilter: String? = null,
+        lockedRange: Pair<String, String>? = null
     ): AttendanceStats {
         val filtered = when {
             !monthPrefixFilter.isNullOrBlank() -> {
@@ -114,6 +126,11 @@ object AttendanceCalculator {
 
         for (record in filtered) {
             if (DateUtils.isWeekend(record.dateKey)) continue
+            if (includePriorBalance && lockedRange != null &&
+                record.dateKey >= lockedRange.first && record.dateKey <= lockedRange.second
+            ) {
+                continue
+            }
             when (record.statusEnum) {
                 AttendanceStatus.PRESENT -> present++
                 AttendanceStatus.ABSENT -> absent++
@@ -131,7 +148,7 @@ object AttendanceCalculator {
         val effectiveMissed = absent + addedPriorAbsent
 
         val totalCounted = effectiveAttended + effectiveMissed
-        val targetFraction = (thresholdPercent.coerceIn(50, 99)) / 100.0
+        val threshold = thresholdPercent.coerceIn(50, 99)
 
         val percentage = if (totalCounted <= 0) {
             100.0
@@ -139,20 +156,20 @@ object AttendanceCalculator {
             (effectiveAttended.toDouble() / totalCounted.toDouble()) * 100.0
         }
 
-        val isEligible = totalCounted == 0 || percentage >= thresholdPercent.toDouble()
+        val isEligible = totalCounted == 0 || (effectiveAttended * 100 >= threshold * totalCounted)
 
         val safeSkips = if (totalCounted <= 0 || !isEligible) {
             0
         } else {
-            max(0, floor((effectiveAttended / targetFraction) - totalCounted).toInt())
+            max(0, ((effectiveAttended * 100) - (threshold * totalCounted)) / threshold)
         }
 
         val daysToRecover = if (isEligible || totalCounted <= 0) {
             0
         } else {
-            val numerator = (targetFraction * totalCounted) - effectiveAttended
-            val denominator = 1.0 - targetFraction
-            max(1, ceil(numerator / denominator).toInt())
+            val numerator = (threshold * totalCounted) - (effectiveAttended * 100)
+            val denominator = 100 - threshold
+            max(1, (numerator + denominator - 1) / denominator)
         }
 
         return AttendanceStats(
@@ -223,18 +240,22 @@ object AttendanceCalculator {
     fun calculateWeeklySummary(
         records: List<AttendanceRecord>,
         calendarEvents: List<CalendarEvent>,
-        todayKey: String = DateUtils.todayKey()
+        todayKey: String = DateUtils.todayKey(),
+        lockedRange: Pair<String, String>? = null
     ): List<WeekDaySummary> {
         val recordMap = records.associateBy { it.dateKey }
         val eventMap = calendarEvents.associateBy { it.dateKey }
         return DateUtils.currentWeekMonToFri().map { (label, dateKey) ->
             val ev = eventMap[dateKey]
+            val locked = lockedRange != null && dateKey >= lockedRange.first && dateKey <= lockedRange.second
             WeekDaySummary(
                 dayLabel = label,
                 dateKey = dateKey,
-                status = recordMap[dateKey]?.statusEnum,
+                status = if (locked) null else recordMap[dateKey]?.statusEnum,
                 holidayLabel = ev?.takeIf { it.nonSchoolDay }?.title,
-                isToday = dateKey == todayKey
+                isToday = dateKey == todayKey,
+                isFuture = dateKey > todayKey,
+                isLocked = locked
             )
         }
     }
@@ -270,8 +291,73 @@ object AttendanceCalculator {
     }
 
     /**
+     * Counts school weekdays in the inclusive range [startDateKey..endDateKey],
+     * excluding Saturdays, Sundays, and published non-school calendar events (Poya/holidays).
+     */
+    fun countSchoolDaysInRange(
+        startDateKey: String,
+        endDateKey: String,
+        calendarEvents: List<CalendarEvent>,
+        maxDays: Int = 600
+    ): Int {
+        val start = DateUtils.parseDateKey(startDateKey) ?: return 0
+        val end = DateUtils.parseDateKey(endDateKey) ?: return 0
+        if (end.before(start)) return 0
+        val nonSchoolDates = calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val cursor = start.clone() as java.util.Calendar
+        var count = 0
+        var guard = 0
+        while (!cursor.after(end) && count < maxDays && guard < 1200) {
+            val dow = cursor.get(java.util.Calendar.DAY_OF_WEEK)
+            val weekend = dow == java.util.Calendar.SATURDAY || dow == java.util.Calendar.SUNDAY
+            if (!weekend) {
+                val key = DateUtils.formatDateKey(cursor)
+                if (key !in nonSchoolDates) {
+                    count++
+                }
+            }
+            cursor.add(java.util.Calendar.DAY_OF_YEAR, 1)
+            guard++
+        }
+        return count
+    }
+
+    /**
+     * Converts an attendance percentage covering [startDateKey..endDateKey] into integer
+     * present & absent counts based on detected school days (or [customSchoolDaysOverride]).
+     */
+    fun estimateBaselineFromPercentage(
+        startDateKey: String,
+        endDateKey: String,
+        percentage: Double,
+        calendarEvents: List<CalendarEvent>,
+        customSchoolDaysOverride: Int? = null
+    ): PercentageBaselineEstimate {
+        val clampedPct = percentage.coerceIn(0.0, 100.0)
+        val detectedDays = countSchoolDaysInRange(startDateKey, endDateKey, calendarEvents)
+        val totalDays = (customSchoolDaysOverride ?: detectedDays).coerceIn(0, 600)
+        val present = if (totalDays <= 0) {
+            0
+        } else {
+            ((clampedPct / 100.0) * totalDays).roundToInt().coerceIn(0, totalDays)
+        }
+        val absent = (totalDays - present).coerceIn(0, 600)
+        val effectivePct = if (totalDays <= 0) 0.0 else (present.toDouble() / totalDays.toDouble()) * 100.0
+        return PercentageBaselineEstimate(
+            startDateKey = startDateKey,
+            endDateKey = endDateKey,
+            totalSchoolDays = totalDays,
+            presentDays = present,
+            absentDays = absent,
+            enteredPercent = clampedPct,
+            effectivePercent = effectivePct
+        )
+    }
+
+    /**
      * Finds recent past weekdays (before [todayKey]) that are school days for this student
-     * and do not yet have an attendance record, so HomeScreen can offer 1-tap catch-up.
+     * and do not yet have an attendance record (and are not locked inside an imported baseline),
+     * so HomeScreen can offer 1-tap catch-up.
      */
     fun findUnloggedRecentSchoolDays(
         records: List<AttendanceRecord>,
@@ -279,7 +365,8 @@ object AttendanceCalculator {
         activeTermStartDate: String,
         todayKey: String = DateUtils.todayKey(),
         lookbackCalendarDays: Int = 10,
-        maxItems: Int = 5
+        maxItems: Int = 5,
+        lockedRange: Pair<String, String>? = null
     ): List<String> {
         val loggedDates = records.map { it.dateKey }.toSet()
         val nonSchoolDates = calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
@@ -287,6 +374,7 @@ object AttendanceCalculator {
         for (offset in 1..lookbackCalendarDays) {
             val candidate = DateUtils.addDays(todayKey, -offset)
             if (activeTermStartDate.length == 10 && candidate < activeTermStartDate) break
+            if (lockedRange != null && candidate >= lockedRange.first && candidate <= lockedRange.second) continue
             if (DateUtils.isWeekend(candidate)) continue
             if (candidate in nonSchoolDates) continue
             if (candidate !in loggedDates) {

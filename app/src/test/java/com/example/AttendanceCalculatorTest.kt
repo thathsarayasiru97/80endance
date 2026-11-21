@@ -3,6 +3,8 @@ package com.example
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStatus
+import com.example.data.CalendarEvent
+import com.example.data.CalendarEventType
 import com.example.data.DateUtils
 import com.example.data.UserProfile
 import org.junit.Assert.assertEquals
@@ -234,5 +236,70 @@ class AttendanceCalculatorTest {
         assertEquals(66.66, insights.monthlyPoints[1].percentage, 0.05)
         assertEquals("Friday", insights.mostSkippedWeekday?.fullName)
         assertEquals(2, insights.mostSkippedWeekday?.absentDays)
+    }
+
+    @Test
+    fun countSchoolDaysInRangeAndPercentageBaselineExcludeWeekendsAndHolidays() {
+        val events = listOf(
+            CalendarEvent(
+                id = "poya_may",
+                title = "Vesak Poya",
+                dateKey = "2026-05-06", // Wed
+                eventType = CalendarEventType.POYA.raw,
+                academicYear = 2026
+            )
+        )
+        // Mon 2026-05-04 .. Fri 2026-05-15 = 10 weekdays minus 1 Poya (May 6) = 9 school days
+        val schoolDays = AttendanceCalculator.countSchoolDaysInRange(
+            startDateKey = "2026-05-04",
+            endDateKey = "2026-05-15",
+            calendarEvents = events
+        )
+        assertEquals(9, schoolDays)
+
+        val estimate = AttendanceCalculator.estimateBaselineFromPercentage(
+            startDateKey = "2026-05-04",
+            endDateKey = "2026-05-15",
+            percentage = 80.0,
+            calendarEvents = events,
+            customSchoolDaysOverride = 20
+        )
+        assertEquals(20, estimate.totalSchoolDays)
+        assertEquals(16, estimate.presentDays)
+        assertEquals(4, estimate.absentDays)
+        assertEquals(80.0, estimate.effectivePercent, 0.01)
+    }
+
+    @Test
+    fun lockedBaselineRangePreventsDoubleCountingAndExcludesCatchUp() {
+        val locked = "2026-05-04" to "2026-05-11"
+        val records = listOf(
+            // Inside locked range (must NOT be double-counted alongside priorPresent/priorAbsent)
+            AttendanceRecord(dateKey = "2026-05-08", status = AttendanceStatus.ABSENT.raw),
+            // After locked range (MUST be counted)
+            AttendanceRecord(dateKey = "2026-05-12", status = AttendanceStatus.PRESENT.raw)
+        )
+        val stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 16,
+            priorAbsent = 4,
+            lockedRange = locked
+        )
+        assertEquals(17, stats.effectiveAttended)
+        assertEquals(21, stats.totalCountedDays)
+
+        // Catch-up for Thu 2026-05-14 should find Wed 13 only (Tue 12 logged; Mon 11 & Fri 8 locked)
+        val missed = AttendanceCalculator.findUnloggedRecentSchoolDays(
+            records = records,
+            calendarEvents = emptyList(),
+            activeTermStartDate = "2026-05-04",
+            todayKey = "2026-05-14",
+            lookbackCalendarDays = 10,
+            maxItems = 5,
+            lockedRange = locked
+        )
+        assertEquals(listOf("2026-05-13"), missed)
     }
 }

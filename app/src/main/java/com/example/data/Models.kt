@@ -132,6 +132,9 @@ data class UserProfile(
     val lastCheckInDate: String? = null,
     val photoUrl: String? = null,
     val customAvatarBase64: String? = null,
+    val baselineStartDate: String? = null,
+    val baselineEndDate: String? = null,
+    val baselinePercent: Double? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -145,6 +148,22 @@ data class UserProfile(
             .filter { it.isNotEmpty() }
             .joinToString(" ")
             .ifEmpty { email.substringBefore("@") }
+
+    val hasLockedBaseline: Boolean
+        get() = !baselineStartDate.isNullOrBlank() &&
+            !baselineEndDate.isNullOrBlank() &&
+            baselineStartDate.length == 10 &&
+            baselineEndDate.length == 10 &&
+            baselineStartDate <= baselineEndDate &&
+            (priorPresentCount > 0 || priorAbsentCount > 0)
+
+    val lockedBaselineRange: Pair<String, String>?
+        get() = if (hasLockedBaseline) baselineStartDate!! to baselineEndDate!! else null
+
+    fun isDateInLockedBaseline(dateKey: String): Boolean {
+        val range = lockedBaselineRange ?: return false
+        return dateKey.length == 10 && dateKey >= range.first && dateKey <= range.second
+    }
 
     val quickOverallPercent: Double
         get() {

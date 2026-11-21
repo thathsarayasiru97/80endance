@@ -72,7 +72,8 @@ fun ReportsScreen(
             includePriorBalance = selectedTerm == null || selectedTerm?.id == state.activeTerm.id,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
-            termFilter = selectedTerm
+            termFilter = selectedTerm,
+            lockedRange = profile?.lockedBaselineRange
         )
     }
 

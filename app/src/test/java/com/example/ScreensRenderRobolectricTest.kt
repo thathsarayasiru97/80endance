@@ -1,21 +1,26 @@
 package com.example
 
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
+import com.example.data.DateUtils
 import com.example.data.UserProfile
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.ui.admin.AdminNoSchoolCard
 import com.example.ui.calendar.CalendarScreen
+import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
 import com.example.ui.components.LiquidGlassBackdropHost
 import com.example.ui.components.ProfilePhotoDialog
@@ -320,5 +325,81 @@ class ScreensRenderRobolectricTest {
         composeTestRule.onNodeWithTag("admin_no_school_mode_selector").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("admin_no_school_custom_reason_chip").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("admin_mark_no_school_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun calendarDisablesFutureDaysAndLocksImportedBaselineDays() {
+        val today = DateUtils.todayKey()
+        val (curY, curM) = DateUtils.currentYearMonth()
+        val daysInMonth = DateUtils.daysInMonth(curY, curM)
+        // Find a future weekday in the current month with no calendar events (if one exists)
+        val futureWeekdayInMonth = (1..daysInMonth)
+            .map { DateUtils.formatDateKey(curY, curM, it) }
+            .firstOrNull { it > today && !DateUtils.isWeekend(it) }
+        // Find a past/current weekday in the current month to lock
+        val lockDayInMonth = (1..daysInMonth)
+            .map { DateUtils.formatDateKey(curY, curM, it) }
+            .firstOrNull { it <= today && !DateUtils.isWeekend(it) }
+
+        val lockedProfile = sampleState.profile!!.copy(
+            priorPresentCount = 16,
+            priorAbsentCount = 4,
+            baselineStartDate = lockDayInMonth ?: "2026-11-02",
+            baselineEndDate = lockDayInMonth ?: "2026-11-10",
+            baselinePercent = 80.0
+        )
+        val lockedState = sampleState.copy(
+            profile = lockedProfile,
+            calendarEvents = emptyList()
+        )
+
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    CalendarScreen(
+                        state = lockedState,
+                        onEditDate = {},
+                        onDeleteDate = {},
+                        onOpenBaselineImport = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_baseline_banner").assertIsDisplayed()
+
+        if (futureWeekdayInMonth != null) {
+            composeTestRule.onNodeWithTag("calendar_day_$futureWeekdayInMonth")
+                .assertHasNoClickAction()
+        }
+        if (lockDayInMonth != null) {
+            composeTestRule.onNodeWithTag("calendar_day_$lockDayInMonth").performClick()
+            composeTestRule.waitForIdle()
+            composeTestRule.onNodeWithTag("calendar_locked_day_notice").assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun attendanceBaselineDialogComputesPreviewAndSaves() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                AttendanceBaselineDialog(
+                    profile = sampleState.profile,
+                    activeTerm = sampleState.activeTerm,
+                    terms = sampleState.terms,
+                    calendarEvents = emptyList(),
+                    existingRecords = emptyList(),
+                    isSaving = false,
+                    onDismiss = {},
+                    onSave = { _, _, _, _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("baseline_import_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("baseline_percent_input").performTextInput("85")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("baseline_preview_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("baseline_save_button").assertIsDisplayed()
     }
 }

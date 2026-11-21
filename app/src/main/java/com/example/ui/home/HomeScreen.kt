@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.HistoryToggleOff
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Weekend
@@ -462,6 +463,61 @@ fun HomeScreen(
                                         text = "Scheduled off day — won't affect your 80% attendance.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = semantic.onPoyaContainer.copy(alpha = 0.85f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    profile?.isDateInLockedBaseline(todayKey) == true -> {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_locked_today_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Lock,
+                                            contentDescription = "Locked imported attendance period",
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${DateUtils.formatReadableShort(todayKey)} • Locked Period",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Included in Imported Attendance",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "Today is covered by your imported percentage (${DateUtils.formatReadableShort(profile.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)}). Manage or unlock in Settings.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                                     )
                                 }
                             }

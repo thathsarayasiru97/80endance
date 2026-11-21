@@ -172,16 +172,21 @@ class AttendanceViewModel(
         val threshold = activeTerm.minEligibilityPercent.takeIf { it in 50..100 }
             ?: settings.defaultEligibilityPercent
 
+        val lockedRange = profile?.lockedBaselineRange
         val monthPrefix = DateUtils.currentMonthPrefix(todayKey)
         val monthLabel = DateUtils.currentMonthYearLabel(todayKey)
+        val baselineWithinMonth = lockedRange != null &&
+            lockedRange.first.startsWith(monthPrefix) &&
+            lockedRange.second.startsWith(monthPrefix)
         val monthStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
             thresholdPercent = threshold,
             countExcusedAsPresent = true,
-            includePriorBalance = false,
-            priorPresent = 0,
-            priorAbsent = 0,
-            monthPrefixFilter = monthPrefix
+            includePriorBalance = baselineWithinMonth,
+            priorPresent = if (baselineWithinMonth) (profile?.priorPresentCount ?: 0) else 0,
+            priorAbsent = if (baselineWithinMonth) (profile?.priorAbsentCount ?: 0) else 0,
+            monthPrefixFilter = monthPrefix,
+            lockedRange = lockedRange
         )
         val termStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -190,7 +195,8 @@ class AttendanceViewModel(
             includePriorBalance = true,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
-            termFilter = activeTerm
+            termFilter = activeTerm,
+            lockedRange = lockedRange
         )
         val overallStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -199,7 +205,8 @@ class AttendanceViewModel(
             includePriorBalance = true,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
-            termFilter = null
+            termFilter = null,
+            lockedRange = lockedRange
         )
 
         val streak = AttendanceCalculator.calculateCurrentStreak(
@@ -211,7 +218,8 @@ class AttendanceViewModel(
         val weekly = AttendanceCalculator.calculateWeeklySummary(
             records = bundle.records,
             calendarEvents = effectiveEvents,
-            todayKey = todayKey
+            todayKey = todayKey,
+            lockedRange = lockedRange
         )
         val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(effectiveEvents, todayKey)
         val examYear = profile?.alExamYear ?: settings.currentAcademicYear
@@ -221,7 +229,8 @@ class AttendanceViewModel(
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
         val todayIsWeekend = DateUtils.isWeekend(todayKey)
         val todayNonSchoolEvent = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
-        val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null
+        val todayIsLocked = profile?.isDateInLockedBaseline(todayKey) == true
+        val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null && !todayIsLocked
 
         val (nowHour, nowMinute) = DateUtils.currentHourMinute()
         val remHour = profile?.reminderHour ?: prefs.hour
@@ -242,7 +251,8 @@ class AttendanceViewModel(
                 activeTermStartDate = activeTerm.startDate,
                 todayKey = todayKey,
                 lookbackCalendarDays = 10,
-                maxItems = 5
+                maxItems = 5,
+                lockedRange = lockedRange
             )
         } else {
             emptyList()
@@ -314,6 +324,14 @@ class AttendanceViewModel(
 
     fun openCheckInPopup(dateKey: String = DateUtils.todayKey()) {
         if (DateUtils.isWeekend(dateKey)) return
+        if (dateKey > DateUtils.todayKey()) {
+            _snackbarMessage.value = "You can't mark attendance for future dates"
+            return
+        }
+        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
+            _snackbarMessage.value = "This day is locked inside your imported attendance period"
+            return
+        }
         _manualCheckInDate.value = dateKey
     }
 
@@ -347,6 +365,10 @@ class AttendanceViewModel(
         countExcusedAsPresent: Boolean,
         priorPresentCount: Int,
         priorAbsentCount: Int,
+        baselineStartDate: String? = null,
+        baselineEndDate: String? = null,
+        baselinePercent: Double? = null,
+        updateBaselineFields: Boolean = false,
         onComplete: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -372,7 +394,11 @@ class AttendanceViewModel(
                 priorAbsentCount = priorAbsentCount,
                 setupCompleted = true,
                 isExisting = isExisting,
-                photoUrl = googlePhotoUrl
+                photoUrl = googlePhotoUrl,
+                baselineStartDate = baselineStartDate,
+                baselineEndDate = baselineEndDate,
+                baselinePercent = baselinePercent,
+                updateBaselineFields = updateBaselineFields
             )
             _isSaving.value = false
             result.onSuccess {
@@ -382,6 +408,54 @@ class AttendanceViewModel(
                 onComplete()
             }.onFailure { err ->
                 _snackbarMessage.value = err.message ?: "Could not save profile"
+            }
+        }
+    }
+
+    fun saveAttendancePercentageBaseline(
+        startDateKey: String,
+        endDateKey: String,
+        percentage: Double,
+        presentDays: Int,
+        absentDays: Int,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val current = uiState.value
+            val result = repository.saveAttendancePercentageBaseline(
+                userId = currentUserId,
+                startDateKey = startDateKey,
+                endDateKey = endDateKey,
+                percentage = percentage,
+                presentDays = presentDays,
+                absentDays = absentDays,
+                existingRecords = current.attendanceRecords
+            )
+            _isSaving.value = false
+            result.onSuccess { replacedCount ->
+                val rangeLabel = "${DateUtils.formatReadableShort(startDateKey)} – ${DateUtils.formatReadableShort(endDateKey)}"
+                val replacedHint = if (replacedCount > 0) " ($replacedCount prior entries consolidated)" else ""
+                _snackbarMessage.value = "Imported ${String.format("%.1f", percentage)}% for $rangeLabel • period locked$replacedHint"
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not save attendance percentage"
+            }
+        }
+    }
+
+    fun clearAttendancePercentageBaseline(resetPriorCounts: Boolean = true) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val result = repository.clearAttendancePercentageBaseline(
+                userId = currentUserId,
+                resetPriorCounts = resetPriorCounts
+            )
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = "Imported attendance period cleared and dates unlocked"
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not clear imported period"
             }
         }
     }
@@ -415,6 +489,14 @@ class AttendanceViewModel(
     ) {
         if (DateUtils.isWeekend(dateKey)) {
             _snackbarMessage.value = "Weekends are automatically marked as off days"
+            return
+        }
+        if (dateKey > DateUtils.todayKey()) {
+            _snackbarMessage.value = "You can't mark attendance for future dates"
+            return
+        }
+        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
+            _snackbarMessage.value = "Cannot edit days inside your imported attendance period"
             return
         }
         viewModelScope.launch {
@@ -455,6 +537,10 @@ class AttendanceViewModel(
     }
 
     fun deleteAttendance(dateKey: String) {
+        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
+            _snackbarMessage.value = "Cannot modify days inside your imported attendance period"
+            return
+        }
         viewModelScope.launch {
             val result = repository.deleteAttendance(
                 targetUserId = currentUserId,

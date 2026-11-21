@@ -67,8 +67,11 @@ service cloud.firestore {
              data.reminderHour is int && data.reminderHour >= 0 && data.reminderHour <= 23 &&
              data.reminderMinute is int && data.reminderMinute >= 0 && data.reminderMinute <= 59 &&
              data.countExcusedAsPresent is bool &&
-             data.priorPresentCount is int && data.priorPresentCount >= 0 && data.priorPresentCount <= 500 &&
-             data.priorAbsentCount is int && data.priorAbsentCount >= 0 && data.priorAbsentCount <= 500 &&
+             data.priorPresentCount is int && data.priorPresentCount >= 0 && data.priorPresentCount <= 600 &&
+             data.priorAbsentCount is int && data.priorAbsentCount >= 0 && data.priorAbsentCount <= 600 &&
+             (!('baselineStartDate' in data) || data.baselineStartDate == null || data.baselineStartDate == '' || isValidDateKey(data.baselineStartDate)) &&
+             (!('baselineEndDate' in data) || data.baselineEndDate == null || data.baselineEndDate == '' || isValidDateKey(data.baselineEndDate)) &&
+             (!('baselinePercent' in data) || data.baselinePercent == null || (data.baselinePercent is number && data.baselinePercent >= 0 && data.baselinePercent <= 100)) &&
              data.setupCompleted is bool &&
              data.presentCount is int && data.presentCount >= 0 && data.presentCount <= 1000 &&
              data.absentCount is int && data.absentCount >= 0 && data.absentCount <= 1000 &&
@@ -154,7 +157,8 @@ service cloud.firestore {
                          'userId', 'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
                          'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
                          'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
-                         'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                         'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
+                         'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
                          'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
                        ]) &&
@@ -171,7 +175,8 @@ service cloud.firestore {
                          'userId', 'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
                          'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
                          'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
-                         'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                         'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
+                         'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
                          'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
                        ]) &&
@@ -183,7 +188,8 @@ service cloud.firestore {
                              'firstName', 'lastName', 'nickname', 'email', 'schoolName', 'grade',
                              'alStream', 'className', 'alExamYear', 'subjects', 'reminderEnabled',
                              'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
-                             'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
+                             'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
+                             'setupCompleted',
                              'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
                              'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'updatedAt'
                            ])

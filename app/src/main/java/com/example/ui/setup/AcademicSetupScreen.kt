@@ -386,7 +386,7 @@ fun AcademicSetupScreen(
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    text = "Add prior days attended/missed for accurate 80% math from Day 1.",
+                                    text = "Add prior days now, or import your attendance % from Day 1 up to any date anytime in Calendar or Settings.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

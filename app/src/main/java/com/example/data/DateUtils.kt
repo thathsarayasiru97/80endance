@@ -110,6 +110,30 @@ object DateUtils {
         return (diffMs.toDouble() / 86_400_000.0).roundToInt()
     }
 
+    /** Returns the most recent Friday strictly before [referenceDateKey]. */
+    fun lastFridayKey(referenceDateKey: String = todayKey()): String {
+        val cal = parseDateKey(referenceDateKey) ?: Calendar.getInstance()
+        val delta = when (cal.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.SATURDAY -> -1
+            Calendar.SUNDAY -> -2
+            Calendar.MONDAY -> -3
+            Calendar.TUESDAY -> -4
+            Calendar.WEDNESDAY -> -5
+            Calendar.THURSDAY -> -6
+            else -> -7 // Friday -> previous week's Friday
+        }
+        cal.add(Calendar.DAY_OF_YEAR, delta)
+        return formatDateKey(cal)
+    }
+
+    /** Returns the last calendar day of the previous month relative to [referenceDateKey]. */
+    fun endOfPreviousMonthKey(referenceDateKey: String = todayKey()): String {
+        val cal = parseDateKey(referenceDateKey) ?: Calendar.getInstance()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.add(Calendar.DAY_OF_YEAR, -1)
+        return formatDateKey(cal)
+    }
+
     /**
      * Expands an inclusive [startDateKey..endDateKey] date range into ISO date keys,
      * optionally skipping Saturdays and Sundays, bounded to [maxDays].

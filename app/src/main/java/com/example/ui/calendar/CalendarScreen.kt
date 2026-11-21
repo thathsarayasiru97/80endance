@@ -27,7 +27,10 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material.icons.rounded.Percent
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -70,6 +73,7 @@ fun CalendarScreen(
     state: StudentAppState,
     onEditDate: (String) -> Unit,
     onDeleteDate: (String) -> Unit,
+    onOpenBaselineImport: (() -> Unit)? = null,
     bottomBarPadding: Dp = 24.dp
 ) {
     val semantic = LocalAttendanceColors.current
@@ -78,6 +82,7 @@ fun CalendarScreen(
     var displayMonth by remember { mutableIntStateOf(initialYm.second) }
     var selectedDateKey by remember { mutableStateOf<String?>(null) }
 
+    val profile = state.profile
     val recordMap = remember(state.attendanceRecords) {
         state.attendanceRecords.associateBy { it.dateKey }
     }
@@ -99,7 +104,8 @@ fun CalendarScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 600.dp),
+                .widthIn(max = 600.dp)
+                .testTag("calendar_lazy_column"),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
@@ -116,10 +122,87 @@ fun CalendarScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "Tap any school day to log or edit attendance • ${state.activeTerm.name}",
+                        text = "Tap any school day up to today to log or edit attendance • ${state.activeTerm.name}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+
+            if (onOpenBaselineImport != null) {
+                item {
+                    val hasBaseline = profile?.hasLockedBaseline == true
+                    Surface(
+                        color = if (hasBaseline) {
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLowest
+                        },
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenBaselineImport() }
+                            .testTag("calendar_baseline_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = if (hasBaseline) {
+                                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f)
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (hasBaseline) Icons.Rounded.Lock else Icons.Rounded.Percent,
+                                        contentDescription = "Attendance percentage baseline",
+                                        tint = if (hasBaseline) {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                if (hasBaseline) {
+                                    val pctLabel = profile?.baselinePercent?.let {
+                                        String.format(java.util.Locale.US, "%.1f%%", it)
+                                    } ?: "${profile?.priorPresentCount}P / ${profile?.priorAbsentCount}A"
+                                    Text(
+                                        text = "Imported Period Locked • $pctLabel",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "${DateUtils.formatReadableShort(profile!!.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} (${profile.priorPresentCount}P / ${profile.priorAbsentCount}A) • Tap to update",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Enter Attendance % Up to a Date",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Import your % from Day 1 (e.g., from your class teacher) and lock those days",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -209,28 +292,34 @@ fun CalendarScreen(
                                         } else {
                                             val dateKey = DateUtils.formatDateKey(displayYear, displayMonth, dayNum)
                                             val isWeekend = col >= 5 || DateUtils.isWeekend(dateKey)
-                                            val rec = if (isWeekend) null else recordMap[dateKey]
+                                            val isFuture = dateKey > todayKey
+                                            val isLocked = !isWeekend && profile?.isDateInLockedBaseline(dateKey) == true
+                                            val rec = if (isWeekend || isFuture || isLocked) null else recordMap[dateKey]
                                             val dayEvents = eventMap[dateKey].orEmpty()
                                             val isPoya = dayEvents.any { it.eventTypeEnum == CalendarEventType.POYA }
                                             val isHoliday = dayEvents.any { it.nonSchoolDay }
                                             val isToday = dateKey == todayKey
+                                            val isInteractive = !isWeekend && (!isFuture || dayEvents.isNotEmpty())
 
                                             val cellBg = when {
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                                                isPoya || isHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
+                                                isLocked -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
                                                 rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.presentContainer
                                                 rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.absentContainer
                                                 rec?.statusEnum == AttendanceStatus.MEDICAL -> semantic.medicalContainer
                                                 rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEventContainer
-                                                isPoya || isHoliday -> semantic.poyaContainer.copy(alpha = 0.78f)
                                                 else -> Color.Transparent
                                             }
                                             val textColor = when {
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
+                                                isPoya || isHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
+                                                isLocked -> MaterialTheme.colorScheme.onSecondaryContainer
+                                                isFuture -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                                                 rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.onPresentContainer
                                                 rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.onAbsentContainer
                                                 rec?.statusEnum == AttendanceStatus.MEDICAL -> semantic.onMedicalContainer
                                                 rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.onSchoolEventContainer
-                                                isPoya || isHoliday -> semantic.onPoyaContainer
                                                 else -> MaterialTheme.colorScheme.onSurface
                                             }
 
@@ -253,35 +342,47 @@ fun CalendarScreen(
                                                         }
                                                     )
                                                     .then(
-                                                        if (!isWeekend) {
+                                                        if (isInteractive) {
                                                             Modifier.clickable { selectedDateKey = dateKey }
                                                         } else {
                                                             Modifier
                                                         }
                                                     )
+                                                    .testTag("calendar_day_$dateKey")
                                             ) {
                                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                                     Text(
                                                         text = dayNum.toString(),
                                                         style = MaterialTheme.typography.labelLarge,
                                                         color = textColor,
-                                                        fontWeight = if (!isWeekend && (isToday || rec != null)) FontWeight.Bold else FontWeight.Medium
+                                                        fontWeight = if (!isWeekend && !isFuture && (isToday || rec != null || isLocked)) FontWeight.Bold else FontWeight.Medium
                                                     )
                                                     if (!isWeekend) {
-                                                        if (isPoya || isHoliday) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(5.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(semantic.poya)
-                                                            )
-                                                        } else if (dayEvents.isNotEmpty()) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(5.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(MaterialTheme.colorScheme.primary)
-                                                            )
+                                                        when {
+                                                            isPoya || isHoliday -> {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .size(5.dp)
+                                                                        .clip(CircleShape)
+                                                                        .background(semantic.poya)
+                                                                )
+                                                            }
+                                                            isLocked -> {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.Lock,
+                                                                    contentDescription = "Locked imported attendance day",
+                                                                    tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f),
+                                                                    modifier = Modifier.size(10.dp)
+                                                                )
+                                                            }
+                                                            dayEvents.isNotEmpty() -> {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .size(5.dp)
+                                                                        .clip(CircleShape)
+                                                                        .background(MaterialTheme.colorScheme.primary)
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -303,7 +404,11 @@ fun CalendarScreen(
                             LegendItem("Absent", semantic.absent)
                             LegendItem("Excused", semantic.schoolEvent)
                             LegendItem("Medical", semantic.medical)
-                            LegendItem("No School", semantic.poya)
+                            if (profile?.hasLockedBaseline == true) {
+                                LegendItem("Locked", MaterialTheme.colorScheme.secondary)
+                            } else {
+                                LegendItem("No School", semantic.poya)
+                            }
                         }
                     }
                 }
@@ -489,87 +594,175 @@ fun CalendarScreen(
                 }
 
                 val isSelectedWeekend = DateUtils.isWeekend(dateKey)
-                if (isSelectedWeekend) {
-                    Text(
-                        text = "Weekend — no attendance is tracked on Saturdays or Sundays.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 24.dp)
-                    )
-                } else {
-                    if (record != null) {
+                val isSelectedFuture = dateKey > todayKey
+                val isSelectedLocked = !isSelectedWeekend && profile?.isDateInLockedBaseline(dateKey) == true
+
+                when {
+                    isSelectedWeekend -> {
+                        Text(
+                            text = "Weekend — no attendance is tracked on Saturdays or Sundays.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 24.dp)
+                        )
+                    }
+                    isSelectedFuture -> {
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 24.dp)
+                                .testTag("calendar_future_day_notice")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Schedule,
+                                    contentDescription = "Future date",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Upcoming date — attendance can only be marked on or before today.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    isSelectedLocked -> {
+                        val pctLabel = profile?.baselinePercent?.let {
+                            String.format(java.util.Locale.US, "%.1f%%", it)
+                        } ?: "imported attendance"
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("calendar_locked_day_notice")
                         ) {
                             Column(
                                 modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Lock,
+                                        contentDescription = "Locked day",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Locked • Included in Imported $pctLabel",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
                                 Text(
-                                    text = "Logged Status: ${record.statusEnum.label}",
-                                    style = MaterialTheme.typography.titleMedium
+                                    text = "Covered by ${DateUtils.formatReadableShort(profile!!.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} (${profile.priorPresentCount} Present, ${profile.priorAbsentCount} Absent). Individual days in this period cannot be edited.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.88f)
                                 )
-                                if (record.subjectTags.isNotEmpty()) {
-                                    Text(
-                                        text = "Subjects: ${record.subjectTags.joinToString(", ")}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (!record.note.isNullOrBlank()) {
-                                    Text(
-                                        text = "Note: ${record.note}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                             }
                         }
-                    } else {
-                        Text(
-                            text = "No attendance recorded for this date yet.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 24.dp)
-                    ) {
-                        if (record != null) {
+                        if (onOpenBaselineImport != null) {
                             OutlinedButton(
                                 onClick = {
-                                    onDeleteDate(dateKey)
                                     selectedDateKey = null
+                                    onOpenBaselineImport()
                                 },
                                 shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 24.dp)
                             ) {
-                                Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Rounded.Percent, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Clear")
+                                Text("Manage Imported Period")
                             }
+                        } else {
+                            Spacer(modifier = Modifier.height(16.dp))
                         }
-                        LiquidGlassButton(
-                            onClick = {
-                                selectedDateKey = null
-                                onEditDate(dateKey)
-                            },
-                            backdrop = sheetBackdrop,
-                            tint = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.primary,
-                            minHeight = 48.dp,
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                            modifier = Modifier.weight(1.4f)
+                    }
+                    else -> {
+                        if (record != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Logged Status: ${record.statusEnum.label}",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    if (record.subjectTags.isNotEmpty()) {
+                                        Text(
+                                            text = "Subjects: ${record.subjectTags.joinToString(", ")}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (!record.note.isNullOrBlank()) {
+                                        Text(
+                                            text = "Note: ${record.note}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = "No attendance recorded for this date yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 24.dp)
                         ) {
-                            Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (record == null) "Log Attendance" else "Edit Entry")
+                            if (record != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onDeleteDate(dateKey)
+                                        selectedDateKey = null
+                                    },
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Clear")
+                                }
+                            }
+                            LiquidGlassButton(
+                                onClick = {
+                                    selectedDateKey = null
+                                    onEditDate(dateKey)
+                                },
+                                backdrop = sheetBackdrop,
+                                tint = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                minHeight = 48.dp,
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                                modifier = Modifier.weight(1.4f)
+                            ) {
+                                Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (record == null) "Log Attendance" else "Edit Entry")
+                            }
                         }
                     }
                 }
