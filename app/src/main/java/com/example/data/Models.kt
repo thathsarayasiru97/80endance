@@ -137,15 +137,26 @@ enum class CalendarEventTargetType(val raw: String, val label: String) {
     }
 }
 
-enum class CalendarEventType(val raw: String, val label: String) {
-    POYA("poya", "Poya Day"),
-    PUBLIC_HOLIDAY("public_holiday", "Public Holiday"),
-    TERM_BREAK("term_break", "Term Break"),
-    SCHOOL_HOLIDAY("school_holiday", "No School / Holiday"),
-    SCHOOL_EVENT("school_event", "School Event"),
-    EXAM("exam", "Exam Date");
+enum class CalendarEventType(
+    val raw: String,
+    val label: String,
+    val isSriLankanHoliday: Boolean
+) {
+    POYA("poya", "Poya Day", isSriLankanHoliday = true),
+    PUBLIC_HOLIDAY("public_holiday", "Public Holiday", isSriLankanHoliday = true),
+    STUDY_LEAVE("study_leave", "Exam Break / Study Leave", isSriLankanHoliday = false),
+    SCHOOL_HOLIDAY("school_holiday", "No School (School Off)", isSriLankanHoliday = false),
+    TERM_BREAK("term_break", "Term Break", isSriLankanHoliday = false),
+    SCHOOL_EVENT("school_event", "School Event", isSriLankanHoliday = false),
+    EXAM("exam", "Exam / Term Test", isSriLankanHoliday = false);
 
     companion object {
+        val sriLankanHolidayTypes: List<CalendarEventType>
+            get() = entries.filter { it.isSriLankanHoliday }
+
+        val schoolUpdateTypes: List<CalendarEventType>
+            get() = entries.filterNot { it.isSriLankanHoliday }
+
         fun fromRaw(raw: String?): CalendarEventType =
             entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: POYA
     }
@@ -218,7 +229,7 @@ data class UserProfile(
 
     fun isDateInLockedBaseline(dateKey: String): Boolean {
         val range = lockedBaselineRange ?: return false
-        return dateKey.length == 10 && dateKey >= range.first && dateKey <= range.second
+        return dateKey.length == 10 && dateKey <= range.second
     }
 
     val quickOverallPercent: Double
@@ -329,6 +340,9 @@ data class CalendarEvent(
 
     val nonSchoolDay: Boolean
         get() = eventTypeEnum != CalendarEventType.EXAM && eventTypeEnum != CalendarEventType.SCHOOL_EVENT
+
+    val isSriLankanHoliday: Boolean
+        get() = eventTypeEnum.isSriLankanHoliday
 
     val hasMultiAudienceTargeting: Boolean
         get() = targetAll != null ||

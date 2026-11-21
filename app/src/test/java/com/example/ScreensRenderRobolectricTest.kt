@@ -887,5 +887,166 @@ class ScreensRenderRobolectricTest {
         com.example.system.SyncScheduler.scheduleBackgroundBroadcastAlarm(context, delayMs = 60_000L)
         com.example.system.SyncScheduler.cancelBackgroundBroadcastAlarm(context)
     }
+
+    @Test
+    fun developedByAtayaFooterRendersAtBottomOfHomeAndSettings() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = sampleState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("developed_by_ataya_footer"))
+        composeTestRule.onNodeWithTag("developed_by_ataya_footer").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsScreenRendersDevelopedByAtayaFooterAtBottom() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    SettingsScreen(
+                        state = sampleState,
+                        isVerifiedAdmin = false,
+                        onEditProfile = {},
+                        onUpdatePreferences = { _, _, _, _ -> },
+                        onPreviewCheckInPopup = {},
+                        onManualSync = {},
+                        onOpenAdminPanel = {},
+                        onSignOut = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("developed_by_ataya_footer"))
+        composeTestRule.onNodeWithTag("developed_by_ataya_footer").assertIsDisplayed()
+    }
+
+    @Test
+    fun calendarSeparatesSchoolUpdatesFromSriLankanHolidaysAndAdminHasExamBreak() {
+        val (curY, curM) = DateUtils.currentYearMonth()
+        val day10 = DateUtils.formatDateKey(curY, curM, 10)
+        val day18 = DateUtils.formatDateKey(curY, curM, 18)
+
+        val events = listOf(
+            CalendarEvent(
+                id = "ev_study_break",
+                title = "Term Test Study Break",
+                dateKey = day10,
+                eventType = CalendarEventType.STUDY_LEAVE.raw,
+                description = "No school between Physics and Chemistry exam days."
+            ),
+            CalendarEvent(
+                id = "ev_poya",
+                title = "Full Moon Poya Day",
+                dateKey = day18,
+                eventType = CalendarEventType.POYA.raw
+            )
+        )
+
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    CalendarScreen(
+                        state = sampleState.copy(calendarEvents = events),
+                        onEditDate = {},
+                        onDeleteDate = {},
+                        isVerifiedAdmin = true,
+                        onAdminSaveCalendarEvent = { _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                        onAdminDeleteCalendarEvent = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_school_updates_section"))
+        composeTestRule.onNodeWithTag("calendar_school_updates_section").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_sl_holidays_section"))
+        composeTestRule.onNodeWithTag("calendar_sl_holidays_section").assertIsDisplayed()
+
+        // Scroll back to calendar grid, tap day 10 and open Admin Add Event dialog to verify Exam Break / Study Leave chip exists
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_day_$day10"))
+        composeTestRule.onNodeWithTag("calendar_day_$day10").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_admin_add_event_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_event_type_study_leave").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun setupReplacesJoiningMidTermWithImportAttendanceAndCalculator() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    AcademicSetupScreen(
+                        initialDisplayName = "Yasiru Perera",
+                        existingProfile = null,
+                        isSaving = false,
+                        onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Joining Mid-Term? (Optional)").assertDoesNotExist()
+
+        composeTestRule.onNodeWithTag("setup_import_attendance_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("setup_import_attendance_toggle").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("setup_import_mode_calculator").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("setup_calc_days_held_input").performScrollTo().performTextInput("50")
+        composeTestRule.onNodeWithTag("setup_calc_days_attended_input").performScrollTo().performTextInput("42")
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("setup_calc_result_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Calculated Attendance: 84.0%", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("setup_baseline_lock_notice").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun attendanceBaselineDialogSupportsPercentageCalculatorMode() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    AttendanceBaselineDialog(
+                        profile = sampleState.profile,
+                        activeTerm = sampleState.activeTerm,
+                        terms = sampleState.terms,
+                        calendarEvents = emptyList(),
+                        existingRecords = emptyList(),
+                        isSaving = false,
+                        onDismiss = {},
+                        onSave = { _, _, _, _, _ -> }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("baseline_mode_calculator").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("baseline_calc_days_held_input").performScrollTo().performTextInput("40")
+        composeTestRule.onNodeWithTag("baseline_calc_days_attended_input").performScrollTo().performTextInput("36")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("baseline_preview_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("90.0%", substring = true).assertIsDisplayed()
+    }
 }
+
 

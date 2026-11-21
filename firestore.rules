@@ -119,7 +119,7 @@ service cloud.firestore {
     function isValidCalendarEvent(data) {
       return data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
              isValidDateKey(data.dateKey) &&
-             data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'exam', 'school_event'] &&
+             data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'study_leave', 'exam', 'school_event'] &&
              data.academicYear is int && data.academicYear >= 2024 && data.academicYear <= 2035 &&
              (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
              (!('targetType' in data) || data.targetType == null || data.targetType in ['all', 'grade', 'stream', 'class']) &&

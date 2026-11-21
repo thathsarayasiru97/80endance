@@ -623,10 +623,10 @@ class AttendanceRepository(
 
             val cleanPct = percentage.coerceIn(0.0, 100.0)
             val overlappingRecords = existingRecords.filter {
-                it.dateKey >= startDateKey && it.dateKey <= endDateKey
+                it.dateKey <= endDateKey
             }
             val remainingRecords = existingRecords.filterNot {
-                it.dateKey >= startDateKey && it.dateKey <= endDateKey
+                it.dateKey <= endDateKey
             }
 
             val batch = db.batch()

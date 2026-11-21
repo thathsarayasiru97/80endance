@@ -37,10 +37,13 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -364,14 +367,15 @@ fun CalendarScreen(
                                             val isLocked = !isWeekend && profile?.isDateInLockedBaseline(dateKey) == true
                                             val rec = if (isWeekend || isFuture || isLocked) null else recordMap[dateKey]
                                             val dayEvents = eventMap[dateKey].orEmpty()
-                                            val isPoya = dayEvents.any { it.eventTypeEnum == CalendarEventType.POYA }
-                                            val isHoliday = dayEvents.any { it.nonSchoolDay }
+                                            val isSlHoliday = dayEvents.any { it.isSriLankanHoliday }
+                                            val isSchoolOff = dayEvents.any { !it.isSriLankanHoliday && it.nonSchoolDay }
                                             val isToday = dateKey == todayKey
                                             val isInteractive = isVerifiedAdmin || (!isWeekend && (!isFuture || dayEvents.isNotEmpty())) || (isWeekend && dayEvents.isNotEmpty())
 
                                             val targetCellBg = when {
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-                                                isPoya || isHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
+                                                isSlHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
+                                                isSchoolOff -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
                                                 isLocked -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
                                                 rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.presentContainer
                                                 rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.absentContainer
@@ -386,7 +390,8 @@ fun CalendarScreen(
                                             )
                                             val textColor = when {
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
-                                                isPoya || isHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
+                                                isSlHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
+                                                isSchoolOff -> MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = if (isFuture) 0.72f else 1f)
                                                 isLocked -> MaterialTheme.colorScheme.onSecondaryContainer
                                                 isFuture -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                                                 rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.onPresentContainer
@@ -437,7 +442,13 @@ fun CalendarScreen(
                                                                     modifier = Modifier
                                                                         .size(5.dp)
                                                                         .clip(CircleShape)
-                                                                        .background(if (isPoya || isHoliday) semantic.poya else MaterialTheme.colorScheme.primary)
+                                                                        .background(
+                                                                            when {
+                                                                                isSlHoliday -> semantic.poya
+                                                                                isSchoolOff -> MaterialTheme.colorScheme.tertiary
+                                                                                else -> MaterialTheme.colorScheme.primary
+                                                                            }
+                                                                        )
                                                                 )
                                                                 Box(
                                                                     modifier = Modifier
@@ -447,12 +458,20 @@ fun CalendarScreen(
                                                                 )
                                                             }
                                                         }
-                                                        isPoya || isHoliday -> {
+                                                        isSlHoliday -> {
                                                             Box(
                                                                 modifier = Modifier
                                                                     .size(5.dp)
                                                                     .clip(CircleShape)
                                                                     .background(semantic.poya)
+                                                            )
+                                                        }
+                                                        isSchoolOff -> {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(5.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(MaterialTheme.colorScheme.tertiary)
                                                             )
                                                         }
                                                         !isWeekend && isLocked -> {
@@ -503,16 +522,20 @@ fun CalendarScreen(
                 }
             }
 
-            // Sri Lankan Poya Days & Holidays this month
+            // Section 1: School Events & No School Days (separate from Sri Lankan Holidays!)
+            val schoolMonthEvents = monthEvents.filterNot { it.isSriLankanHoliday }
+            val slHolidayMonthEvents = monthEvents.filter { it.isSriLankanHoliday }
+
             item {
                 Text(
-                    text = "Sri Lankan Holidays & Milestones",
+                    text = "School Events & No School Days",
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.testTag("calendar_school_updates_section")
                 )
             }
 
-            if (monthEvents.isEmpty()) {
+            if (schoolMonthEvents.isEmpty()) {
                 item {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -520,7 +543,7 @@ fun CalendarScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "No Poya days or school holidays listed for this month.",
+                            text = "No school events, exam breaks, or special no-school days listed for this month.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(16.dp)
@@ -528,7 +551,116 @@ fun CalendarScreen(
                     }
                 }
             } else {
-                items(monthEvents, key = { it.id }) { ev ->
+                items(schoolMonthEvents, key = { "school_${it.id}" }) { ev ->
+                    val isSchoolOffDay = ev.nonSchoolDay
+                    val iconBg = if (isSchoolOffDay) {
+                        MaterialTheme.colorScheme.tertiaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.primaryContainer
+                    }
+                    val iconFg = if (isSchoolOffDay) {
+                        MaterialTheme.colorScheme.onTertiaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedDateKey = ev.dateKey }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = iconBg,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = calendarEventIcon(ev.eventTypeEnum),
+                                        contentDescription = ev.title,
+                                        tint = iconFg,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = ev.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (isSchoolOffDay) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                                            shape = RoundedCornerShape(999.dp)
+                                        ) {
+                                            Text(
+                                                text = "No School",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                val audienceSuffix = ev.targetDisplayLabel?.let { " • $it" }.orEmpty()
+                                Text(
+                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}$audienceSuffix",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (!ev.description.isNullOrBlank()) {
+                                    Text(
+                                        text = ev.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 2: Official Sri Lankan Holidays (Poya Days & Public Holidays only)
+            item {
+                Text(
+                    text = "Sri Lankan Holidays",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.testTag("calendar_sl_holidays_section")
+                )
+            }
+
+            if (slHolidayMonthEvents.isEmpty()) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "No Sri Lankan Poya or public holidays listed for this month.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            } else {
+                items(slHolidayMonthEvents, key = { "sl_${it.id}" }) { ev ->
                     Card(
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
@@ -549,7 +681,7 @@ fun CalendarScreen(
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        imageVector = if (ev.eventTypeEnum == CalendarEventType.POYA) Icons.Rounded.NightsStay else Icons.Rounded.Event,
+                                        imageVector = calendarEventIcon(ev.eventTypeEnum),
                                         contentDescription = ev.title,
                                         tint = semantic.onPoyaContainer,
                                         modifier = Modifier.size(20.dp)
@@ -562,9 +694,8 @@ fun CalendarScreen(
                                     text = ev.title,
                                     style = MaterialTheme.typography.titleSmall
                                 )
-                                val audienceSuffix = ev.targetDisplayLabel?.let { " • $it" }.orEmpty()
                                 Text(
-                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}$audienceSuffix",
+                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -661,9 +792,25 @@ fun CalendarScreen(
                 )
 
                 events.forEach { ev ->
-                    val isPoyaOrOff = ev.nonSchoolDay
+                    val isSlHolidayEv = ev.isSriLankanHoliday
+                    val isSchoolOffEv = !isSlHolidayEv && ev.nonSchoolDay
+                    val containerColor = when {
+                        isSlHolidayEv -> semantic.poyaContainer
+                        isSchoolOffEv -> MaterialTheme.colorScheme.tertiaryContainer
+                        else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
+                    }
+                    val contentColor = when {
+                        isSlHolidayEv -> semantic.onPoyaContainer
+                        isSchoolOffEv -> MaterialTheme.colorScheme.onTertiaryContainer
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                    val categoryPrefix = when {
+                        isSlHolidayEv -> "Sri Lankan Holiday"
+                        isSchoolOffEv -> "School Update • No School"
+                        else -> "School Event"
+                    }
                     Surface(
-                        color = if (isPoyaOrOff) semantic.poyaContainer else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f),
+                        color = containerColor,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -672,9 +819,9 @@ fun CalendarScreen(
                             verticalAlignment = Alignment.Top
                         ) {
                             Icon(
-                                imageVector = if (ev.eventTypeEnum == CalendarEventType.POYA) Icons.Rounded.NightsStay else Icons.Rounded.Event,
+                                imageVector = calendarEventIcon(ev.eventTypeEnum),
                                 contentDescription = null,
-                                tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                tint = contentColor,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
@@ -686,20 +833,20 @@ fun CalendarScreen(
                                     text = ev.title,
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                                    color = contentColor
                                 )
                                 val audienceLabel = ev.targetDisplayLabel ?: if (isVerifiedAdmin) "Everyone" else null
                                 val audienceSuffix = audienceLabel?.let { " • $it" }.orEmpty()
                                 Text(
-                                    text = "${ev.eventTypeEnum.label}$audienceSuffix",
+                                    text = "$categoryPrefix • ${ev.eventTypeEnum.label}$audienceSuffix",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (isPoyaOrOff) semantic.onPoyaContainer.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                    color = contentColor.copy(alpha = 0.85f)
                                 )
                                 if (!ev.description.isNullOrBlank()) {
                                     Text(
                                         text = ev.description,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                                        color = contentColor
                                     )
                                 }
                             }
@@ -715,7 +862,7 @@ fun CalendarScreen(
                                         Icon(
                                             imageVector = Icons.Rounded.Edit,
                                             contentDescription = "Edit calendar event",
-                                            tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                            tint = contentColor,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -726,7 +873,7 @@ fun CalendarScreen(
                                             Icon(
                                                 imageVector = Icons.Rounded.DeleteOutline,
                                                 contentDescription = "Delete calendar event",
-                                                tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                                tint = contentColor,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
@@ -971,4 +1118,12 @@ private fun LegendItem(label: String, color: Color) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+private fun calendarEventIcon(type: CalendarEventType) = when (type) {
+    CalendarEventType.POYA -> Icons.Rounded.NightsStay
+    CalendarEventType.STUDY_LEAVE -> Icons.Rounded.MenuBook
+    CalendarEventType.SCHOOL_HOLIDAY, CalendarEventType.TERM_BREAK -> Icons.Rounded.EventBusy
+    CalendarEventType.EXAM -> Icons.Rounded.School
+    CalendarEventType.PUBLIC_HOLIDAY, CalendarEventType.SCHOOL_EVENT -> Icons.Rounded.Event
 }

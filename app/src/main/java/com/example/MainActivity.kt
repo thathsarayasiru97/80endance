@@ -507,7 +507,10 @@ private fun AuthenticatedAppShell(
             existingProfile = state.profile,
             isSaving = isSaving,
             catalog = state.academicCatalog,
-            onSave = { first, last, nick, school, grade, stream, cls, examYr, subjects, remOn, remH, remM, countExc, priorP, priorA, missingSubjects, missingClass ->
+            activeTerm = state.activeTerm,
+            terms = state.terms,
+            calendarEvents = state.calendarEvents,
+            onSave = { first, last, nick, school, grade, stream, cls, examYr, subjects, remOn, remH, remM, countExc, baseline, updateBaselineFields, missingSubjects, missingClass ->
                 attendanceViewModel.saveStudentProfile(
                     firstName = first,
                     lastName = last,
@@ -522,8 +525,12 @@ private fun AuthenticatedAppShell(
                     reminderHour = remH,
                     reminderMinute = remM,
                     countExcusedAsPresent = countExc,
-                    priorPresentCount = priorP,
-                    priorAbsentCount = priorA,
+                    priorPresentCount = baseline?.presentDays ?: if (updateBaselineFields) 0 else (state.profile?.priorPresentCount ?: 0),
+                    priorAbsentCount = baseline?.absentDays ?: if (updateBaselineFields) 0 else (state.profile?.priorAbsentCount ?: 0),
+                    baselineStartDate = baseline?.startDateKey,
+                    baselineEndDate = baseline?.endDateKey,
+                    baselinePercent = baseline?.percentage,
+                    updateBaselineFields = updateBaselineFields,
                     missingSubjectAlerts = missingSubjects,
                     missingClassAlert = missingClass,
                     onComplete = { editingProfileInSettings = false }

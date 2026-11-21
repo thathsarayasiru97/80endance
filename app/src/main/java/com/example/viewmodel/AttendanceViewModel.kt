@@ -662,6 +662,25 @@ class AttendanceViewModel(
                 baselinePercent = baselinePercent,
                 updateBaselineFields = updateBaselineFields
             )
+            val currentRecords = uiState.value.attendanceRecords
+            val shouldConsolidateBaseline = result.isSuccess &&
+                updateBaselineFields &&
+                baselineStartDate != null &&
+                baselineEndDate != null &&
+                baselinePercent != null &&
+                isExisting &&
+                currentRecords.any { it.dateKey <= baselineEndDate }
+            if (shouldConsolidateBaseline) {
+                repository.saveAttendancePercentageBaseline(
+                    userId = currentUserId,
+                    startDateKey = baselineStartDate!!,
+                    endDateKey = baselineEndDate!!,
+                    percentage = baselinePercent!!,
+                    presentDays = priorPresentCount,
+                    absentDays = priorAbsentCount,
+                    existingRecords = currentRecords
+                )
+            }
             _isSaving.value = false
             result.onSuccess {
                 localPrefs.saveReminder(reminderEnabled, reminderHour, reminderMinute)

@@ -86,6 +86,7 @@ import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.AdminOnlineNowPill
 import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
+import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.ResolvedFeedbackBanner
 import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
@@ -995,7 +996,13 @@ fun HomeScreen(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+            item {
+                DevelopedByAtayaFooter(
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            item { Spacer(modifier = Modifier.height(12.dp)) }
         }
     }
 

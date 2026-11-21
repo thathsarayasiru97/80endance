@@ -198,36 +198,117 @@ fun AdminCalendarEventEditorDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Text("Update Type", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = "School Updates & No School Days",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    CalendarEventType.entries.forEach { t ->
+                    CalendarEventType.schoolUpdateTypes.forEach { t ->
                         FilterChip(
                             selected = eventType == t,
                             onClick = { eventType = t },
-                            label = { Text(t.label) }
+                            label = { Text(t.label) },
+                            modifier = Modifier.testTag("admin_event_type_${t.raw}")
                         )
                     }
+                }
+
+                Text(
+                    text = "Sri Lankan Holidays",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    CalendarEventType.sriLankanHolidayTypes.forEach { t ->
+                        FilterChip(
+                            selected = eventType == t,
+                            onClick = { eventType = t },
+                            label = { Text(t.label) },
+                            modifier = Modifier.testTag("admin_event_type_${t.raw}")
+                        )
+                    }
+                }
+
+                Surface(
+                    color = if (eventType.isSriLankanHoliday) {
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = when (eventType) {
+                            CalendarEventType.STUDY_LEAVE ->
+                                "No school day (e.g., break between Term Test / Exam days). Excluded from attendance and listed under School Updates — NOT Sri Lankan Holidays."
+                            CalendarEventType.SCHOOL_HOLIDAY ->
+                                "School-specific No School day with a reason. Excluded from attendance and listed under School Updates — NOT Sri Lankan Holidays."
+                            CalendarEventType.TERM_BREAK ->
+                                "School term vacation day. Excluded from attendance and listed under School Updates."
+                            CalendarEventType.SCHOOL_EVENT ->
+                                "Normal school day with a special event or teaching advisory (attendance still tracked)."
+                            CalendarEventType.EXAM ->
+                                "Exam / Term Test day listed under School Updates (attendance still tracked)."
+                            CalendarEventType.POYA, CalendarEventType.PUBLIC_HOLIDAY ->
+                                "Official Sri Lankan Holiday — excluded from school days and shown under Sri Lankan Holidays."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(10.dp)
+                    )
                 }
 
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it.take(100) },
                     label = { Text("Title *") },
-                    placeholder = { Text("e.g., Sports Day Rehearsal, No School") },
+                    placeholder = {
+                        Text(
+                            when (eventType) {
+                                CalendarEventType.STUDY_LEAVE -> "e.g., Study Leave (Between Term Tests)"
+                                CalendarEventType.SCHOOL_HOLIDAY -> "e.g., Sports Meet Prep — No School"
+                                CalendarEventType.EXAM -> "e.g., Term 2 Physics Paper I"
+                                CalendarEventType.POYA -> "e.g., Unduvap Full Moon Poya Day"
+                                else -> "e.g., Sports Day Rehearsal, No School"
+                            }
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("admin_calendar_event_title_input")
                 )
 
+                val isReasonField = eventType == CalendarEventType.STUDY_LEAVE ||
+                    eventType == CalendarEventType.SCHOOL_HOLIDAY
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it.take(500) },
-                    label = { Text("Note / Advisory (Optional)") },
-                    placeholder = { Text("e.g., There might be no teaching for Grade 12 Bio Science periods 3–5") },
+                    label = {
+                        Text(if (isReasonField) "Reason / Note (Optional)" else "Note / Advisory (Optional)")
+                    },
+                    placeholder = {
+                        Text(
+                            when (eventType) {
+                                CalendarEventType.STUDY_LEAVE ->
+                                    "e.g., No school between Term Test Day 1 & Day 2 — study at home"
+                                CalendarEventType.SCHOOL_HOLIDAY ->
+                                    "e.g., School closed for A/L hall preparation"
+                                else ->
+                                    "e.g., There might be no teaching for Grade 12 Bio Science periods 3–5"
+                            }
+                        )
+                    },
                     minLines = 2,
                     maxLines = 4,
                     modifier = Modifier

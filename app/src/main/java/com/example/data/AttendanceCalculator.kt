@@ -148,7 +148,7 @@ object AttendanceCalculator {
         for (record in filtered) {
             if (DateUtils.isWeekend(record.dateKey)) continue
             if (includePriorBalance && lockedRange != null &&
-                record.dateKey >= lockedRange.first && record.dateKey <= lockedRange.second
+                record.dateKey <= lockedRange.second
             ) {
                 continue
             }
@@ -268,7 +268,7 @@ object AttendanceCalculator {
         val eventsByDate = calendarEvents.groupBy { it.dateKey }
         return DateUtils.currentWeekMonToFri().map { (label, dateKey) ->
             val nonSchoolEv = eventsByDate[dateKey]?.firstOrNull { it.nonSchoolDay }
-            val locked = lockedRange != null && dateKey >= lockedRange.first && dateKey <= lockedRange.second
+            val locked = lockedRange != null && dateKey <= lockedRange.second
             WeekDaySummary(
                 dayLabel = label,
                 dateKey = dateKey,
@@ -281,12 +281,16 @@ object AttendanceCalculator {
         }
     }
 
+    /**
+     * Returns only actual upcoming Sri Lankan Holidays (Poya Days & Public Holidays),
+     * keeping school-specific off days / exam study breaks separate.
+     */
     fun nextUpcomingPoyaOrHoliday(
         calendarEvents: List<CalendarEvent>,
         todayKey: String = DateUtils.todayKey()
     ): CalendarEvent? {
         return calendarEvents
-            .filter { it.dateKey >= todayKey && it.nonSchoolDay }
+            .filter { it.dateKey >= todayKey && it.isSriLankanHoliday }
             .minByOrNull { it.dateKey }
     }
 
@@ -377,6 +381,30 @@ object AttendanceCalculator {
     }
 
     /**
+     * Computes an exact attendance baseline from user-entered Days School Held and Days Attended.
+     */
+    fun estimateBaselineFromDays(
+        startDateKey: String,
+        endDateKey: String,
+        daysSchoolHeld: Int,
+        daysAttended: Int
+    ): PercentageBaselineEstimate {
+        val held = daysSchoolHeld.coerceIn(0, 600)
+        val attended = daysAttended.coerceIn(0, held)
+        val absent = (held - attended).coerceIn(0, 600)
+        val pct = if (held <= 0) 0.0 else (attended.toDouble() / held.toDouble()) * 100.0
+        return PercentageBaselineEstimate(
+            startDateKey = startDateKey,
+            endDateKey = endDateKey,
+            totalSchoolDays = held,
+            presentDays = attended,
+            absentDays = absent,
+            enteredPercent = pct,
+            effectivePercent = pct
+        )
+    }
+
+    /**
      * Finds recent past weekdays (before [todayKey]) that are school days for this student
      * and do not yet have an attendance record (and are not locked inside an imported baseline),
      * so HomeScreen can offer 1-tap catch-up.
@@ -396,7 +424,7 @@ object AttendanceCalculator {
         for (offset in 1..lookbackCalendarDays) {
             val candidate = DateUtils.addDays(todayKey, -offset)
             if (activeTermStartDate.length == 10 && candidate < activeTermStartDate) break
-            if (lockedRange != null && candidate >= lockedRange.first && candidate <= lockedRange.second) continue
+            if (lockedRange != null && candidate <= lockedRange.second) continue
             if (DateUtils.isWeekend(candidate)) continue
             if (candidate in nonSchoolDates) continue
             if (candidate !in loggedDates) {

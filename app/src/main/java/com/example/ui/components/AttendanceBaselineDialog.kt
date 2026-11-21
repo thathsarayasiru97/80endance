@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -61,6 +61,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+private enum class BaselineDialogMode {
+    PERCENTAGE,
+    CALCULATOR
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AttendanceBaselineDialog(
@@ -95,12 +100,13 @@ fun AttendanceBaselineDialog(
         val candidate = saved ?: activeTerm.startDate
         if (candidate > todayKey) DateUtils.addDays(todayKey, -30) else candidate
     }
-    val defaultEnd = remember(profile, lastFridayKey, yesterdayKey, defaultStart) {
+    val defaultEnd = remember(profile, lastFridayKey, yesterdayKey, defaultStart, todayKey) {
         val saved = profile?.baselineEndDate?.takeIf { it.length == 10 && it <= todayKey }
         val candidate = saved ?: if (lastFridayKey >= defaultStart) lastFridayKey else yesterdayKey
         if (candidate < defaultStart) defaultStart else candidate
     }
 
+    var mode by remember { mutableStateOf(BaselineDialogMode.PERCENTAGE) }
     var startDateKey by remember { mutableStateOf(defaultStart) }
     var endDateKey by remember { mutableStateOf(defaultEnd) }
     var percentText by remember {
@@ -112,9 +118,19 @@ fun AttendanceBaselineDialog(
     }
     var showOverrideDays by remember { mutableStateOf(false) }
     var customSchoolDaysText by remember { mutableStateOf("") }
+
+    val existingPriorTotal = (profile?.priorPresentCount ?: 0) + (profile?.priorAbsentCount ?: 0)
+    var calcDaysHeldText by remember {
+        mutableStateOf(existingPriorTotal.takeIf { it > 0 && profile?.hasLockedBaseline == true }?.toString().orEmpty())
+    }
+    var calcDaysAttendedText by remember {
+        mutableStateOf((profile?.priorPresentCount ?: 0).takeIf { it > 0 && profile?.hasLockedBaseline == true }?.toString().orEmpty())
+    }
+
     var pickingStartDate by remember { mutableStateOf(false) }
     var pickingEndDate by remember { mutableStateOf(false) }
 
+    val effectiveStartForCalc = if (startDateKey <= endDateKey) startDateKey else endDateKey
     val parsedPercent = percentText.toDoubleOrNull()?.takeIf { it in 0.0..100.0 }
     val detectedSchoolDays = remember(startDateKey, endDateKey, calendarEvents) {
         AttendanceCalculator.countSchoolDaysInRange(startDateKey, endDateKey, calendarEvents)
@@ -124,27 +140,71 @@ fun AttendanceBaselineDialog(
     } else {
         null
     }
-    val estimate = remember(startDateKey, endDateKey, parsedPercent, calendarEvents, customOverrideDays) {
-        if (parsedPercent != null && startDateKey <= endDateKey && endDateKey <= todayKey) {
-            AttendanceCalculator.estimateBaselineFromPercentage(
-                startDateKey = startDateKey,
-                endDateKey = endDateKey,
-                percentage = parsedPercent,
-                calendarEvents = calendarEvents,
-                customSchoolDaysOverride = customOverrideDays
-            )
-        } else {
+
+    val parsedDaysHeld = calcDaysHeldText.toIntOrNull()
+    val parsedDaysAttended = calcDaysAttendedText.toIntOrNull()
+    val calcInputMismatch = parsedDaysHeld != null && parsedDaysAttended != null && parsedDaysAttended > parsedDaysHeld
+
+    val estimate = remember(
+        mode,
+        startDateKey,
+        effectiveStartForCalc,
+        endDateKey,
+        parsedPercent,
+        calendarEvents,
+        customOverrideDays,
+        parsedDaysHeld,
+        parsedDaysAttended,
+        todayKey
+    ) {
+        if (endDateKey > todayKey) {
             null
+        } else {
+            when (mode) {
+                BaselineDialogMode.PERCENTAGE -> {
+                    if (parsedPercent != null && startDateKey <= endDateKey) {
+                        AttendanceCalculator.estimateBaselineFromPercentage(
+                            startDateKey = startDateKey,
+                            endDateKey = endDateKey,
+                            percentage = parsedPercent,
+                            calendarEvents = calendarEvents,
+                            customSchoolDaysOverride = customOverrideDays
+                        )
+                    } else {
+                        null
+                    }
+                }
+                BaselineDialogMode.CALCULATOR -> {
+                    if (parsedDaysHeld != null && parsedDaysHeld in 1..600 &&
+                        parsedDaysAttended != null && parsedDaysAttended in 0..parsedDaysHeld
+                    ) {
+                        AttendanceCalculator.estimateBaselineFromDays(
+                            startDateKey = effectiveStartForCalc,
+                            endDateKey = endDateKey,
+                            daysSchoolHeld = parsedDaysHeld,
+                            daysAttended = parsedDaysAttended
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
         }
     }
-    val overlappingCount = remember(existingRecords, startDateKey, endDateKey) {
-        existingRecords.count { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
+
+    val overlappingCount = remember(existingRecords, endDateKey) {
+        existingRecords.count { it.dateKey <= endDateKey }
     }
 
-    val rangeValid = startDateKey.length == 10 &&
-        endDateKey.length == 10 &&
-        startDateKey <= endDateKey &&
-        endDateKey <= todayKey
+    val rangeValid = when (mode) {
+        BaselineDialogMode.PERCENTAGE ->
+            startDateKey.length == 10 &&
+                endDateKey.length == 10 &&
+                startDateKey <= endDateKey &&
+                endDateKey <= todayKey
+        BaselineDialogMode.CALCULATOR ->
+            endDateKey.length == 10 && endDateKey <= todayKey
+    }
 
     val canSave = !isSaving &&
         rangeValid &&
@@ -155,7 +215,7 @@ fun AttendanceBaselineDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
         icon = {
             Icon(
-                imageVector = Icons.Rounded.Percent,
+                imageVector = if (mode == BaselineDialogMode.CALCULATOR) Icons.Rounded.Calculate else Icons.Rounded.Percent,
                 contentDescription = "Import attendance percentage",
                 tint = MaterialTheme.colorScheme.primary
             )
@@ -175,60 +235,87 @@ fun AttendanceBaselineDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Enter your attendance percentage from Day 1 up to a past date (e.g., from your class register). Days in this range will be locked from individual editing.",
+                    text = "Enter your known attendance % or calculate it from school days held & attended. All days on or before your chosen date will be locked in the Calendar.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // 1. From Date (Day 1)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "From (Day 1)",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
+                // Mode Switcher: Enter % vs % Calculator
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(
+                        selected = mode == BaselineDialogMode.PERCENTAGE,
+                        onClick = { mode = BaselineDialogMode.PERCENTAGE },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Percent, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = { Text("Enter %") },
+                        modifier = Modifier.testTag("baseline_mode_percent")
                     )
-                    OutlinedButton(
-                        onClick = { pickingStartDate = true },
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("baseline_start_date_button")
-                    ) {
-                        Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(DateUtils.formatReadableFull(startDateKey))
-                    }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        if (activeTerm.startDate <= todayKey) {
-                            FilterChip(
-                                selected = startDateKey == activeTerm.startDate,
-                                onClick = {
-                                    startDateKey = activeTerm.startDate
-                                    if (endDateKey < startDateKey) endDateKey = startDateKey
-                                },
-                                label = { Text("${activeTerm.name} Start") }
-                            )
+                    FilterChip(
+                        selected = mode == BaselineDialogMode.CALCULATOR,
+                        onClick = { mode = BaselineDialogMode.CALCULATOR },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Calculate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = { Text("% Calculator") },
+                        modifier = Modifier.testTag("baseline_mode_calculator")
+                    )
+                }
+
+                // 1. From Date (shown in Enter % mode so detected school days match register range)
+                if (mode == BaselineDialogMode.PERCENTAGE) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "From (Day 1)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        OutlinedButton(
+                            onClick = { pickingStartDate = true },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("baseline_start_date_button")
+                        ) {
+                            Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(DateUtils.formatReadableFull(startDateKey))
                         }
-                        if (yearStartTerm != null && yearStartTerm.startDate != activeTerm.startDate && yearStartTerm.startDate <= todayKey) {
-                            FilterChip(
-                                selected = startDateKey == yearStartTerm.startDate,
-                                onClick = {
-                                    startDateKey = yearStartTerm.startDate
-                                    if (endDateKey < startDateKey) endDateKey = startDateKey
-                                },
-                                label = { Text("${yearStartTerm.academicYear} Day 1") }
-                            )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (activeTerm.startDate <= todayKey) {
+                                FilterChip(
+                                    selected = startDateKey == activeTerm.startDate,
+                                    onClick = {
+                                        startDateKey = activeTerm.startDate
+                                        if (endDateKey < startDateKey) endDateKey = startDateKey
+                                    },
+                                    label = { Text("${activeTerm.name} Start") }
+                                )
+                            }
+                            if (yearStartTerm != null && yearStartTerm.startDate != activeTerm.startDate && yearStartTerm.startDate <= todayKey) {
+                                FilterChip(
+                                    selected = startDateKey == yearStartTerm.startDate,
+                                    onClick = {
+                                        startDateKey = yearStartTerm.startDate
+                                        if (endDateKey < startDateKey) endDateKey = startDateKey
+                                    },
+                                    label = { Text("${yearStartTerm.academicYear} Day 1") }
+                                )
+                            }
                         }
                     }
                 }
 
-                // 2. Up To Date (End Date)
+                // 2. Up Until This Day (Included & Locked)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Up To Date (Included & Locked)",
+                        text = "Up Until This Day (Included & Locked)",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -247,21 +334,28 @@ fun AttendanceBaselineDialog(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (lastFridayKey >= startDateKey && lastFridayKey <= todayKey) {
+                        if (mode == BaselineDialogMode.CALCULATOR || (lastFridayKey >= startDateKey && lastFridayKey <= todayKey)) {
                             FilterChip(
                                 selected = endDateKey == lastFridayKey,
                                 onClick = { endDateKey = lastFridayKey },
                                 label = { Text("Last Friday") }
                             )
                         }
-                        if (yesterdayKey >= startDateKey && yesterdayKey <= todayKey) {
+                        if (mode == BaselineDialogMode.CALCULATOR || (yesterdayKey >= startDateKey && yesterdayKey <= todayKey)) {
                             FilterChip(
                                 selected = endDateKey == yesterdayKey,
                                 onClick = { endDateKey = yesterdayKey },
                                 label = { Text("Yesterday") }
                             )
                         }
-                        if (endOfLastMonthKey >= startDateKey && endOfLastMonthKey <= todayKey) {
+                        if (mode == BaselineDialogMode.CALCULATOR || todayKey >= startDateKey) {
+                            FilterChip(
+                                selected = endDateKey == todayKey,
+                                onClick = { endDateKey = todayKey },
+                                label = { Text("Today") }
+                            )
+                        }
+                        if (mode == BaselineDialogMode.CALCULATOR || (endOfLastMonthKey >= startDateKey && endOfLastMonthKey <= todayKey)) {
                             FilterChip(
                                 selected = endDateKey == endOfLastMonthKey,
                                 onClick = { endDateKey = endOfLastMonthKey },
@@ -271,99 +365,134 @@ fun AttendanceBaselineDialog(
                     }
                 }
 
-                // 3. Attendance Percentage Input
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(
-                        value = percentText,
-                        onValueChange = { raw ->
-                            val filtered = raw.filter { it.isDigit() || it == '.' }
-                            if (filtered.count { it == '.' } <= 1 && filtered.length <= 6) {
-                                percentText = filtered
-                            }
-                        },
-                        label = { Text("Attendance Percentage (%) *") },
-                        placeholder = { Text("e.g., 84.5") },
-                        suffix = { Text("%") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        isError = percentText.isNotBlank() && parsedPercent == null,
-                        supportingText = if (percentText.isNotBlank() && parsedPercent == null) {
-                            { Text("Enter a percentage between 0 and 100") }
-                        } else {
-                            null
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("baseline_percent_input")
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        listOf("75", "80", "85", "90", "95").forEach { preset ->
-                            FilterChip(
-                                selected = percentText == preset,
-                                onClick = { percentText = preset },
-                                label = { Text("$preset%") }
-                            )
-                        }
-                    }
-                }
-
-                // 4. Detected School Days + Optional Adjust
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "$detectedSchoolDays school days detected",
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    text = "Weekends & Poya/No School days automatically excluded",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = {
-                                    showOverrideDays = !showOverrideDays
-                                    if (showOverrideDays && customSchoolDaysText.isEmpty() && detectedSchoolDays > 0) {
-                                        customSchoolDaysText = detectedSchoolDays.toString()
-                                    }
+                // 3. Mode-specific Inputs
+                if (mode == BaselineDialogMode.PERCENTAGE) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = percentText,
+                            onValueChange = { raw ->
+                                val filtered = raw.filter { it.isDigit() || it == '.' }
+                                if (filtered.count { it == '.' } <= 1 && filtered.length <= 6) {
+                                    percentText = filtered
                                 }
-                            ) {
-                                Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(if (showOverrideDays) "Auto" else "Adjust")
+                            },
+                            label = { Text("Attendance Percentage (%) *") },
+                            placeholder = { Text("e.g., 84.5") },
+                            suffix = { Text("%") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            isError = percentText.isNotBlank() && parsedPercent == null,
+                            supportingText = if (percentText.isNotBlank() && parsedPercent == null) {
+                                { Text("Enter a percentage between 0 and 100") }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("baseline_percent_input")
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf("75", "80", "85", "90", "95").forEach { preset ->
+                                FilterChip(
+                                    selected = percentText == preset,
+                                    onClick = { percentText = preset },
+                                    label = { Text("$preset%") }
+                                )
                             }
                         }
+                    }
 
-                        AnimatedVisibility(visible = showOverrideDays) {
-                            OutlinedTextField(
-                                value = customSchoolDaysText,
-                                onValueChange = { customSchoolDaysText = it.filter(Char::isDigit).take(3) },
-                                label = { Text("Exact Total School Days (Register)") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                    // Detected School Days + Optional Adjust
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "$detectedSchoolDays school days detected",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = "Weekends & Poya/No School days automatically excluded",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        showOverrideDays = !showOverrideDays
+                                        if (showOverrideDays && customSchoolDaysText.isEmpty() && detectedSchoolDays > 0) {
+                                            customSchoolDaysText = detectedSchoolDays.toString()
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(if (showOverrideDays) "Auto" else "Adjust")
+                                }
+                            }
+
+                            AnimatedVisibility(visible = showOverrideDays) {
+                                OutlinedTextField(
+                                    value = customSchoolDaysText,
+                                    onValueChange = { customSchoolDaysText = it.filter(Char::isDigit).take(3) },
+                                    label = { Text("Exact Total School Days (Register)") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
+                    }
+                } else {
+                    // Attendance % Calculator Inputs
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = calcDaysHeldText,
+                            onValueChange = { calcDaysHeldText = it.filter(Char::isDigit).take(3) },
+                            label = { Text("Days School Held *") },
+                            placeholder = { Text("e.g., 50") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = calcDaysHeldText.isNotBlank() && (parsedDaysHeld == null || parsedDaysHeld <= 0),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("baseline_calc_days_held_input")
+                        )
+                        OutlinedTextField(
+                            value = calcDaysAttendedText,
+                            onValueChange = { calcDaysAttendedText = it.filter(Char::isDigit).take(3) },
+                            label = { Text("Days You Attended *") },
+                            placeholder = { Text("e.g., 42") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = calcInputMismatch,
+                            supportingText = if (calcInputMismatch) {
+                                { Text("Days attended cannot exceed days school held") }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("baseline_calc_days_attended_input")
+                        )
                     }
                 }
 
-                // 5. Live Conversion Preview & Lock Notice
+                // 4. Live Conversion Preview & Lock Notice
                 if (!rangeValid) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -428,13 +557,13 @@ fun AttendanceBaselineDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
-                                    text = "${DateUtils.formatReadableShort(startDateKey)} → ${DateUtils.formatReadableShort(endDateKey)} will be locked from individual day edits.",
+                                    text = "All days on or before ${DateUtils.formatReadableShort(endDateKey)} will be locked and cannot be edited in the Calendar.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
                                 if (overlappingCount > 0) {
                                     Text(
-                                        text = "$overlappingCount existing day log${if (overlappingCount == 1) "" else "s"} inside this period will be consolidated so nothing is double-counted.",
+                                        text = "$overlappingCount existing day log${if (overlappingCount == 1) "" else "s"} on or before this date will be consolidated so nothing is double-counted.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
@@ -442,7 +571,7 @@ fun AttendanceBaselineDialog(
                             }
                         }
                     }
-                } else if (detectedSchoolDays == 0 && rangeValid) {
+                } else if (mode == BaselineDialogMode.PERCENTAGE && detectedSchoolDays == 0 && rangeValid) {
                     Text(
                         text = "No school weekdays found in this date range. Expand your dates or tap Adjust.",
                         style = MaterialTheme.typography.bodySmall,
@@ -542,7 +671,9 @@ fun AttendanceBaselineDialog(
     }
 
     if (pickingEndDate) {
-        val minMillis = remember(startDateKey) { isoDateToUtcMillis(startDateKey) }
+        val minMillis = remember(startDateKey, mode) {
+            if (mode == BaselineDialogMode.PERCENTAGE) isoDateToUtcMillis(startDateKey) else null
+        }
         val maxMillis = remember(todayKey) { isoDateToUtcMillis(todayKey) }
         val pickerState = rememberDatePickerState(
             initialSelectedDateMillis = isoDateToUtcMillis(endDateKey),

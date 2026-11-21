@@ -111,6 +111,7 @@ import com.example.data.FeedbackType
 import com.example.system.AppUpdateChecker
 import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckStatusSummary
+import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
@@ -1218,7 +1219,13 @@ fun SettingsScreen(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+            item {
+                DevelopedByAtayaFooter(
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+
+            item { Spacer(modifier = Modifier.height(12.dp)) }
         }
     }
 

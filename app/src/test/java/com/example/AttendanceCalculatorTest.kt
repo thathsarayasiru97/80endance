@@ -506,5 +506,74 @@ class AttendanceCalculatorTest {
         assertEquals(1, mathsVisible.size)
         assertEquals("ev_school_wide", mathsVisible.first().id)
     }
+
+    @Test
+    fun studyLeaveIsNonSchoolDayButNotSriLankanHoliday() {
+        val studyLeave = CalendarEvent(
+            id = "ev_exam_break",
+            title = "Term Test Study Break",
+            dateKey = "2026-05-12",
+            eventType = CalendarEventType.STUDY_LEAVE.raw,
+            description = "No school between Physics and Chemistry term test papers."
+        )
+        val schoolOff = CalendarEvent(
+            id = "ev_school_off",
+            title = "Sports Meet Prep Off",
+            dateKey = "2026-05-14",
+            eventType = CalendarEventType.SCHOOL_HOLIDAY.raw
+        )
+        val poya = CalendarEvent(
+            id = "ev_vesak",
+            title = "Vesak Full Moon Poya Day",
+            dateKey = "2026-05-20",
+            eventType = CalendarEventType.POYA.raw
+        )
+
+        assertTrue(studyLeave.nonSchoolDay)
+        assertFalse(studyLeave.isSriLankanHoliday)
+        assertTrue(schoolOff.nonSchoolDay)
+        assertFalse(schoolOff.isSriLankanHoliday)
+        assertTrue(poya.nonSchoolDay)
+        assertTrue(poya.isSriLankanHoliday)
+
+        val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(
+            calendarEvents = listOf(studyLeave, schoolOff, poya),
+            todayKey = "2026-05-10"
+        )
+        assertEquals("ev_vesak", nextHoliday?.id)
+    }
+
+    @Test
+    fun estimateBaselineFromDaysComputesExactPercentageAndCounts() {
+        val estimate = AttendanceCalculator.estimateBaselineFromDays(
+            startDateKey = "2026-01-05",
+            endDateKey = "2026-05-15",
+            daysSchoolHeld = 50,
+            daysAttended = 42
+        )
+        assertEquals(50, estimate.totalSchoolDays)
+        assertEquals(42, estimate.presentDays)
+        assertEquals(8, estimate.absentDays)
+        assertEquals(84.0, estimate.enteredPercent, 0.01)
+        assertEquals(84.0, estimate.effectivePercent, 0.01)
+    }
+
+    @Test
+    fun lockedBaselineLocksAllDaysOnOrBeforeEndDate() {
+        val profile = UserProfile(
+            priorPresentCount = 42,
+            priorAbsentCount = 8,
+            baselineStartDate = "2026-05-01",
+            baselineEndDate = "2026-05-15",
+            baselinePercent = 84.0
+        )
+        assertTrue(profile.hasLockedBaseline)
+        assertTrue(profile.isDateInLockedBaseline("2026-04-10")) // Before start date -> still locked
+        assertTrue(profile.isDateInLockedBaseline("2026-05-01")) // On start date -> locked
+        assertTrue(profile.isDateInLockedBaseline("2026-05-10")) // Inside -> locked
+        assertTrue(profile.isDateInLockedBaseline("2026-05-15")) // On end date ("Up Until This Day") -> locked
+        assertFalse(profile.isDateInLockedBaseline("2026-05-16")) // Day after -> editable
+    }
 }
+
 
