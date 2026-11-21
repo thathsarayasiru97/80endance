@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -28,7 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,7 +54,7 @@ import java.util.Locale
 @Composable
 fun ReportsScreen(
     state: StudentAppState,
-    onToggleCountExcused: (Boolean) -> Unit,
+    onToggleCountExcused: (Boolean) -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val context = LocalContext.current
@@ -63,14 +62,13 @@ fun ReportsScreen(
     val profile = state.profile
 
     var selectedTerm by remember(state.terms) { mutableStateOf<AcademicTerm?>(null) } // null = Overall (G12 & 13)
-    val countExcused = profile?.countExcusedAsPresent ?: true
 
-    val stats = remember(state.attendanceRecords, selectedTerm, countExcused, profile) {
+    val stats = remember(state.attendanceRecords, selectedTerm, profile) {
         val threshold = selectedTerm?.minEligibilityPercent ?: state.appSettings.defaultEligibilityPercent
         AttendanceCalculator.calculateStats(
             records = state.attendanceRecords,
             thresholdPercent = threshold,
-            countExcusedAsPresent = countExcused,
+            countExcusedAsPresent = true,
             includePriorBalance = selectedTerm == null || selectedTerm?.id == state.activeTerm.id,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
@@ -91,10 +89,12 @@ fun ReportsScreen(
         scoped.forEach { rec ->
             rec.subjectTags.forEach { sub ->
                 val cur = map[sub] ?: (0 to 0)
-                if (rec.statusEnum == AttendanceStatus.PRESENT) {
-                    map[sub] = (cur.first + 1) to cur.second
-                } else if (rec.statusEnum == AttendanceStatus.ABSENT) {
-                    map[sub] = cur.first to (cur.second + 1)
+                when (rec.statusEnum) {
+                    AttendanceStatus.PRESENT,
+                    AttendanceStatus.SCHOOL_EVENT,
+                    AttendanceStatus.MEDICAL -> map[sub] = (cur.first + 1) to cur.second
+                    AttendanceStatus.ABSENT -> map[sub] = cur.first to (cur.second + 1)
+                    AttendanceStatus.HOLIDAY -> Unit
                 }
             }
         }
@@ -211,7 +211,7 @@ fun ReportsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             StatTile("Medical", stats.medicalDays.toString(), semantic.medicalContainer, semantic.onMedicalContainer, Modifier.weight(1f))
-                            StatTile("School Events", stats.schoolEventDays.toString(), semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
+                            StatTile("Excused", stats.schoolEventDays.toString(), semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
                         }
 
                         if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
@@ -232,7 +232,7 @@ fun ReportsScreen(
                 }
             }
 
-            // Excused Rule Toggle
+            // Excused & Medical Policy Info Card
             item {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -245,25 +245,34 @@ fun ReportsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            color = semantic.schoolEventContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Verified,
+                                    contentDescription = "College attendance rule",
+                                    tint = semantic.onSchoolEventContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Count Medical & School Events",
+                                text = "Excused & Medical Count as Present",
                                 style = MaterialTheme.typography.titleSmall
                             )
                             Text(
-                                text = "Include approved medical & co-curricular event days toward 80%.",
+                                text = "Official college sports, club/society events, and medical absences automatically count toward your 80% GCE A/L eligibility and streak.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Switch(
-                            checked = countExcused,
-                            onCheckedChange = onToggleCountExcused
-                        )
                     }
                 }
             }

@@ -62,11 +62,15 @@ import com.example.data.AppConstants
 import com.example.data.AttendanceRepository
 import com.example.data.DateUtils
 import com.example.data.LocalPreferencesStore
+import com.example.system.AppUpdateChecker
+import com.example.system.AppUpdateInfo
 import com.example.system.ReminderScheduler
+import com.example.system.UpdateCheckResult
 import com.example.ui.admin.AdminPanelScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.DailyCheckInDialog
+import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.home.HomeScreen
 import com.example.ui.reports.ReportsScreen
 import com.example.ui.settings.SettingsScreen
@@ -90,6 +94,7 @@ import com.example.ui.components.LiquidGlassNavItem
 import com.example.ui.components.LiquidGlassNavigationRail
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var openCheckInTrigger by mutableStateOf(false)
@@ -136,8 +141,67 @@ private fun AppRoot(
     openCheckInFromNotification: Boolean,
     onConsumeNotificationTrigger: () -> Unit
 ) {
+    val context = LocalContext.current
+    val appScope = rememberCoroutineScope()
     val auth = Firebase.auth
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+
+    val isOnline by remember(context) {
+        AppUpdateChecker.observeInternetAvailable(context)
+    }.collectAsStateWithLifecycle(initialValue = AppUpdateChecker.isInternetAvailable(context))
+
+    var hasAutoCheckedUpdate by rememberSaveable { mutableStateOf(false) }
+    var pendingUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var isCheckingUpdates by remember { mutableStateOf(false) }
+    var updateFeedbackMessage by remember { mutableStateOf<String?>(null) }
+
+    // Automatically check GitHub Releases once internet is available after the app opens
+    LaunchedEffect(isOnline) {
+        if (isOnline && !hasAutoCheckedUpdate) {
+            when (val result = AppUpdateChecker.checkForUpdate(context)) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    hasAutoCheckedUpdate = true
+                    pendingUpdateInfo = result.info
+                }
+                is UpdateCheckResult.UpToDate -> {
+                    hasAutoCheckedUpdate = true
+                }
+                is UpdateCheckResult.Offline,
+                is UpdateCheckResult.Error -> Unit
+            }
+        }
+    }
+
+    val runManualUpdateCheck: () -> Unit = {
+        if (!isCheckingUpdates) {
+            appScope.launch {
+                isCheckingUpdates = true
+                try {
+                    when (val result = AppUpdateChecker.checkForUpdate(context)) {
+                        is UpdateCheckResult.UpdateAvailable -> {
+                            hasAutoCheckedUpdate = true
+                            pendingUpdateInfo = result.info
+                        }
+                        is UpdateCheckResult.UpToDate -> {
+                            hasAutoCheckedUpdate = true
+                            updateFeedbackMessage = context.getString(
+                                R.string.update_up_to_date,
+                                AppUpdateChecker.formatVersionLabel(result.currentVersion)
+                            )
+                        }
+                        is UpdateCheckResult.Offline -> {
+                            updateFeedbackMessage = context.getString(R.string.update_offline_message)
+                        }
+                        is UpdateCheckResult.Error -> {
+                            updateFeedbackMessage = result.message
+                        }
+                    }
+                } finally {
+                    isCheckingUpdates = false
+                }
+            }
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -152,11 +216,29 @@ private fun AppRoot(
                     AuthenticatedAppShell(
                         user = user,
                         openCheckInFromNotification = openCheckInFromNotification,
-                        onConsumeNotificationTrigger = onConsumeNotificationTrigger
+                        onConsumeNotificationTrigger = onConsumeNotificationTrigger,
+                        isCheckingUpdates = isCheckingUpdates,
+                        updateFeedbackMessage = updateFeedbackMessage,
+                        onConsumeUpdateFeedback = { updateFeedbackMessage = null },
+                        onCheckForUpdates = runManualUpdateCheck
                     )
                 }
             }
         }
+    }
+
+    pendingUpdateInfo?.let { info ->
+        UpdateAvailableDialog(
+            updateInfo = info,
+            onUpdateNow = {
+                val opened = AppUpdateChecker.openLatestRelease(context, info.releaseUrl)
+                if (!opened) {
+                    updateFeedbackMessage = context.getString(R.string.update_browser_error)
+                }
+                pendingUpdateInfo = null
+            },
+            onDismiss = { pendingUpdateInfo = null }
+        )
     }
 }
 
@@ -164,7 +246,11 @@ private fun AppRoot(
 private fun AuthenticatedAppShell(
     user: FirebaseUser,
     openCheckInFromNotification: Boolean,
-    onConsumeNotificationTrigger: () -> Unit
+    onConsumeNotificationTrigger: () -> Unit,
+    isCheckingUpdates: Boolean,
+    updateFeedbackMessage: String?,
+    onConsumeUpdateFeedback: () -> Unit,
+    onCheckForUpdates: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -182,7 +268,8 @@ private fun AuthenticatedAppShell(
                     appContext = app,
                     currentUserId = user.uid,
                     userEmail = user.email.orEmpty(),
-                    googleDisplayName = user.displayName
+                    googleDisplayName = user.displayName,
+                    googlePhotoUrl = user.photoUrl?.toString()
                 )
             }
         }
@@ -203,6 +290,13 @@ private fun AuthenticatedAppShell(
         snackbarMessage?.let {
             snackbarHostState.showSnackbar(it)
             attendanceViewModel.clearSnackbar()
+        }
+    }
+
+    LaunchedEffect(updateFeedbackMessage) {
+        updateFeedbackMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            onConsumeUpdateFeedback()
         }
     }
 
@@ -323,6 +417,7 @@ private fun AuthenticatedAppShell(
                             onScopeModeChange = { attendanceViewModel.setScopeMode(it) },
                             onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
+                            onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -335,15 +430,7 @@ private fun AuthenticatedAppShell(
 
                         AppTab.REPORTS -> ReportsScreen(
                             state = state,
-                            onToggleCountExcused = { count ->
-                                val p = state.profile
-                                attendanceViewModel.updateReminderAndExcused(
-                                    reminderEnabled = p?.reminderEnabled ?: true,
-                                    reminderHour = p?.reminderHour ?: 14,
-                                    reminderMinute = p?.reminderMinute ?: 0,
-                                    countExcusedAsPresent = count
-                                )
-                            },
+                            onToggleCountExcused = {},
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -362,6 +449,9 @@ private fun AuthenticatedAppShell(
                             onSignOut = {
                                 signOutGoogle(credentialManager, scope)
                             },
+                            onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
+                            isCheckingUpdates = isCheckingUpdates,
+                            onCheckForUpdates = onCheckForUpdates,
                             bottomBarPadding = bottomScrollPadding
                         )
                     }

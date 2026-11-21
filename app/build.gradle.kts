@@ -22,6 +22,8 @@ android {
       "com.aistudio.eightyendance.rcxkmv"
     }
     manifestPlaceholders["appName"] = if (isDevLabel) "80endance-dev" else "@string/app_name"
+    manifestPlaceholders["appIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev" else "@mipmap/ic_launcher"
+    manifestPlaceholders["appRoundIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev_round" else "@mipmap/ic_launcher_round"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -114,7 +116,7 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   // implementation(libs.androidx.room.ktx)
   // implementation(libs.androidx.room.runtime)
-  // implementation(libs.coil.compose)
+  implementation(libs.coil.compose)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   implementation(libs.firebase.firestore)

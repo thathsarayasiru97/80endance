@@ -29,11 +29,12 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,11 +54,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
+import com.example.R
 import com.example.data.DateUtils
+import com.example.system.AppUpdateChecker
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
+import com.example.ui.components.ProfileAvatar
+import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.SyncStatusPill
 import com.example.viewmodel.StudentAppState
 
@@ -72,6 +79,9 @@ fun SettingsScreen(
     onManualSync: () -> Unit,
     onOpenAdminPanel: () -> Unit,
     onSignOut: () -> Unit,
+    onSaveCustomAvatar: (String?) -> Unit = {},
+    isCheckingUpdates: Boolean = false,
+    onCheckForUpdates: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -83,6 +93,7 @@ fun SettingsScreen(
     var showTimePicker by remember { mutableStateOf(false) }
     var showNoticeSheet by remember { mutableStateOf(false) }
     var showSignOutConfirm by remember { mutableStateOf(false) }
+    var showPhotoDialog by remember { mutableStateOf(false) }
 
     val notifLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -132,19 +143,15 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.size(46.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Person,
-                                            contentDescription = "Profile",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
+                                ProfileAvatar(
+                                    customAvatarBase64 = profile?.customAvatarBase64,
+                                    googlePhotoUrl = state.googlePhotoUrl,
+                                    displayName = profile?.fullName ?: "Student",
+                                    size = 56.dp,
+                                    showEditBadge = true,
+                                    onClick = { showPhotoDialog = true },
+                                    modifier = Modifier.testTag("settings_profile_avatar")
+                                )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {
                                     Text(
@@ -159,6 +166,11 @@ fun SettingsScreen(
                                         ).joinToString(" • "),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Tap photo to change",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                             }
@@ -333,6 +345,55 @@ fun SettingsScreen(
                             }
                             Icon(Icons.Rounded.ChevronRight, contentDescription = null)
                         }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !isCheckingUpdates, onClick = onCheckForUpdates)
+                                .padding(vertical = 4.dp)
+                                .testTag("settings_check_updates_button"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.SystemUpdate,
+                                    contentDescription = stringResource(R.string.update_check_title),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = stringResource(R.string.update_check_title),
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = "80endance ${AppUpdateChecker.formatVersionLabel(BuildConfig.VERSION_NAME)} • GitHub Releases",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            if (isCheckingUpdates) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                TextButton(
+                                    onClick = onCheckForUpdates,
+                                    enabled = !isCheckingUpdates
+                                ) {
+                                    Text(stringResource(R.string.update_check_action))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -446,6 +507,16 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showSignOutConfirm = false }) { Text("Cancel") }
             }
+        )
+    }
+
+    if (showPhotoDialog) {
+        ProfilePhotoDialog(
+            displayName = profile?.fullName ?: "Student",
+            customAvatarBase64 = profile?.customAvatarBase64,
+            googlePhotoUrl = state.googlePhotoUrl,
+            onSaveCustomAvatar = onSaveCustomAvatar,
+            onDismiss = { showPhotoDialog = false }
         )
     }
 }

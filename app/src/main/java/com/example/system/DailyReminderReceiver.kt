@@ -55,7 +55,15 @@ class DailyReminderReceiver : BroadcastReceiver() {
         }
 
         val todayKey = DateUtils.todayKey()
-        if (!AttendanceCalculator.isSchoolDay(todayKey, SriLankaCalendarDefaults.defaultEvents)) {
+        if (DateUtils.isWeekend(todayKey)) {
+            return
+        }
+        val isNonSchoolDay = runCatching {
+            AttendanceRepository(context.applicationContext).isPublishedNonSchoolDay(todayKey)
+        }.getOrElse {
+            !AttendanceCalculator.isSchoolDay(todayKey, SriLankaCalendarDefaults.defaultEvents)
+        }
+        if (isNonSchoolDay) {
             return
         }
 

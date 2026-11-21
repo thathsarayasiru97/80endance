@@ -37,8 +37,8 @@ object AppConstants {
 enum class AttendanceStatus(val raw: String, val label: String, val shortLabel: String) {
     PRESENT("present", "Present", "Present"),
     ABSENT("absent", "Absent", "Absent"),
-    MEDICAL("medical", "Medical Excused", "Medical"),
-    SCHOOL_EVENT("school_event", "School Event", "Event"),
+    MEDICAL("medical", "Medical", "Medical"),
+    SCHOOL_EVENT("school_event", "Excused", "Excused"),
     HOLIDAY("holiday", "No School / Holiday", "No School");
 
     companion object {
@@ -117,6 +117,8 @@ data class UserProfile(
     val medicalCount: Int = 0,
     val schoolEventCount: Int = 0,
     val lastCheckInDate: String? = null,
+    val photoUrl: String? = null,
+    val customAvatarBase64: String? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -133,10 +135,8 @@ data class UserProfile(
 
     val quickOverallPercent: Double
         get() {
-            val effectivePresent = presentCount + priorPresentCount +
-                if (countExcusedAsPresent) (medicalCount + schoolEventCount) else 0
-            val effectiveAbsent = absentCount + priorAbsentCount +
-                if (countExcusedAsPresent) 0 else (medicalCount + schoolEventCount)
+            val effectivePresent = presentCount + priorPresentCount + medicalCount + schoolEventCount
+            val effectiveAbsent = absentCount + priorAbsentCount
             val total = effectivePresent + effectiveAbsent
             return if (total <= 0) 100.0 else (effectivePresent.toDouble() / total.toDouble()) * 100.0
         }

@@ -94,3 +94,11 @@ val OnSchoolEventContainerLight = Color(0xFF0C4A6E)
 val SchoolEventDark = Color(0xFF38BDF8)
 val SchoolEventContainerDark = Color(0xFF0C4A6E)
 val OnSchoolEventContainerDark = Color(0xFFE0F2FE)
+
+val VioletHolidayLight = Color(0xFF7C3AED)
+val VioletHolidayContainerLight = Color(0xFFEDE9FE)
+val OnVioletHolidayContainerLight = Color(0xFF4C1D95)
+
+val VioletHolidayDark = Color(0xFFA78BFA)
+val VioletHolidayContainerDark = Color(0xFF3B0764)
+val OnVioletHolidayContainerDark = Color(0xFFEDE9FE)

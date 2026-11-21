@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 enum class DashboardScopeMode {
+    CURRENT_MONTH,
     CURRENT_TERM,
     OVERALL_AL
 }
@@ -43,6 +44,7 @@ data class StudentAppState(
     val isLoading: Boolean = true,
     val errorMessage: String? = null,
     val profile: UserProfile? = null,
+    val googlePhotoUrl: String? = null,
     val attendanceRecords: List<AttendanceRecord> = emptyList(),
     val visibleNotices: List<Notice> = emptyList(),
     val pinnedNotices: List<Notice> = emptyList(),
@@ -51,6 +53,10 @@ data class StudentAppState(
     val calendarEvents: List<CalendarEvent> = SriLankaCalendarDefaults.defaultEvents,
     val appSettings: AppSettings = AppSettings(),
     val syncStatus: SyncStatus = SyncStatus.SYNCED,
+    val currentMonthLabel: String = DateUtils.currentMonthYearLabel(),
+    val currentMonthStats: AttendanceStats = AttendanceCalculator.calculateStats(
+        emptyList(), 80, true, false, 0, 0
+    ),
     val currentTermStats: AttendanceStats = AttendanceCalculator.calculateStats(
         emptyList(), 80, true, false, 0, 0
     ),
@@ -62,6 +68,8 @@ data class StudentAppState(
     val nextPoyaOrHoliday: CalendarEvent? = null,
     val daysUntilAlExam: Int = 0,
     val todayRecord: AttendanceRecord? = null,
+    val todayIsWeekend: Boolean = DateUtils.isWeekend(DateUtils.todayKey()),
+    val todayNonSchoolEvent: CalendarEvent? = null,
     val todayIsSchoolDay: Boolean = true,
     val shouldAutoShowCheckIn: Boolean = false
 )
@@ -83,7 +91,8 @@ class AttendanceViewModel(
     private val appContext: Context,
     val currentUserId: String,
     val userEmail: String,
-    val googleDisplayName: String?
+    val googleDisplayName: String?,
+    val googlePhotoUrl: String? = null
 ) : ViewModel() {
 
     private val _scopeMode = MutableStateFlow(DashboardScopeMode.CURRENT_TERM)
@@ -160,10 +169,21 @@ class AttendanceViewModel(
             ?: settings.defaultEligibilityPercent
         val countExcused = profile?.countExcusedAsPresent ?: true
 
+        val monthPrefix = DateUtils.currentMonthPrefix(todayKey)
+        val monthLabel = DateUtils.currentMonthYearLabel(todayKey)
+        val monthStats = AttendanceCalculator.calculateStats(
+            records = bundle.records,
+            thresholdPercent = threshold,
+            countExcusedAsPresent = true,
+            includePriorBalance = false,
+            priorPresent = 0,
+            priorAbsent = 0,
+            monthPrefixFilter = monthPrefix
+        )
         val termStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
             thresholdPercent = threshold,
-            countExcusedAsPresent = countExcused,
+            countExcusedAsPresent = true,
             includePriorBalance = true,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
@@ -172,7 +192,7 @@ class AttendanceViewModel(
         val overallStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
             thresholdPercent = threshold,
-            countExcusedAsPresent = countExcused,
+            countExcusedAsPresent = true,
             includePriorBalance = true,
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
@@ -182,7 +202,7 @@ class AttendanceViewModel(
         val streak = AttendanceCalculator.calculateCurrentStreak(
             records = bundle.records,
             calendarEvents = effectiveEvents,
-            countExcusedAsPresent = countExcused,
+            countExcusedAsPresent = true,
             todayKey = todayKey
         )
         val weekly = AttendanceCalculator.calculateWeeklySummary(
@@ -196,7 +216,9 @@ class AttendanceViewModel(
         val visibleNotices = AttendanceCalculator.filterNoticesForStudent(bundle.notices, profile)
         val pinnedNotices = visibleNotices.filter { it.pinned }
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
-        val todayIsSchoolDay = AttendanceCalculator.isSchoolDay(todayKey, effectiveEvents)
+        val todayIsWeekend = DateUtils.isWeekend(todayKey)
+        val todayNonSchoolEvent = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
+        val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null
 
         val (nowHour, nowMinute) = DateUtils.currentHourMinute()
         val remHour = profile?.reminderHour ?: prefs.hour
@@ -220,6 +242,7 @@ class AttendanceViewModel(
             isLoading = !bundle.profileLoaded,
             errorMessage = bundle.streamError,
             profile = profile,
+            googlePhotoUrl = profile?.photoUrl?.takeIf { it.isNotBlank() } ?: googlePhotoUrl,
             attendanceRecords = bundle.records,
             visibleNotices = visibleNotices,
             pinnedNotices = pinnedNotices,
@@ -228,6 +251,8 @@ class AttendanceViewModel(
             calendarEvents = effectiveEvents,
             appSettings = settings,
             syncStatus = syncStatus,
+            currentMonthLabel = monthLabel,
+            currentMonthStats = monthStats,
             currentTermStats = termStats,
             overallStats = overallStats,
             currentStreak = streak,
@@ -235,13 +260,15 @@ class AttendanceViewModel(
             nextPoyaOrHoliday = nextHoliday,
             daysUntilAlExam = daysToExam,
             todayRecord = todayRecord,
+            todayIsWeekend = todayIsWeekend,
+            todayNonSchoolEvent = todayNonSchoolEvent,
             todayIsSchoolDay = todayIsSchoolDay,
             shouldAutoShowCheckIn = shouldAutoPrompt
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = StudentAppState(isLoading = true)
+        initialValue = StudentAppState(isLoading = true, googlePhotoUrl = googlePhotoUrl)
     )
 
     fun setScopeMode(mode: DashboardScopeMode) {
@@ -249,6 +276,7 @@ class AttendanceViewModel(
     }
 
     fun openCheckInPopup(dateKey: String = DateUtils.todayKey()) {
+        if (DateUtils.isWeekend(dateKey)) return
         _manualCheckInDate.value = dateKey
     }
 
@@ -302,11 +330,12 @@ class AttendanceViewModel(
                 reminderEnabled = reminderEnabled,
                 reminderHour = reminderHour,
                 reminderMinute = reminderMinute,
-                countExcusedAsPresent = countExcusedAsPresent,
+                countExcusedAsPresent = true,
                 priorPresentCount = priorPresentCount,
                 priorAbsentCount = priorAbsentCount,
                 setupCompleted = true,
-                isExisting = isExisting
+                isExisting = isExisting,
+                photoUrl = googlePhotoUrl
             )
             _isSaving.value = false
             result.onSuccess {
@@ -320,12 +349,37 @@ class AttendanceViewModel(
         }
     }
 
+    fun updateCustomAvatar(customAvatarBase64: String?) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val result = repository.updateUserAvatar(
+                userId = currentUserId,
+                customAvatarBase64 = customAvatarBase64,
+                googlePhotoUrl = googlePhotoUrl
+            )
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = if (customAvatarBase64.isNullOrBlank()) {
+                    "Reverted to Google account photo"
+                } else {
+                    "Profile picture updated & synced"
+                }
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not update profile picture"
+            }
+        }
+    }
+
     fun logAttendance(
         dateKey: String,
         status: AttendanceStatus,
         subjectTags: List<String>,
         note: String?
     ) {
+        if (DateUtils.isWeekend(dateKey)) {
+            _snackbarMessage.value = "Weekends are automatically marked as off days"
+            return
+        }
         viewModelScope.launch {
             _isSaving.value = true
             val current = uiState.value

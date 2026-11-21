@@ -11,6 +11,8 @@ object DateUtils {
     private val readableDayFormat get() = SimpleDateFormat("EEE, d MMM", Locale.US)
     private val fullDateFormat get() = SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US)
     private val monthYearFormat get() = SimpleDateFormat("MMMM yyyy", Locale.US)
+    private val monthNameFormat get() = SimpleDateFormat("MMMM", Locale.US)
+    private val weekdayFormat get() = SimpleDateFormat("EEEE", Locale.US)
 
     fun todayKey(): String = formatDateKey(Calendar.getInstance())
 
@@ -57,6 +59,30 @@ object DateUtils {
     fun currentYearMonth(): Pair<Int, Int> {
         val cal = Calendar.getInstance()
         return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
+    }
+
+    fun currentMonthPrefix(referenceDateKey: String = todayKey()): String {
+        return if (referenceDateKey.length >= 7) {
+            referenceDateKey.substring(0, 7) + "-"
+        } else {
+            val (y, m) = currentYearMonth()
+            String.format(Locale.US, "%04d-%02d-", y, m)
+        }
+    }
+
+    fun currentMonthName(referenceDateKey: String = todayKey()): String {
+        val cal = parseDateKey(referenceDateKey) ?: Calendar.getInstance()
+        return monthNameFormat.format(cal.time)
+    }
+
+    fun currentMonthYearLabel(referenceDateKey: String = todayKey()): String {
+        val cal = parseDateKey(referenceDateKey) ?: Calendar.getInstance()
+        return monthYearFormat.format(cal.time)
+    }
+
+    fun formatWeekdayName(dateKey: String): String {
+        val cal = parseDateKey(dateKey) ?: return ""
+        return weekdayFormat.format(cal.time)
     }
 
     fun currentHourMinute(): Pair<Int, Int> {

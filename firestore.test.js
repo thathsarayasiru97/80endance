@@ -122,13 +122,23 @@ test("Student profile: owner CRUD succeeds, shadow/extra keys & cross-user acces
   await assertSucceeds(studentA.collection("users").doc(STUDENT_A_UID).set(payload));
   await assertSucceeds(studentA.collection("users").doc(STUDENT_A_UID).get());
 
-  // Partial update preserves createdAt
+  // Partial update preserves createdAt and allows bounded avatar fields
   await assertSucceeds(
     studentA.collection("users").doc(STUDENT_A_UID).update({
       nickname: "KP",
       presentCount: 1,
       lastCheckInDate: "2026-11-20",
+      photoUrl: "https://lh3.googleusercontent.com/a/example-avatar",
+      customAvatarBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
       updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Reject oversized customAvatarBase64 payload (> 120000 chars)
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      customAvatarBase64: "A".repeat(120001),
+      updatedAt: new Date(Date.now() - 400),
     })
   );
 

@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -42,6 +45,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -67,7 +71,7 @@ import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.AdminViewModel
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AdminPanelScreen(
     viewModel: AdminViewModel,
@@ -97,6 +101,14 @@ fun AdminPanelScreen(
     var exam2026 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2026ExamDate) }
     var exam2027 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2027ExamDate) }
     var exam2028 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2028ExamDate) }
+
+    // Quick "No School for Everyone" state
+    val todayKey = remember { DateUtils.todayKey() }
+    val tomorrowKey = remember(todayKey) { DateUtils.addDays(todayKey, 1) }
+    val inTwoDaysKey = remember(todayKey) { DateUtils.addDays(todayKey, 2) }
+    var noSchoolDateKey by remember { mutableStateOf(tomorrowKey) }
+    var noSchoolReason by remember { mutableStateOf("Exam Study Leave") }
+    var noSchoolAlsoNotice by remember { mutableStateOf(true) }
 
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let {
@@ -327,10 +339,154 @@ fun AdminPanelScreen(
                     }
 
                     2 -> {
+                        val sortedEvents = remember(state.calendarEvents, todayKey) {
+                            val upcoming = state.calendarEvents
+                                .filter { it.dateKey >= todayKey }
+                                .sortedBy { it.dateKey }
+                            val past = state.calendarEvents
+                                .filter { it.dateKey < todayKey }
+                                .sortedByDescending { it.dateKey }
+                            upcoming + past
+                        }
+                        val quickReasons = listOf(
+                            "Exam Study Leave",
+                            "Interval Day Between Exams",
+                            "Special School Holiday",
+                            "Weather Closure"
+                        )
                         LazyColumn(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
+                            // Quick Mark No School Day for Everyone
+                            item {
+                                Card(
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = semantic.poyaContainer.copy(alpha = 0.65f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("admin_no_school_card")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.EventBusy,
+                                                contentDescription = null,
+                                                tint = semantic.onPoyaContainer
+                                            )
+                                            Text(
+                                                text = "Mark No School Day for Everyone",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = semantic.onPoyaContainer
+                                            )
+                                        }
+                                        Text(
+                                            text = "Instantly marks a day off (e.g., exam interval / study leave) on every student's calendar and suppresses daily check-in reminders.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = semantic.onPoyaContainer.copy(alpha = 0.85f)
+                                        )
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            FilterChip(
+                                                selected = noSchoolDateKey == todayKey,
+                                                onClick = { noSchoolDateKey = todayKey },
+                                                label = { Text("Today") }
+                                            )
+                                            FilterChip(
+                                                selected = noSchoolDateKey == tomorrowKey,
+                                                onClick = { noSchoolDateKey = tomorrowKey },
+                                                label = { Text("Tomorrow") }
+                                            )
+                                            FilterChip(
+                                                selected = noSchoolDateKey == inTwoDaysKey,
+                                                onClick = { noSchoolDateKey = inTwoDaysKey },
+                                                label = { Text("+2 Days") }
+                                            )
+                                        }
+                                        OutlinedTextField(
+                                            value = noSchoolDateKey,
+                                            onValueChange = { noSchoolDateKey = it.take(10) },
+                                            label = { Text("Date (YYYY-MM-DD)") },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("admin_no_school_date_input")
+                                        )
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            quickReasons.forEach { preset ->
+                                                FilterChip(
+                                                    selected = noSchoolReason == preset,
+                                                    onClick = { noSchoolReason = preset },
+                                                    label = { Text(preset) }
+                                                )
+                                            }
+                                        }
+                                        OutlinedTextField(
+                                            value = noSchoolReason,
+                                            onValueChange = { noSchoolReason = it.take(100) },
+                                            label = { Text("Reason shown to students") },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("admin_no_school_reason_input")
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "Also pin a notice on Home",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = semantic.onPoyaContainer
+                                                )
+                                                Text(
+                                                    text = "Posts an urgent banner so everyone sees the day off",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = semantic.onPoyaContainer.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                            Switch(
+                                                checked = noSchoolAlsoNotice,
+                                                onCheckedChange = { noSchoolAlsoNotice = it }
+                                            )
+                                        }
+                                        Button(
+                                            onClick = {
+                                                viewModel.markNoSchoolDayForEveryone(
+                                                    dateKey = noSchoolDateKey.trim(),
+                                                    reason = noSchoolReason,
+                                                    alsoPostNotice = noSchoolAlsoNotice
+                                                )
+                                            },
+                                            enabled = !state.isBusy && noSchoolDateKey.trim().matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")),
+                                            shape = RoundedCornerShape(14.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("admin_mark_no_school_button")
+                                        ) {
+                                            Icon(Icons.Rounded.EventBusy, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Mark No School for Everyone")
+                                        }
+                                    }
+                                }
+                            }
+
                             item {
                                 Card(
                                     shape = RoundedCornerShape(18.dp),
@@ -418,9 +574,9 @@ fun AdminPanelScreen(
                             }
 
                             item {
-                                Text("Calendar Events (${state.calendarEvents.size})", style = MaterialTheme.typography.titleSmall)
+                                Text("Calendar Events (${sortedEvents.size})", style = MaterialTheme.typography.titleSmall)
                             }
-                            items(state.calendarEvents.take(25), key = { it.id }) { ev ->
+                            items(sortedEvents, key = { it.id }) { ev ->
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceContainerLowest,
                                     shape = RoundedCornerShape(14.dp),

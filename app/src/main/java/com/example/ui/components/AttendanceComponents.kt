@@ -817,21 +817,37 @@ fun DailyCheckInDialog(
 
                                 val reasonOptions = listOf(
                                     Triple(AttendanceStatus.ABSENT, Icons.Rounded.WarningAmber, "Regular absence"),
-                                    Triple(AttendanceStatus.MEDICAL, Icons.Rounded.LocalHospital, "Sick / medical certificate"),
-                                    Triple(AttendanceStatus.SCHOOL_EVENT, Icons.Rounded.SportsScore, "Sports, clubs, prefects, competitions"),
+                                    Triple(AttendanceStatus.SCHOOL_EVENT, Icons.Rounded.SportsScore, "College sports, club/society, or official event • Counts as present"),
+                                    Triple(AttendanceStatus.MEDICAL, Icons.Rounded.LocalHospital, "Sick / medical certificate • Counts as present"),
                                     Triple(AttendanceStatus.HOLIDAY, Icons.Rounded.NightsStay, "School closed / no classes")
                                 )
 
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     reasonOptions.forEach { (status, icon, desc) ->
                                         val selected = selectedNoStatus == status
+                                        val accentColor = when (status) {
+                                            AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
+                                            AttendanceStatus.MEDICAL -> semantic.medical
+                                            AttendanceStatus.ABSENT -> semantic.absent
+                                            AttendanceStatus.HOLIDAY -> semantic.poya
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
+                                        val containerBg = when {
+                                            selected && status == AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEventContainer
+                                            selected && status == AttendanceStatus.MEDICAL -> semantic.medicalContainer
+                                            selected && status == AttendanceStatus.ABSENT -> semantic.absentContainer
+                                            selected && status == AttendanceStatus.HOLIDAY -> semantic.poyaContainer
+                                            selected -> MaterialTheme.colorScheme.primaryContainer
+                                            else -> MaterialTheme.colorScheme.surfaceContainerLow
+                                        }
                                         Surface(
                                             shape = RoundedCornerShape(14.dp),
-                                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                                            color = containerBg,
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(14.dp))
                                                 .clickable { selectedNoStatus = status }
+                                                .testTag("checkin_reason_${status.raw}")
                                         ) {
                                             Row(
                                                 modifier = Modifier.padding(12.dp),
@@ -840,7 +856,7 @@ fun DailyCheckInDialog(
                                                 Icon(
                                                     imageVector = icon,
                                                     contentDescription = status.label,
-                                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    tint = if (selected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.size(20.dp)
                                                 )
                                                 Spacer(modifier = Modifier.width(12.dp))

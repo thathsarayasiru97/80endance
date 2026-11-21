@@ -27,8 +27,10 @@ import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Weekend
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -51,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceStatus
@@ -60,6 +63,8 @@ import com.example.ui.components.AnimatedEligibilityGauge
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
+import com.example.ui.components.ProfileAvatar
+import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.theme.LocalAttendanceColors
@@ -73,18 +78,25 @@ fun HomeScreen(
     onScopeModeChange: (DashboardScopeMode) -> Unit,
     onOpenCheckIn: (String) -> Unit,
     onSyncClick: () -> Unit,
+    onSaveCustomAvatar: (String?) -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
     val semantic = LocalAttendanceColors.current
-    val activeStats = if (scopeMode == DashboardScopeMode.CURRENT_TERM) {
-        state.currentTermStats
-    } else {
-        state.overallStats
+    val activeStats = when (scopeMode) {
+        DashboardScopeMode.CURRENT_MONTH -> state.currentMonthStats
+        DashboardScopeMode.CURRENT_TERM -> state.currentTermStats
+        DashboardScopeMode.OVERALL_AL -> state.overallStats
+    }
+    val activeScopeCaption = when (scopeMode) {
+        DashboardScopeMode.CURRENT_MONTH -> state.currentMonthLabel
+        DashboardScopeMode.CURRENT_TERM -> state.activeTerm.name
+        DashboardScopeMode.OVERALL_AL -> "Overall (Grade 12 & 13)"
     }
 
     var showNoticeSheet by remember { mutableStateOf(false) }
     var focusedNotice by remember { mutableStateOf<Notice?>(null) }
+    var showPhotoDialog by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { visible = true }
@@ -96,7 +108,8 @@ fun HomeScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 600.dp),
+                .widthIn(max = 600.dp)
+                .testTag("home_lazy_column"),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
@@ -113,21 +126,40 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Hey, ${profile?.greetingName ?: "Student"}",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onBackground
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            ProfileAvatar(
+                                customAvatarBase64 = profile?.customAvatarBase64,
+                                googlePhotoUrl = state.googlePhotoUrl,
+                                displayName = profile?.fullName ?: "Student",
+                                size = 48.dp,
+                                onClick = { showPhotoDialog = true },
+                                modifier = Modifier.testTag("home_profile_avatar")
                             )
-                            Text(
-                                text = listOfNotNull(
-                                    profile?.className?.takeIf { it.isNotBlank() },
-                                    profile?.alStream?.takeIf { it.isNotBlank() }
-                                ).joinToString(" • ").ifEmpty { "Royal College, Colombo" },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Hey, ${profile?.greetingName ?: "Student"}",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = listOfNotNull(
+                                        profile?.className?.takeIf { it.isNotBlank() },
+                                        profile?.alStream?.takeIf { it.isNotBlank() }
+                                    ).joinToString(" • ").ifEmpty { "Royal College, Colombo" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         SyncStatusPill(
                             syncStatus = state.syncStatus,
                             onClick = onSyncClick
@@ -239,22 +271,40 @@ fun HomeScreen(
                                     .testTag("scope_mode_toggle")
                             ) {
                                 SegmentedButton(
+                                    selected = scopeMode == DashboardScopeMode.CURRENT_MONTH,
+                                    onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_MONTH) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
+                                    modifier = Modifier.testTag("scope_tab_month")
+                                ) {
+                                    Text("Month", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                SegmentedButton(
                                     selected = scopeMode == DashboardScopeMode.CURRENT_TERM,
                                     onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_TERM) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
+                                    modifier = Modifier.testTag("scope_tab_term")
                                 ) {
-                                    Text(state.activeTerm.name.substringBefore("—").trim().ifEmpty { "Current Term" })
+                                    Text("Term", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 SegmentedButton(
                                     selected = scopeMode == DashboardScopeMode.OVERALL_AL,
                                     onClick = { onScopeModeChange(DashboardScopeMode.OVERALL_AL) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                                    modifier = Modifier.testTag("scope_tab_overall")
                                 ) {
-                                    Text("Overall (G12 & 13)")
+                                    Text("Overall", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text(
+                                text = activeScopeCaption,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             AnimatedEligibilityGauge(stats = activeStats)
 
@@ -299,69 +349,184 @@ fun HomeScreen(
                 }
             }
 
-            // 4. Quick Today Check-In Card
+            // 4. Quick Today Card — Weekend Relaxation, Admin/Poya No School Day, or Check-In
             item {
                 val todayKey = DateUtils.todayKey()
                 val todayRec = state.todayRecord
-                Card(
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (todayRec == null) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLowest
-                        }
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = DateUtils.formatReadableShort(todayKey),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = when {
-                                    todayRec != null -> "Today: ${todayRec.statusEnum.label}"
-                                    !state.todayIsSchoolDay -> "No school scheduled today"
-                                    else -> "Did you attend school today?"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            if (todayRec?.note?.isNotBlank() == true) {
-                                Text(
-                                    text = todayRec.note,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                val nonSchoolEv = state.todayNonSchoolEvent
+
+                when {
+                    state.todayIsWeekend -> {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_weekend_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Weekend,
+                                            contentDescription = "Weekend",
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = DateUtils.formatReadableShort(todayKey),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Enjoy your weekend!",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "No school today — rest up and recharge for the week ahead.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                                    )
+                                }
                             }
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        LiquidGlassButton(
-                            onClick = { onOpenCheckIn(todayKey) },
-                            tint = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.primary,
-                            minHeight = 48.dp,
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                            modifier = Modifier.testTag("home_checkin_button")
+                    }
+
+                    nonSchoolEv != null && todayRec == null -> {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = semantic.poyaContainer.copy(alpha = 0.6f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_no_school_card")
                         ) {
-                            Icon(
-                                imageVector = if (todayRec == null) Icons.Rounded.AddTask else Icons.Rounded.Edit,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (todayRec == null) "Check In" else "Edit")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = semantic.poya.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.EventBusy,
+                                            contentDescription = "No school today",
+                                            tint = semantic.onPoyaContainer,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${DateUtils.formatReadableShort(todayKey)} • No School",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = semantic.onPoyaContainer.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = nonSchoolEv.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = semantic.onPoyaContainer
+                                    )
+                                    Text(
+                                        text = "Scheduled off day — won't affect your 80% attendance.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = semantic.onPoyaContainer.copy(alpha = 0.85f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    else -> {
+                        Card(
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (todayRec == null) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerLowest
+                                }
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(18.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = DateUtils.formatReadableShort(todayKey),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = when {
+                                            todayRec != null -> "Today: ${todayRec.statusEnum.label}"
+                                            else -> "Did you attend school today?"
+                                        },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (todayRec?.note?.isNotBlank() == true) {
+                                        Text(
+                                            text = todayRec.note,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                LiquidGlassButton(
+                                    onClick = { onOpenCheckIn(todayKey) },
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.primary,
+                                    minHeight = 48.dp,
+                                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                                    modifier = Modifier.testTag("home_checkin_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (todayRec == null) Icons.Rounded.AddTask else Icons.Rounded.Edit,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(if (todayRec == null) "Check In" else "Edit")
+                                }
+                            }
                         }
                     }
                 }
@@ -474,6 +639,16 @@ fun HomeScreen(
             confirmButton = {
                 TextButton(onClick = { focusedNotice = null }) { Text("Got it") }
             }
+        )
+    }
+
+    if (showPhotoDialog) {
+        ProfilePhotoDialog(
+            displayName = profile?.fullName ?: "Student",
+            customAvatarBase64 = profile?.customAvatarBase64,
+            googlePhotoUrl = state.googlePhotoUrl,
+            onSaveCustomAvatar = onSaveCustomAvatar,
+            onDismiss = { showPhotoDialog = false }
         )
     }
 }

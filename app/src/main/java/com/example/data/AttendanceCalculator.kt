@@ -47,19 +47,24 @@ object AttendanceCalculator {
     fun calculateStats(
         records: List<AttendanceRecord>,
         thresholdPercent: Int,
-        countExcusedAsPresent: Boolean,
+        countExcusedAsPresent: Boolean = true,
         includePriorBalance: Boolean,
         priorPresent: Int,
         priorAbsent: Int,
-        termFilter: AcademicTerm? = null
+        termFilter: AcademicTerm? = null,
+        monthPrefixFilter: String? = null
     ): AttendanceStats {
-        val filtered = if (termFilter != null) {
-            records.filter {
-                it.termId == termFilter.id ||
-                    (it.dateKey >= termFilter.startDate && it.dateKey <= termFilter.endDate)
+        val filtered = when {
+            !monthPrefixFilter.isNullOrBlank() -> {
+                records.filter { it.dateKey.startsWith(monthPrefixFilter) }
             }
-        } else {
-            records
+            termFilter != null -> {
+                records.filter {
+                    it.termId == termFilter.id ||
+                        (it.dateKey >= termFilter.startDate && it.dateKey <= termFilter.endDate)
+                }
+            }
+            else -> records
         }
 
         var present = 0
@@ -69,6 +74,7 @@ object AttendanceCalculator {
         var holiday = 0
 
         for (record in filtered) {
+            if (DateUtils.isWeekend(record.dateKey)) continue
             when (record.statusEnum) {
                 AttendanceStatus.PRESENT -> present++
                 AttendanceStatus.ABSENT -> absent++
@@ -81,10 +87,9 @@ object AttendanceCalculator {
         val addedPriorPresent = if (includePriorBalance) max(0, priorPresent) else 0
         val addedPriorAbsent = if (includePriorBalance) max(0, priorAbsent) else 0
 
-        val effectiveAttended = present + addedPriorPresent +
-            if (countExcusedAsPresent) (medical + schoolEvent) else 0
-        val effectiveMissed = absent + addedPriorAbsent +
-            if (countExcusedAsPresent) 0 else (medical + schoolEvent)
+        // Per college policy, both Excused (sports/clubs/events) and Medical count as Present
+        val effectiveAttended = present + addedPriorPresent + medical + schoolEvent
+        val effectiveMissed = absent + addedPriorAbsent
 
         val totalCounted = effectiveAttended + effectiveMissed
         val targetFraction = (thresholdPercent.coerceIn(50, 99)) / 100.0
@@ -167,12 +172,8 @@ object AttendanceCalculator {
                     cursor = DateUtils.addDays(cursor, -1)
                 }
                 AttendanceStatus.MEDICAL, AttendanceStatus.SCHOOL_EVENT -> {
-                    if (countExcusedAsPresent) {
-                        streak++
-                        cursor = DateUtils.addDays(cursor, -1)
-                    } else {
-                        break
-                    }
+                    streak++
+                    cursor = DateUtils.addDays(cursor, -1)
                 }
                 AttendanceStatus.ABSENT -> break
             }
@@ -266,7 +267,7 @@ object AttendanceCalculator {
             appendLine("--------------------------------")
             appendLine("Attendance: ${String.format("%.1f", stats.percentage)}% — $statusText")
             appendLine("Present: ${stats.presentDays} | Absent: ${stats.absentDays}")
-            appendLine("Medical Excused: ${stats.medicalDays} | School Events: ${stats.schoolEventDays}")
+            appendLine("Medical: ${stats.medicalDays} | Excused: ${stats.schoolEventDays}")
             if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
                 appendLine("Prior Balance Included: +${stats.priorPresentDays} Present / +${stats.priorAbsentDays} Absent")
             }

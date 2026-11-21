@@ -74,7 +74,9 @@ service cloud.firestore {
              data.absentCount is int && data.absentCount >= 0 && data.absentCount <= 1000 &&
              data.medicalCount is int && data.medicalCount >= 0 && data.medicalCount <= 1000 &&
              data.schoolEventCount is int && data.schoolEventCount >= 0 && data.schoolEventCount <= 1000 &&
-             (!('lastCheckInDate' in data) || data.lastCheckInDate == null || data.lastCheckInDate == '' || isValidDateKey(data.lastCheckInDate));
+             (!('lastCheckInDate' in data) || data.lastCheckInDate == null || data.lastCheckInDate == '' || isValidDateKey(data.lastCheckInDate)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             (!('customAvatarBase64' in data) || data.customAvatarBase64 == null || (data.customAvatarBase64 is string && data.customAvatarBase64.size() <= 120000));
     }
 
     function isValidAttendanceRecord(data) {
@@ -152,7 +154,7 @@ service cloud.firestore {
                          'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
                          'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -169,7 +171,7 @@ service cloud.firestore {
                          'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
                          'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
                        ]) &&
                        (
                          isAdmin() ||
@@ -181,7 +183,7 @@ service cloud.firestore {
                              'reminderHour', 'reminderMinute', 'countExcusedAsPresent',
                              'priorPresentCount', 'priorAbsentCount', 'setupCompleted',
                              'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                             'lastCheckInDate', 'updatedAt'
+                             'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'updatedAt'
                            ])
                          )
                        );

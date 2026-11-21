@@ -45,9 +45,9 @@ private val LightSemanticColors = AttendanceSemanticColors(
     schoolEvent = SchoolEventLight,
     schoolEventContainer = SchoolEventContainerLight,
     onSchoolEventContainer = OnSchoolEventContainerLight,
-    poya = SaffronLight,
-    poyaContainer = SaffronContainerLight,
-    onPoyaContainer = OnSaffronContainerLight
+    poya = VioletHolidayLight,
+    poyaContainer = VioletHolidayContainerLight,
+    onPoyaContainer = OnVioletHolidayContainerLight
 )
 
 private val DarkSemanticColors = AttendanceSemanticColors(
@@ -63,9 +63,9 @@ private val DarkSemanticColors = AttendanceSemanticColors(
     schoolEvent = SchoolEventDark,
     schoolEventContainer = SchoolEventContainerDark,
     onSchoolEventContainer = OnSchoolEventContainerDark,
-    poya = SaffronDark,
-    poyaContainer = SaffronContainerDark,
-    onPoyaContainer = OnSaffronContainerDark
+    poya = VioletHolidayDark,
+    poyaContainer = VioletHolidayContainerDark,
+    onPoyaContainer = OnVioletHolidayContainerDark
 )
 
 val LocalAttendanceColors = staticCompositionLocalOf { LightSemanticColors }

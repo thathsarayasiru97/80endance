@@ -28,6 +28,8 @@
         "medicalCount": { "type": "integer", "description": "Denormalized count of logged medical excused days." },
         "schoolEventCount": { "type": "integer", "description": "Denormalized count of logged school event days." },
         "lastCheckInDate": { "type": "string", "description": "Optional ISO date string (YYYY-MM-DD) of last check-in." },
+        "photoUrl": { "type": "string", "description": "Optional Google account profile photo URL." },
+        "customAvatarBase64": { "type": "string", "description": "Optional compressed custom avatar JPEG encoded as Base64 for cross-device sync." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
       },

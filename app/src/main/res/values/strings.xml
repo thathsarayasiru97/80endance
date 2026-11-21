@@ -13,4 +13,14 @@
     <string name="notification_channel_desc">Reminds you after school to log your daily attendance.</string>
     <string name="notification_title">Did you attend school today?</string>
     <string name="notification_body">Tap Yes or No to keep your 80% A/L eligibility up to date.</string>
+    <string name="update_available_title">Update Available</string>
+    <string name="update_available_subtitle">A newer version of 80endance is available on GitHub Releases.</string>
+    <string name="update_now">Update</string>
+    <string name="update_later">Later</string>
+    <string name="update_dismiss_desc">Dismiss update dialog</string>
+    <string name="update_check_title">App Updates</string>
+    <string name="update_check_action">Check</string>
+    <string name="update_up_to_date">You\'re on the latest version (%1$s).</string>
+    <string name="update_offline_message">No internet connection. Connect to check for updates.</string>
+    <string name="update_browser_error">No browser app found to open GitHub Releases.</string>
 </resources>

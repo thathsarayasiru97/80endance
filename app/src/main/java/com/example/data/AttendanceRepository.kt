@@ -266,7 +266,8 @@ class AttendanceRepository(
         priorPresentCount: Int,
         priorAbsentCount: Int,
         setupCompleted: Boolean,
-        isExisting: Boolean
+        isExisting: Boolean,
+        photoUrl: String? = null
     ): Result<Unit> {
         val path = "users/$targetUserId"
         return try {
@@ -288,6 +289,8 @@ class AttendanceRepository(
             val docRef = db.collection("users").document(targetUserId)
             val shouldUpdate = isExisting || runCatching { docRef.get().await().exists() }.getOrDefault(false)
 
+            val cleanPhotoUrl = photoUrl?.trim()?.take(500)?.ifEmpty { null }
+
             if (shouldUpdate) {
                 val updates = buildMap<String, Any> {
                     put("firstName", cleanFirst)
@@ -307,6 +310,7 @@ class AttendanceRepository(
                     put("priorPresentCount", priorPresentCount.coerceIn(0, 500))
                     put("priorAbsentCount", priorAbsentCount.coerceIn(0, 500))
                     put("setupCompleted", setupCompleted)
+                    if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
                     put("updatedAt", FieldValue.serverTimestamp())
                 }
                 docRef.update(updates).awaitOfflineAware()
@@ -334,6 +338,7 @@ class AttendanceRepository(
                     "absentCount" to 0,
                     "medicalCount" to 0,
                     "schoolEventCount" to 0,
+                    "photoUrl" to cleanPhotoUrl,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 ).filterValues { it != null }
@@ -376,6 +381,54 @@ class AttendanceRepository(
             handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
+    }
+
+    suspend fun updateUserAvatar(
+        userId: String,
+        customAvatarBase64: String?,
+        googlePhotoUrl: String? = null
+    ): Result<Unit> {
+        val path = "users/$userId"
+        return try {
+            requireUserId()
+            val cleanBase64 = customAvatarBase64?.trim().orEmpty()
+            require(cleanBase64.length <= 120_000) { "Selected image is too large. Please try another photo." }
+            val updates = buildMap<String, Any> {
+                put("customAvatarBase64", cleanBase64)
+                val cleanGoogleUrl = googlePhotoUrl?.trim()?.take(500)?.ifEmpty { null }
+                if (cleanGoogleUrl != null) {
+                    put("photoUrl", cleanGoogleUrl)
+                }
+                put("updatedAt", FieldValue.serverTimestamp())
+            }
+            db.collection("users").document(userId).update(updates).awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun isPublishedNonSchoolDay(dateKey: String): Boolean {
+        if (DateUtils.isWeekend(dateKey)) return true
+        val uid = auth.currentUser?.uid
+        if (uid.isNullOrBlank()) {
+            return !AttendanceCalculator.isSchoolDay(dateKey, SriLankaCalendarDefaults.defaultEvents)
+        }
+        val fetched = runCatching {
+            withTimeoutOrNull(3_000L) {
+                db.collection("calendar_events")
+                    .whereEqualTo("published", true)
+                    .get()
+                    .await()
+                    .toObjects(CalendarEvent::class.java)
+            }
+        }.getOrNull()
+        val events = fetched?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
+        return !AttendanceCalculator.isSchoolDay(dateKey, events)
     }
 
     // --- ATTENDANCE MUTATIONS ---
