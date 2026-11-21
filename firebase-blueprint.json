@@ -33,6 +33,8 @@
         "lastCheckInDate": { "type": "string", "description": "Optional ISO date string (YYYY-MM-DD) of last check-in." },
         "photoUrl": { "type": "string", "description": "Optional Google account profile photo URL." },
         "customAvatarBase64": { "type": "string", "description": "Optional compressed custom avatar JPEG encoded as Base64 for cross-device sync." },
+        "onlineNow": { "type": "boolean", "description": "Whether the student currently has the app open in foreground." },
+        "lastSeenAt": { "type": "string", "format": "date-time", "description": "Server timestamp of the student's latest presence heartbeat." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
       },
@@ -153,6 +155,34 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
       },
       "required": ["userId", "userName", "userEmail", "type", "title", "message", "appVersion", "status", "createdAt", "updatedAt"]
+    },
+    "CommunityStats": {
+      "title": "CommunityStats",
+      "description": "Privacy-safe public counter of total registered accounts shown on Home.",
+      "type": "object",
+      "properties": {
+        "totalAccounts": { "type": "integer", "description": "Total number of registered student accounts." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["totalAccounts", "updatedAt"]
+    },
+    "BroadcastNotification": {
+      "title": "BroadcastNotification",
+      "description": "Admin-dispatched custom notification targeting everyone or multiple selected audiences.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Notification header." },
+        "message": { "type": "string", "description": "Notification body content." },
+        "targetAll": { "type": "boolean", "description": "Whether sent to all students." },
+        "targetGrades": { "type": "array", "description": "Selected A/L grade audiences." },
+        "targetStreams": { "type": "array", "description": "Selected A/L stream audiences." },
+        "targetClasses": { "type": "array", "description": "Selected class codes." },
+        "targetUserIds": { "type": "array", "description": "Selected individual student UIDs." },
+        "audienceSummary": { "type": "string", "description": "Human-readable target summary." },
+        "sentByEmail": { "type": "string", "description": "Email of the admin who released the notification." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp when released." }
+      },
+      "required": ["title", "message", "targetAll", "targetGrades", "targetStreams", "targetClasses", "targetUserIds", "audienceSummary", "sentByEmail", "createdAt"]
     }
   },
   "firestore": {
@@ -183,6 +213,14 @@
     "/feedback/{feedbackId}": {
       "schema": { "$ref": "#/entities/FeedbackReport" },
       "description": "Student bug reports and feature suggestions."
+    },
+    "/app_stats/{statId}": {
+      "schema": { "$ref": "#/entities/CommunityStats" },
+      "description": "Privacy-safe public community statistics document (community)."
+    },
+    "/broadcast_notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/BroadcastNotification" },
+      "description": "Admin-released custom notifications targeting one or multiple audiences."
     }
   }
 }

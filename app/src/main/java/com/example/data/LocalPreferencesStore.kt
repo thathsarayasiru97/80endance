@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -25,7 +26,8 @@ data class LocalReminderPrefs(
     val lastSyncedMillis: Long = 0L,
     val sundayPrepEnabled: Boolean = true,
     val themeModeRaw: String = AppThemeMode.SYSTEM.raw,
-    val accentPaletteRaw: String = AppAccentPalette.ROYAL_BLUE.raw
+    val accentPaletteRaw: String = AppAccentPalette.ROYAL_BLUE.raw,
+    val seenBroadcastIds: Set<String> = emptySet()
 ) {
     val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
     val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
@@ -40,6 +42,7 @@ class LocalPreferencesStore(private val context: Context) {
     private val keySundayPrepEnabled = booleanPreferencesKey("sunday_prep_enabled")
     private val keyThemeMode = stringPreferencesKey("app_theme_mode")
     private val keyAccentPalette = stringPreferencesKey("app_accent_palette")
+    private val keySeenBroadcastIds = stringSetPreferencesKey("seen_broadcast_ids")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -50,7 +53,8 @@ class LocalPreferencesStore(private val context: Context) {
             lastSyncedMillis = prefs[keyLastSynced] ?: 0L,
             sundayPrepEnabled = prefs[keySundayPrepEnabled] ?: true,
             themeModeRaw = prefs[keyThemeMode] ?: AppThemeMode.SYSTEM.raw,
-            accentPaletteRaw = prefs[keyAccentPalette] ?: AppAccentPalette.ROYAL_BLUE.raw
+            accentPaletteRaw = prefs[keyAccentPalette] ?: AppAccentPalette.ROYAL_BLUE.raw,
+            seenBroadcastIds = prefs[keySeenBroadcastIds] ?: emptySet()
         )
     }
 
@@ -86,6 +90,17 @@ class LocalPreferencesStore(private val context: Context) {
     suspend fun markSyncedNow() {
         context.appPrefsDataStore.edit { prefs ->
             prefs[keyLastSynced] = System.currentTimeMillis()
+        }
+    }
+
+    suspend fun markBroadcastsSeen(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        context.appPrefsDataStore.edit { prefs ->
+            val current = prefs[keySeenBroadcastIds]?.toMutableList() ?: mutableListOf()
+            ids.forEach { id ->
+                if (id.isNotBlank() && id !in current) current.add(id)
+            }
+            prefs[keySeenBroadcastIds] = current.takeLast(80).toSet()
         }
     }
 }

@@ -18,6 +18,8 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -77,12 +79,16 @@ import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
+import com.example.ui.components.AdminOnlineNowPill
+import com.example.ui.components.BroadcastAlertBanner
+import com.example.ui.components.CommunityAccountCountPill
 import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.DashboardScopeMode
 import com.example.viewmodel.StudentAppState
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
     state: StudentAppState,
@@ -92,6 +98,7 @@ fun HomeScreen(
     onSyncClick: () -> Unit,
     onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
     onSaveCustomAvatar: (String?) -> Unit = {},
+    onDismissBroadcast: (String) -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -179,10 +186,10 @@ fun HomeScreen(
                         )
                     }
 
-                    // A/L Exam Countdown & Notices Chip Row
-                    Row(
+                    // A/L Exam Countdown, Pulsing Green Community Accounts Counter & Notices Chip Row
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val examYear = profile?.alExamYear ?: state.appSettings.currentAcademicYear
                         Surface(
@@ -212,6 +219,14 @@ fun HomeScreen(
                             }
                         }
 
+                        if (state.totalAccounts > 0) {
+                            CommunityAccountCountPill(totalAccounts = state.totalAccounts)
+                        }
+
+                        state.adminOnlineNowCount?.let { onlineNow ->
+                            AdminOnlineNowPill(onlineCount = onlineNow)
+                        }
+
                         if (state.visibleNotices.isNotEmpty() && state.pinnedNotices.isEmpty()) {
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -238,6 +253,18 @@ fun HomeScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // 1b. Unread Admin Custom Broadcast Notification Banner
+            val activeBroadcast = state.unreadBroadcasts.firstOrNull()
+            if (activeBroadcast != null) {
+                item(key = "broadcast_${activeBroadcast.id}") {
+                    BroadcastAlertBanner(
+                        broadcast = activeBroadcast,
+                        remainingCount = state.unreadBroadcasts.size,
+                        onDismiss = { onDismissBroadcast(activeBroadcast.id) }
+                    )
                 }
             }
 

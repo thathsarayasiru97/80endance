@@ -79,7 +79,9 @@ service cloud.firestore {
              data.schoolEventCount is int && data.schoolEventCount >= 0 && data.schoolEventCount <= 1000 &&
              (!('lastCheckInDate' in data) || data.lastCheckInDate == null || data.lastCheckInDate == '' || isValidDateKey(data.lastCheckInDate)) &&
              (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
-             (!('customAvatarBase64' in data) || data.customAvatarBase64 == null || (data.customAvatarBase64 is string && data.customAvatarBase64.size() <= 120000));
+             (!('customAvatarBase64' in data) || data.customAvatarBase64 == null || (data.customAvatarBase64 is string && data.customAvatarBase64.size() <= 120000)) &&
+             (!('onlineNow' in data) || data.onlineNow == null || data.onlineNow is bool) &&
+             (!('lastSeenAt' in data) || data.lastSeenAt == null || isValidTimestamp(data.lastSeenAt));
     }
 
     function isValidAttendanceRecord(data) {
@@ -147,6 +149,22 @@ service cloud.firestore {
              data.status in ['open', 'reviewed', 'resolved'];
     }
 
+    function isValidCommunityStats(data) {
+      return data.totalAccounts is int && data.totalAccounts >= 0 && data.totalAccounts <= 100000;
+    }
+
+    function isValidBroadcastNotification(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+             data.targetAll is bool &&
+             isValidBoundedStringList(data.targetGrades, 10) &&
+             isValidBoundedStringList(data.targetStreams, 10) &&
+             isValidBoundedStringList(data.targetClasses, 30) &&
+             isValidBoundedStringList(data.targetUserIds, 50) &&
+             data.audienceSummary is string && data.audienceSummary.size() >= 1 && data.audienceSummary.size() <= 200 &&
+             data.sentByEmail is string && data.sentByEmail.size() >= 3 && data.sentByEmail.size() <= 120;
+    }
+
     // --- COLLECTION 1: USER PROFILES (PII STRICTLY ISOLATED) ---
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
@@ -172,7 +190,7 @@ service cloud.firestore {
                          'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                          'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -190,7 +208,7 @@ service cloud.firestore {
                          'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                          'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
                        ]) &&
                        (
                          isAdmin() ||
@@ -203,7 +221,7 @@ service cloud.firestore {
                              'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                              'setupCompleted',
                              'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                             'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'updatedAt'
+                             'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'updatedAt'
                            ])
                          )
                        );
@@ -409,6 +427,51 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
 
       allow delete: if isAdmin() && isValidId(feedbackId);
+    }
+
+    // --- COLLECTION 8: PRIVACY-SAFE COMMUNITY ACCOUNT STATS ---
+    match /app_stats/{statId} {
+      allow get: if isSignedIn() && statId == 'community';
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       statId == 'community' &&
+                       isValidCommunityStats(incoming()) &&
+                       incoming().keys().hasAll(['totalAccounts', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['totalAccounts', 'updatedAt']) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       (isAdmin() || incoming().totalAccounts == 1);
+
+      allow update: if isSignedIn() &&
+                       statId == 'community' &&
+                       isValidCommunityStats(incoming()) &&
+                       incoming().keys().hasOnly(['totalAccounts', 'updatedAt']) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       (isAdmin() || (incoming().totalAccounts == existing().totalAccounts + 1));
+
+      allow delete: if false;
+    }
+
+    // --- COLLECTION 9: ADMIN CUSTOM BROADCAST NOTIFICATIONS ---
+    match /broadcast_notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId);
+      allow list: if isSignedIn();
+
+      allow create: if isAdmin() &&
+                       isValidId(notificationId) &&
+                       isValidBroadcastNotification(incoming()) &&
+                       incoming().keys().hasAll([
+                         'title', 'message', 'targetAll', 'targetGrades', 'targetStreams',
+                         'targetClasses', 'targetUserIds', 'audienceSummary', 'sentByEmail', 'createdAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'title', 'message', 'targetAll', 'targetGrades', 'targetStreams',
+                         'targetClasses', 'targetUserIds', 'audienceSummary', 'sentByEmail', 'createdAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt);
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(notificationId);
     }
   }
 }

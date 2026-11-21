@@ -205,6 +205,44 @@ class AttendanceRepository(
         )
     }
 
+    fun observeCommunityStats(): Flow<CommunityStats> = flow {
+        val uid = requireUserId()
+        val path = "app_stats/community"
+        emitAll(
+            db.collection("app_stats").document("community")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObject(
+                        CommunityStats::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ) ?: CommunityStats()
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.GET, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    fun observeBroadcastNotifications(): Flow<List<BroadcastNotification>> = flow {
+        val uid = requireUserId()
+        val path = "broadcast_notifications"
+        emitAll(
+            db.collection("broadcast_notifications")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        BroadcastNotification::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
+                    throw error
+                }
+        )
+    }
+
     // --- ADMIN OBSERVABLE FLOWS (CALLED ONLY WHEN VERIFIED ADMIN) ---
 
     fun observeAllStudentsAdmin(): Flow<List<UserProfile>> = flow {
@@ -471,10 +509,13 @@ class AttendanceRepository(
                     "medicalCount" to 0,
                     "schoolEventCount" to 0,
                     "photoUrl" to cleanPhotoUrl,
+                    "onlineNow" to true,
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 ).filterValues { it != null }
                 docRef.set(createMap).awaitOfflineAware()
+                incrementCommunityAccountCountBestEffort()
             }
             scheduleSyncIfOffline()
             Result.success(Unit)
@@ -1422,6 +1463,158 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, "calendar_events")
+            Result.failure(e)
+        }
+    }
+
+    // --- PRESENCE, COMMUNITY COUNTER & ADMIN BROADCAST NOTIFICATIONS ---
+
+    private suspend fun incrementCommunityAccountCountBestEffort() {
+        val ref = db.collection("app_stats").document("community")
+        try {
+            val snap = withTimeoutOrNull(4_000L) { ref.get().await() }
+            if (snap != null && snap.exists()) {
+                ref.update(
+                    mapOf(
+                        "totalAccounts" to FieldValue.increment(1L),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitOfflineAware()
+            } else {
+                ref.set(
+                    mapOf(
+                        "totalAccounts" to 1,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitOfflineAware()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("AttendanceRepo", "Best-effort community counter increment skipped: ${e.message}")
+        }
+    }
+
+    suspend fun syncCommunityAccountCountAdmin(totalAccounts: Int): Result<Unit> {
+        val path = "app_stats/community"
+        return try {
+            requireUserId()
+            val cleanCount = totalAccounts.coerceIn(0, 100_000)
+            val ref = db.collection("app_stats").document("community")
+            val payload = mapOf(
+                "totalAccounts" to cleanCount,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            val exists = runCatching { withTimeoutOrNull(3_000L) { ref.get().await().exists() } ?: false }.getOrDefault(false)
+            if (exists) {
+                ref.update(payload).awaitOfflineAware()
+            } else {
+                ref.set(payload).awaitOfflineAware()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updatePresence(userId: String, onlineNow: Boolean): Result<Unit> {
+        val path = "users/$userId"
+        return try {
+            if (auth.currentUser?.uid != userId) return Result.success(Unit)
+            val ref = db.collection("users").document(userId)
+            ref.update(
+                mapOf(
+                    "onlineNow" to onlineNow,
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).awaitOfflineAware()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: FirebaseFirestoreException) {
+            // Ignore NOT_FOUND before first-time setup completes
+            if (e.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                Result.success(Unit)
+            } else {
+                Log.w("AttendanceRepo", "Presence update skipped: ${e.message}")
+                Result.failure(e)
+            }
+        } catch (e: Exception) {
+            Log.w("AttendanceRepo", "Presence update skipped: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    suspend fun sendBroadcastNotification(
+        title: String,
+        message: String,
+        targetAll: Boolean,
+        targetGrades: List<String>,
+        targetStreams: List<String>,
+        targetClasses: List<String>,
+        targetUserIds: List<String>,
+        audienceSummary: String
+    ): Result<Unit> {
+        val docRef = db.collection("broadcast_notifications").document()
+        val path = docRef.path
+        return try {
+            requireUserId()
+            val cleanTitle = title.trim().take(120)
+            val cleanMessage = message.trim().take(1000)
+            require(cleanTitle.isNotEmpty()) { "Notification header is required" }
+            require(cleanMessage.isNotEmpty()) { "Notification content is required" }
+
+            val cleanGrades = if (targetAll) emptyList() else targetGrades.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(10)
+            val cleanStreams = if (targetAll) emptyList() else targetStreams.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(10)
+            val cleanClasses = if (targetAll) emptyList() else targetClasses.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(30)
+            val cleanUsers = if (targetAll) emptyList() else targetUserIds.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(50)
+
+            require(targetAll || cleanGrades.isNotEmpty() || cleanStreams.isNotEmpty() || cleanClasses.isNotEmpty() || cleanUsers.isNotEmpty()) {
+                "Select at least one target audience"
+            }
+
+            val cleanSummary = audienceSummary.trim().ifEmpty { "All Students" }.take(200)
+            val senderEmail = auth.currentUser?.email?.trim()?.take(120)?.ifEmpty { "admin@80endance.app" }
+                ?: "admin@80endance.app"
+
+            val payload = mapOf(
+                "title" to cleanTitle,
+                "message" to cleanMessage,
+                "targetAll" to targetAll,
+                "targetGrades" to cleanGrades,
+                "targetStreams" to cleanStreams,
+                "targetClasses" to cleanClasses,
+                "targetUserIds" to cleanUsers,
+                "audienceSummary" to cleanSummary,
+                "sentByEmail" to senderEmail,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(payload).awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteBroadcastNotification(notificationId: String): Result<Unit> {
+        val path = "broadcast_notifications/$notificationId"
+        return try {
+            requireUserId()
+            db.collection("broadcast_notifications").document(notificationId).delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
             Result.failure(e)
         }
     }

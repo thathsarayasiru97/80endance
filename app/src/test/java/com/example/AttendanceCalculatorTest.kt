@@ -375,4 +375,61 @@ class AttendanceCalculatorTest {
         assertTrue(prep.eligible)
         assertEquals(2, prep.safeSkipsRemaining)
     }
+
+    @Test
+    fun userPresenceOnlineWindowAndLastSeenFormatting() {
+        val now = 1_750_000_000_000L
+        val freshTimestamp = com.google.firebase.Timestamp(java.util.Date(now - 60_000L)) // 1 min ago
+        val staleTimestamp = com.google.firebase.Timestamp(java.util.Date(now - 10 * 60_000L)) // 10 min ago
+
+        val onlineUser = UserProfile(onlineNow = true, lastSeenAt = freshTimestamp)
+        val staleUser = UserProfile(onlineNow = true, lastSeenAt = staleTimestamp)
+        val offlineUser = UserProfile(onlineNow = false, lastSeenAt = freshTimestamp)
+
+        assertTrue(onlineUser.isCurrentlyOnline(nowMillis = now))
+        assertFalse(staleUser.isCurrentlyOnline(nowMillis = now))
+        assertFalse(offlineUser.isCurrentlyOnline(nowMillis = now))
+
+        assertEquals("Online now", DateUtils.formatLastSeen(now - 60_000L, isOnline = true, nowMillis = now))
+        assertEquals("Last seen 10m ago", DateUtils.formatLastSeen(now - 10 * 60_000L, isOnline = false, nowMillis = now))
+        assertEquals("Last seen 2h ago", DateUtils.formatLastSeen(now - 2 * 3_600_000L, isOnline = false, nowMillis = now))
+        assertEquals("Not seen yet", DateUtils.formatLastSeen(null, isOnline = false, nowMillis = now))
+    }
+
+    @Test
+    fun broadcastNotificationMatchesMultipleAudiences() {
+        val student13M2 = UserProfile(
+            id = "uid_yasiru",
+            userId = "uid_yasiru",
+            grade = "Grade 13",
+            alStream = "Physical Science",
+            className = "13M2"
+        )
+        val student12B1 = UserProfile(
+            id = "uid_nimal",
+            userId = "uid_nimal",
+            grade = "Grade 12",
+            alStream = "Bio Science",
+            className = "12B1"
+        )
+
+        val everyoneAlert = com.example.data.BroadcastNotification(targetAll = true)
+        assertTrue(everyoneAlert.matchesStudent(student13M2, "uid_yasiru"))
+        assertTrue(everyoneAlert.matchesStudent(student12B1, "uid_nimal"))
+
+        val combinedAlert = com.example.data.BroadcastNotification(
+            targetAll = false,
+            targetGrades = listOf("Grade 12"),
+            targetClasses = listOf("13m2") // case-insensitive match
+        )
+        assertTrue(combinedAlert.matchesStudent(student13M2, "uid_yasiru"))
+        assertTrue(combinedAlert.matchesStudent(student12B1, "uid_nimal"))
+
+        val specificStudentAlert = com.example.data.BroadcastNotification(
+            targetAll = false,
+            targetUserIds = listOf("uid_yasiru")
+        )
+        assertTrue(specificStudentAlert.matchesStudent(student13M2, "uid_yasiru"))
+        assertFalse(specificStudentAlert.matchesStudent(student12B1, "uid_nimal"))
+    }
 }

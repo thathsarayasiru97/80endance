@@ -418,3 +418,82 @@ test("Feedback collection: students submit open bugs/suggestions, isolated from 
   );
   await assertSucceeds(adminDb.collection("feedback").doc("fb_1").delete());
 });
+
+test("User presence, community account stats, and admin broadcast notifications obey zero-trust rules", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+
+  // Unauthenticated denied on new collections
+  await assertFails(unauthDb.collection("app_stats").doc("community").get());
+  await assertFails(unauthDb.collection("broadcast_notifications").get());
+
+  // Student A creates profile & updates presence heartbeat (onlineNow + lastSeenAt)
+  await assertSucceeds(studentA.collection("users").doc(STUDENT_A_UID).set(validProfilePayload(STUDENT_A_UID, "a@royal.lk")));
+  await assertSucceeds(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      onlineNow: true,
+      lastSeenAt: now,
+      updatedAt: now,
+    })
+  );
+  // Reject future lastSeenAt timestamp
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      onlineNow: true,
+      lastSeenAt: new Date(Date.now() + 60000),
+      updatedAt: now,
+    })
+  );
+
+  // Community stats: student can initialize at 1 and increment strictly by +1; cannot forge arbitrary jump or decrement
+  await assertFails(
+    studentA.collection("app_stats").doc("community").set({ totalAccounts: 999, updatedAt: now })
+  );
+  await assertSucceeds(
+    studentA.collection("app_stats").doc("community").set({ totalAccounts: 1, updatedAt: now })
+  );
+  await assertSucceeds(studentA.collection("app_stats").doc("community").get());
+  await assertFails(studentA.collection("app_stats").get()); // list denied
+  await assertSucceeds(
+    studentA.collection("app_stats").doc("community").update({ totalAccounts: 2, updatedAt: new Date(Date.now() - 500) })
+  );
+  await assertFails(
+    studentA.collection("app_stats").doc("community").update({ totalAccounts: 50, updatedAt: new Date(Date.now() - 400) })
+  );
+  await assertFails(
+    studentA.collection("app_stats").doc("community").update({ totalAccounts: 1, updatedAt: new Date(Date.now() - 300) })
+  );
+  // Admin can reconcile exact student count
+  await assertSucceeds(
+    adminDb.collection("app_stats").doc("community").update({ totalAccounts: 42, updatedAt: new Date(Date.now() - 200) })
+  );
+
+  // Broadcast notifications: admin creates/deletes; student reads; student cannot create/update/delete
+  const validBroadcast = {
+    title: "Assembly Postponed",
+    message: "Grade 13 Physical Science & 13M2 report to the main hall at 8:00 AM.",
+    targetAll: false,
+    targetGrades: ["Grade 13"],
+    targetStreams: ["Physical Science"],
+    targetClasses: ["13M2"],
+    targetUserIds: [STUDENT_A_UID],
+    audienceSummary: "Grade 13 • Physical Science • 13M2 • +1 student",
+    sentByEmail: ADMIN_EMAIL,
+    createdAt: now,
+  };
+  await assertFails(studentA.collection("broadcast_notifications").doc("bc_1").set(validBroadcast));
+  await assertSucceeds(adminDb.collection("broadcast_notifications").doc("bc_1").set(validBroadcast));
+  await assertSucceeds(studentA.collection("broadcast_notifications").get());
+  await assertFails(adminDb.collection("broadcast_notifications").doc("bc_1").update({ title: "Mutated" }));
+  await assertFails(studentA.collection("broadcast_notifications").doc("bc_1").delete());
+  await assertSucceeds(adminDb.collection("broadcast_notifications").doc("bc_1").delete());
+});

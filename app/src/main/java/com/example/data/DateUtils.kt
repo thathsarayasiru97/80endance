@@ -244,4 +244,32 @@ object DateUtils {
         }
         return String.format(Locale.US, "%d:%02d %s", displayHour, minute, amPm)
     }
+
+    fun formatClockTime(millis: Long): String {
+        val fmt = SimpleDateFormat("h:mm a", Locale.US)
+        return fmt.format(Date(millis))
+    }
+
+    fun formatLastSeen(
+        timestampMillis: Long?,
+        isOnline: Boolean,
+        nowMillis: Long = System.currentTimeMillis()
+    ): String {
+        if (isOnline) return "Online now"
+        if (timestampMillis == null || timestampMillis <= 0L) return "Not seen yet"
+        val diffMs = (nowMillis - timestampMillis).coerceAtLeast(0L)
+        val minutes = diffMs / 60_000L
+        val hours = diffMs / 3_600_000L
+        val days = diffMs / 86_400_000L
+        return when {
+            minutes < 1L -> "Last seen just now"
+            minutes < 60L -> "Last seen ${minutes}m ago"
+            hours < 24L -> "Last seen ${hours}h ago"
+            days < 7L -> "Last seen ${days}d ago"
+            else -> {
+                val fmt = SimpleDateFormat("MMM d, h:mm a", Locale.US)
+                "Last seen ${fmt.format(Date(timestampMillis))}"
+            }
+        }
+    }
 }

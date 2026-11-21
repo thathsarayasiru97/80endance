@@ -15,7 +15,9 @@ import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStats
 import com.example.data.AttendanceStatus
+import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
+import com.example.data.CommunityStats
 import com.example.data.DateUtils
 import com.example.data.FeedbackType
 import com.example.data.LocalPreferencesStore
@@ -83,7 +85,10 @@ data class StudentAppState(
     val milestones: List<AttendanceMilestone> = emptyList(),
     val sundayPrepEnabled: Boolean = true,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
-    val accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE
+    val accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE,
+    val totalAccounts: Int = 0,
+    val adminOnlineNowCount: Int? = null,
+    val unreadBroadcasts: List<BroadcastNotification> = emptyList()
 )
 
 private data class CoreFirestoreBundle(
@@ -97,6 +102,13 @@ private data class CoreFirestoreBundle(
     val streamError: String? = null
 )
 
+private data class CommunityExtrasBundle(
+    val settings: AppSettings = AppSettings(),
+    val communityStats: CommunityStats = CommunityStats(),
+    val broadcasts: List<BroadcastNotification> = emptyList(),
+    val adminOnlineNowCount: Int? = null
+)
+
 class AttendanceViewModel(
     private val repository: AttendanceRepository,
     private val localPrefs: LocalPreferencesStore,
@@ -104,7 +116,8 @@ class AttendanceViewModel(
     val currentUserId: String,
     val userEmail: String,
     val googleDisplayName: String?,
-    val googlePhotoUrl: String? = null
+    val googlePhotoUrl: String? = null,
+    val isVerifiedAdmin: Boolean = false
 ) : ViewModel() {
 
     private val _scopeMode = MutableStateFlow(DashboardScopeMode.CURRENT_TERM)
@@ -158,20 +171,54 @@ class AttendanceViewModel(
         )
     }
 
-    private val settingsFlow = repository.observeAppSettings()
-        .safeFirestoreFlow(AppSettings(), "settings")
+    private val _sessionDismissedBroadcastIds = MutableStateFlow<Set<String>>(emptySet())
+    private val notifiedBroadcastIds = mutableSetOf<String>()
+
+    private val adminOnlineCountFlow: Flow<Int?> = if (isVerifiedAdmin) {
+        combine(
+            repository.observeAllStudentsAdmin().safeFirestoreFlow(emptyList(), "adminStudents"),
+            kotlinx.coroutines.flow.flow {
+                while (true) {
+                    emit(System.currentTimeMillis())
+                    kotlinx.coroutines.delay(30_000L)
+                }
+            }
+        ) { studentsPair, nowMs ->
+            studentsPair.first.count { it.isCurrentlyOnline(nowMs) }
+        }
+    } else {
+        kotlinx.coroutines.flow.flowOf(null)
+    }
+
+    private val extrasBundleFlow: Flow<CommunityExtrasBundle> = combine(
+        repository.observeAppSettings().safeFirestoreFlow(AppSettings(), "settings"),
+        repository.observeCommunityStats().safeFirestoreFlow(CommunityStats(), "communityStats"),
+        repository.observeBroadcastNotifications().safeFirestoreFlow(emptyList(), "broadcasts"),
+        adminOnlineCountFlow
+    ) { settingsPair, statsPair, broadcastsPair, onlineCount ->
+        CommunityExtrasBundle(
+            settings = settingsPair.first,
+            communityStats = statsPair.first,
+            broadcasts = broadcastsPair.first,
+            adminOnlineNowCount = onlineCount
+        )
+    }
 
     private val networkFlow = SyncScheduler.observeNetworkConnectivity(appContext)
 
     val uiState: StateFlow<StudentAppState> = combine(
         coreBundleFlow,
-        settingsFlow,
+        extrasBundleFlow,
         networkFlow,
         repository.hasPendingWrites,
-        combine(localPrefs.prefsFlow, _sessionDismissedCheckIn) { prefs, dismissed -> prefs to dismissed }
-    ) { bundle, settingsPair, isOnline, hasPending, prefsAndDismissed ->
-        val (prefs, sessionDismissed) = prefsAndDismissed
-        val settings = settingsPair.first
+        combine(
+            localPrefs.prefsFlow,
+            _sessionDismissedCheckIn,
+            _sessionDismissedBroadcastIds
+        ) { prefs, dismissed, dismissedBroadcasts -> Triple(prefs, dismissed, dismissedBroadcasts) }
+    ) { bundle, extras, isOnline, hasPending, localTriple ->
+        val (prefs, sessionDismissed, sessionDismissedBroadcasts) = localTriple
+        val settings = extras.settings
         val profile = bundle.profile
         val effectiveTerms = bundle.terms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
         val rawEvents = bundle.events.ifEmpty { SriLankaCalendarDefaults.defaultEvents }
@@ -300,6 +347,41 @@ class AttendanceViewModel(
             overallStats = overallStats
         )
 
+        val nowMs = System.currentTimeMillis()
+        val recentMatchingBroadcasts = if (profile?.setupCompleted == true) {
+            extras.broadcasts.filter { bc ->
+                bc.id.isNotBlank() &&
+                    bc.matchesStudent(profile, currentUserId) &&
+                    bc.id !in prefs.seenBroadcastIds &&
+                    bc.id !in sessionDismissedBroadcasts &&
+                    run {
+                        val createdMs = bc.createdAt?.toDate()?.time
+                        createdMs == null || (nowMs - createdMs) <= 7L * 86_400_000L
+                    }
+            }
+        } else {
+            emptyList()
+        }
+
+        // Fire real Android system notification once per newly received matching broadcast (within 48h)
+        recentMatchingBroadcasts.forEach { bc ->
+            val createdMs = bc.createdAt?.toDate()?.time
+            val freshEnough = createdMs == null || (nowMs - createdMs) <= 48L * 3_600_000L
+            if (freshEnough && notifiedBroadcastIds.add(bc.id)) {
+                ReminderScheduler.showBroadcastNotification(
+                    context = appContext,
+                    broadcastId = bc.id,
+                    title = bc.title,
+                    message = bc.message
+                )
+            }
+        }
+
+        val displayedAccounts = maxOf(
+            extras.communityStats.totalAccounts,
+            if (profile?.setupCompleted == true) 1 else 0
+        )
+
         StudentAppState(
             isLoading = !bundle.profileLoaded,
             errorMessage = bundle.streamError,
@@ -330,13 +412,30 @@ class AttendanceViewModel(
             milestones = milestones,
             sundayPrepEnabled = prefs.sundayPrepEnabled,
             themeMode = prefs.themeMode,
-            accentPalette = prefs.accentPalette
+            accentPalette = prefs.accentPalette,
+            totalAccounts = displayedAccounts,
+            adminOnlineNowCount = extras.adminOnlineNowCount,
+            unreadBroadcasts = recentMatchingBroadcasts
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
         initialValue = StudentAppState(isLoading = true, googlePhotoUrl = googlePhotoUrl)
     )
+
+    fun setPresence(online: Boolean) {
+        viewModelScope.launch {
+            repository.updatePresence(currentUserId, online)
+        }
+    }
+
+    fun dismissBroadcastAlert(broadcastId: String) {
+        if (broadcastId.isBlank()) return
+        _sessionDismissedBroadcastIds.value = _sessionDismissedBroadcastIds.value + broadcastId
+        viewModelScope.launch {
+            localPrefs.markBroadcastsSeen(listOf(broadcastId))
+        }
+    }
 
     fun setScopeMode(mode: DashboardScopeMode) {
         _scopeMode.value = mode

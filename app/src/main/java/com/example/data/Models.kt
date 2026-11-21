@@ -181,6 +181,8 @@ data class UserProfile(
     val baselineStartDate: String? = null,
     val baselineEndDate: String? = null,
     val baselinePercent: Double? = null,
+    val onlineNow: Boolean = false,
+    @ServerTimestamp val lastSeenAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -218,6 +220,17 @@ data class UserProfile(
             val total = effectivePresent + effectiveAbsent
             return if (total <= 0) 100.0 else (effectivePresent.toDouble() / total.toDouble()) * 100.0
         }
+
+    /**
+     * Treats a student as live online only if [onlineNow] is true and their heartbeat
+     * [lastSeenAt] arrived within the last 4 minutes (prevents stale online states).
+     */
+    fun isCurrentlyOnline(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        if (!onlineNow) return false
+        val seenMillis = lastSeenAt?.toDate()?.time ?: return false
+        val ageMs = nowMillis - seenMillis
+        return ageMs in -60_000L..240_000L
+    }
 }
 
 @Keep
@@ -370,4 +383,40 @@ data class FeedbackReport(
 
     val statusEnum: FeedbackStatus
         get() = FeedbackStatus.fromRaw(status)
+}
+
+@Keep
+@IgnoreExtraProperties
+data class CommunityStats(
+    @DocumentId val id: String = "community",
+    val totalAccounts: Int = 0,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class BroadcastNotification(
+    @DocumentId val id: String = "",
+    val title: String = "",
+    val message: String = "",
+    val targetAll: Boolean = true,
+    val targetGrades: List<String> = emptyList(),
+    val targetStreams: List<String> = emptyList(),
+    val targetClasses: List<String> = emptyList(),
+    val targetUserIds: List<String> = emptyList(),
+    val audienceSummary: String = "All Students",
+    val sentByEmail: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null
+) {
+    fun matchesStudent(profile: UserProfile?, userId: String): Boolean {
+        if (targetAll) return true
+        if (userId.isNotBlank() && targetUserIds.any { it == userId }) return true
+        if (profile == null) return false
+        val grade = profile.grade.trim()
+        val stream = profile.alStream.trim()
+        val cls = profile.className.trim()
+        return (grade.isNotEmpty() && targetGrades.any { it.trim().equals(grade, ignoreCase = true) }) ||
+            (stream.isNotEmpty() && targetStreams.any { it.trim().equals(stream, ignoreCase = true) }) ||
+            (cls.isNotEmpty() && targetClasses.any { it.trim().equals(cls, ignoreCase = true) })
+    }
 }

@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.util.Log
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -24,33 +26,53 @@ data class AppUpdateInfo(
     val latestVersion: String,
     val releaseTitle: String,
     val releaseNotes: String,
-    val releaseUrl: String
+    val releaseUrl: String,
+    val isPrerelease: Boolean = false
 )
 
 sealed class UpdateCheckResult {
     data class UpdateAvailable(val info: AppUpdateInfo) : UpdateCheckResult()
-    data class UpToDate(val currentVersion: String) : UpdateCheckResult()
+    data class UpToDate(
+        val currentVersion: String,
+        val latestFoundTag: String? = null,
+        val releaseUrl: String = AppUpdateChecker.GITHUB_LATEST_RELEASE_WEB
+    ) : UpdateCheckResult()
+    data class NoReleases(val currentVersion: String) : UpdateCheckResult()
     data object Offline : UpdateCheckResult()
     data class Error(val message: String) : UpdateCheckResult()
 }
 
+data class UpdateCheckStatusSummary(
+    val checkedAtMillis: Long,
+    val statusLine: String,
+    val detailLine: String? = null,
+    val hasUpdate: Boolean = false,
+    val isError: Boolean = false
+)
+
 object AppUpdateChecker {
+    private const val TAG = "AppUpdateChecker"
     const val GITHUB_RELEASES_REPO_PREFIX = "https://github.com/thathsarayasiru97/80endence"
     const val GITHUB_LATEST_RELEASE_API =
         "https://api.github.com/repos/thathsarayasiru97/80endence/releases/latest"
+    const val GITHUB_RELEASES_LIST_API =
+        "https://api.github.com/repos/thathsarayasiru97/80endence/releases?per_page=10"
     const val GITHUB_LATEST_RELEASE_WEB =
         "https://github.com/thathsarayasiru97/80endence/releases/latest"
+    const val GITHUB_RELEASES_WEB =
+        "https://github.com/thathsarayasiru97/80endence/releases"
 
-    private const val CONNECT_TIMEOUT_MS = 6_000
-    private const val READ_TIMEOUT_MS = 6_000
+    private const val CONNECT_TIMEOUT_MS = 8_000
+    private const val READ_TIMEOUT_MS = 8_000
+    private val VERSION_REGEX = Regex("(\\d+(?:\\.\\d+)*)")
 
     fun isInternetAvailable(context: Context): Boolean {
         val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
             as? ConnectivityManager ?: return false
         val activeNetwork = cm.activeNetwork ?: return false
         val capabilities = cm.getNetworkCapabilities(activeNetwork) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        // Rely on NET_CAPABILITY_INTERNET (some VPNs/mobile carriers/emulators omit VALIDATED even when online)
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     fun observeInternetAvailable(context: Context): Flow<Boolean> = callbackFlow {
@@ -66,17 +88,15 @@ object AppUpdateChecker {
 
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                trySend(isInternetAvailable(appContext))
+                trySend(true)
             }
 
             override fun onCapabilitiesChanged(
                 network: Network,
                 networkCapabilities: NetworkCapabilities
             ) {
-                val validated =
-                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                trySend(validated || isInternetAvailable(appContext))
+                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                trySend(hasInternet || isInternetAvailable(appContext))
             }
 
             override fun onLost(network: Network) {
@@ -108,48 +128,100 @@ object AppUpdateChecker {
             return@withContext UpdateCheckResult.Offline
         }
 
-        var connection: HttpURLConnection? = null
         try {
-            val url = URL(GITHUB_LATEST_RELEASE_API)
+            val latestResponse = fetchJson(GITHUB_LATEST_RELEASE_API, currentVersion)
+            when (latestResponse.first) {
+                HttpURLConnection.HTTP_OK -> {
+                    val body = latestResponse.second.orEmpty()
+                    Log.d(TAG, "GitHub /releases/latest returned 200")
+                    parseReleaseJson(body, currentVersion)
+                }
+
+                HttpURLConnection.HTTP_NOT_FOUND -> {
+                    // GitHub returns 404 on /releases/latest when only pre-releases exist OR no releases exist yet.
+                    // Fall back to /releases?per_page=10 so we can distinguish and still detect pre-releases!
+                    Log.d(TAG, "GitHub /releases/latest returned 404; checking /releases list fallback")
+                    val listResponse = fetchJson(GITHUB_RELEASES_LIST_API, currentVersion)
+                    when (listResponse.first) {
+                        HttpURLConnection.HTTP_OK -> {
+                            parseReleasesArrayJson(listResponse.second.orEmpty(), currentVersion)
+                        }
+                        HttpURLConnection.HTTP_NOT_FOUND -> {
+                            UpdateCheckResult.Error("GitHub repository not found or private (HTTP 404).")
+                        }
+                        HttpURLConnection.HTTP_FORBIDDEN -> {
+                            UpdateCheckResult.Error("GitHub API rate limit reached. Try again later.")
+                        }
+                        else -> {
+                            UpdateCheckResult.Error("Update server returned HTTP ${listResponse.first}.")
+                        }
+                    }
+                }
+
+                HttpURLConnection.HTTP_FORBIDDEN -> {
+                    UpdateCheckResult.Error("GitHub API rate limit reached. Try again later.")
+                }
+
+                else -> {
+                    UpdateCheckResult.Error("Update server returned HTTP ${latestResponse.first}.")
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "Network error checking updates: ${e.message}")
+            if (!isInternetAvailable(context)) {
+                UpdateCheckResult.Offline
+            } else {
+                UpdateCheckResult.Error("Network error: ${e.localizedMessage ?: "Could not reach GitHub"}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unexpected error checking updates: ${e.message}")
+            UpdateCheckResult.Error("Could not parse GitHub release info right now.")
+        }
+    }
+
+    private fun fetchJson(endpointUrl: String, currentVersion: String): Pair<Int, String?> {
+        var connection: HttpURLConnection? = null
+        return try {
+            val url = URL(endpointUrl)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
+                instanceFollowRedirects = true
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
                 setRequestProperty("Accept", "application/vnd.github+json")
                 setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
                 setRequestProperty("User-Agent", "80endance-Android/$currentVersion")
             }
-
-            when (val responseCode = connection.responseCode) {
-                HttpURLConnection.HTTP_OK -> {
-                    val body = connection.inputStream.bufferedReader().use { it.readText() }
-                    parseReleaseJson(body, currentVersion)
-                }
-
-                HttpURLConnection.HTTP_NOT_FOUND -> {
-                    // Repository has no published stable releases yet
-                    UpdateCheckResult.UpToDate(currentVersion)
-                }
-
-                HttpURLConnection.HTTP_FORBIDDEN -> {
-                    UpdateCheckResult.Error("GitHub rate limit reached. Try again later.")
-                }
-
-                else -> {
-                    UpdateCheckResult.Error("Update server returned HTTP $responseCode.")
-                }
-            }
-        } catch (e: IOException) {
-            if (!isInternetAvailable(context)) {
-                UpdateCheckResult.Offline
+            val code = connection.responseCode
+            val body = if (code in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
             } else {
-                UpdateCheckResult.Error("Could not check for updates right now.")
+                null
             }
-        } catch (e: Exception) {
-            UpdateCheckResult.Error("Could not check for updates right now.")
+            code to body
         } finally {
             connection?.disconnect()
         }
+    }
+
+    internal fun parseReleasesArrayJson(
+        jsonArrayText: String,
+        currentVersion: String
+    ): UpdateCheckResult {
+        val array = JSONArray(jsonArrayText)
+        val nonDrafts = mutableListOf<JSONObject>()
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            if (!obj.optBoolean("draft", false)) {
+                nonDrafts.add(obj)
+            }
+        }
+        if (nonDrafts.isEmpty()) {
+            return UpdateCheckResult.NoReleases(currentVersion)
+        }
+        // Prefer the newest stable release; if only pre-releases exist, inspect the newest pre-release.
+        val best = nonDrafts.firstOrNull { !it.optBoolean("prerelease", false) } ?: nonDrafts.first()
+        return evaluateReleaseObject(best, currentVersion, allowPrerelease = best.optBoolean("prerelease", false))
     }
 
     internal fun parseReleaseJson(
@@ -157,23 +229,29 @@ object AppUpdateChecker {
         currentVersion: String
     ): UpdateCheckResult {
         val json = JSONObject(jsonText)
-        if (json.optBoolean("draft", false) || json.optBoolean("prerelease", false)) {
+        return evaluateReleaseObject(json, currentVersion, allowPrerelease = false)
+    }
+
+    private fun evaluateReleaseObject(
+        json: JSONObject,
+        currentVersion: String,
+        allowPrerelease: Boolean
+    ): UpdateCheckResult {
+        if (json.optBoolean("draft", false)) {
+            return UpdateCheckResult.NoReleases(currentVersion)
+        }
+        val isPrerelease = json.optBoolean("prerelease", false)
+        if (isPrerelease && !allowPrerelease) {
             return UpdateCheckResult.UpToDate(currentVersion)
         }
 
         val tagName = json.optString("tag_name", "").trim()
-        if (tagName.isBlank()) {
-            return UpdateCheckResult.UpToDate(currentVersion)
+        val releaseName = json.optString("name", "").trim()
+        val effectiveTag = tagName.ifBlank { releaseName }
+        if (effectiveTag.isBlank()) {
+            return UpdateCheckResult.NoReleases(currentVersion)
         }
 
-        if (!isNewerVersion(latestTag = tagName, currentVersion = currentVersion)) {
-            return UpdateCheckResult.UpToDate(currentVersion)
-        }
-
-        val releaseTitle = json.optString("name", "").trim().ifBlank {
-            "80endance ${formatVersionLabel(tagName)}"
-        }
-        val releaseNotes = json.optString("body", "").trim()
         val rawHtmlUrl = json.optString("html_url", "").trim()
         val safeUrl = if (rawHtmlUrl.startsWith(GITHUB_RELEASES_REPO_PREFIX)) {
             rawHtmlUrl
@@ -181,20 +259,35 @@ object AppUpdateChecker {
             GITHUB_LATEST_RELEASE_WEB
         }
 
+        if (!isNewerVersion(latestTag = effectiveTag, currentVersion = currentVersion)) {
+            return UpdateCheckResult.UpToDate(
+                currentVersion = currentVersion,
+                latestFoundTag = effectiveTag,
+                releaseUrl = safeUrl
+            )
+        }
+
+        val releaseTitle = releaseName.ifBlank {
+            "80endance ${formatVersionLabel(effectiveTag)}"
+        }
+        val releaseNotes = json.optString("body", "").trim()
+
         return UpdateCheckResult.UpdateAvailable(
             AppUpdateInfo(
                 currentVersion = currentVersion,
-                latestVersion = tagName,
+                latestVersion = effectiveTag,
                 releaseTitle = releaseTitle,
                 releaseNotes = releaseNotes,
-                releaseUrl = safeUrl
+                releaseUrl = safeUrl,
+                isPrerelease = isPrerelease
             )
         )
     }
 
     /**
-     * Semantic version comparison supporting tags such as "v1.2.0", "1.10", "v1.0-build.5", etc.
-     * Returns true strictly when [latestTag] has a higher numeric version than [currentVersion].
+     * Flexible semantic version comparison supporting tags such as:
+     * "v1.2.0", "1.10", "Release 1.2", "80endance-v1.3.1", "v1.0.1-beta.2", etc.
+     * Returns true strictly when [latestTag] is newer than [currentVersion].
      */
     fun isNewerVersion(latestTag: String, currentVersion: String): Boolean {
         val latestParts = parseNumericSegments(latestTag) ?: return false
@@ -207,6 +300,10 @@ object AppUpdateChecker {
                 return latest > current
             }
         }
+        // Same numeric base: a stable release is newer than a pre-release (e.g., 1.2.0 > 1.2.0-beta)
+        val latestIsPre = hasPrereleaseSuffix(latestTag)
+        val currentIsPre = hasPrereleaseSuffix(currentVersion)
+        if (!latestIsPre && currentIsPre) return true
         return false
     }
 
@@ -215,8 +312,10 @@ object AppUpdateChecker {
         if (trimmed.isEmpty()) return "v1.0"
         return if (trimmed.startsWith("v", ignoreCase = true)) {
             "v${trimmed.substring(1)}"
-        } else {
+        } else if (trimmed.first().isDigit()) {
             "v$trimmed"
+        } else {
+            trimmed
         }
     }
 
@@ -227,7 +326,7 @@ object AppUpdateChecker {
         val targetUrl = if (releaseUrl.startsWith(GITHUB_RELEASES_REPO_PREFIX)) {
             releaseUrl
         } else {
-            GITHUB_LATEST_RELEASE_WEB
+            GITHUB_RELEASES_WEB
         }
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -241,20 +340,23 @@ object AppUpdateChecker {
     }
 
     private fun parseNumericSegments(raw: String): List<Int>? {
-        val cleaned = raw.trim()
-            .removePrefix("v")
-            .removePrefix("V")
-            .substringBefore('-')
-            .substringBefore('+')
-            .trim()
-        if (cleaned.isEmpty()) return null
-        val tokens = cleaned.split('.')
+        val match = VERSION_REGEX.find(raw.trim()) ?: return null
+        val tokens = match.groupValues[1].split('.')
         val numbers = ArrayList<Int>(tokens.size)
         for (token in tokens) {
             val value = token.toIntOrNull() ?: return null
             if (value < 0) return null
             numbers.add(value)
         }
-        return numbers
+        return numbers.takeIf { it.isNotEmpty() }
+    }
+
+    private fun hasPrereleaseSuffix(raw: String): Boolean {
+        val lower = raw.lowercase()
+        return lower.contains("-alpha") ||
+            lower.contains("-beta") ||
+            lower.contains("-rc") ||
+            lower.contains("-dev") ||
+            lower.contains("-pre")
     }
 }

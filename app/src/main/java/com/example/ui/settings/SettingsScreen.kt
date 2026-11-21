@@ -90,6 +90,7 @@ import com.example.data.AppThemeMode
 import com.example.data.DateUtils
 import com.example.data.FeedbackType
 import com.example.system.AppUpdateChecker
+import com.example.system.UpdateCheckStatusSummary
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
@@ -118,7 +119,9 @@ fun SettingsScreen(
     onSubmitFeedback: (type: FeedbackType, title: String, message: String, onDone: () -> Unit) -> Unit = { _, _, _, _ -> },
     isSubmittingFeedback: Boolean = false,
     isCheckingUpdates: Boolean = false,
+    updateStatusSummary: UpdateCheckStatusSummary? = null,
     onCheckForUpdates: () -> Unit = {},
+    onOpenGitHubReleases: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -661,49 +664,98 @@ fun SettingsScreen(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !isCheckingUpdates, onClick = onCheckForUpdates)
-                                .padding(vertical = 4.dp)
-                                .testTag("settings_check_updates_button"),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isCheckingUpdates, onClick = onCheckForUpdates)
+                                    .padding(vertical = 4.dp)
+                                    .testTag("settings_check_updates_button"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.SystemUpdate,
-                                    contentDescription = stringResource(R.string.update_check_title),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = stringResource(R.string.update_check_title),
-                                        style = MaterialTheme.typography.titleSmall
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SystemUpdate,
+                                        contentDescription = stringResource(R.string.update_check_title),
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
-                                    Text(
-                                        text = "80endance ${AppUpdateChecker.formatVersionLabel(BuildConfig.VERSION_NAME)} • GitHub Releases",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = stringResource(R.string.update_check_title),
+                                            style = MaterialTheme.typography.titleSmall
+                                        )
+                                        Text(
+                                            text = "Installed ${AppUpdateChecker.formatVersionLabel(BuildConfig.VERSION_NAME)} • GitHub Releases",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                if (isCheckingUpdates) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
                                     )
+                                } else {
+                                    TextButton(
+                                        onClick = onCheckForUpdates,
+                                        enabled = !isCheckingUpdates
+                                    ) {
+                                        Text(stringResource(R.string.update_check_action))
+                                    }
                                 }
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            if (isCheckingUpdates) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                TextButton(
-                                    onClick = onCheckForUpdates,
-                                    enabled = !isCheckingUpdates
+
+                            if (isCheckingUpdates || updateStatusSummary != null) {
+                                Surface(
+                                    color = when {
+                                        updateStatusSummary?.hasUpdate == true -> MaterialTheme.colorScheme.primaryContainer
+                                        updateStatusSummary?.isError == true -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                        else -> MaterialTheme.colorScheme.surfaceContainerLow
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_update_status_banner")
                                 ) {
-                                    Text(stringResource(R.string.update_check_action))
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (isCheckingUpdates) {
+                                                    "Checking GitHub Releases…"
+                                                } else {
+                                                    updateStatusSummary?.statusLine.orEmpty()
+                                                },
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = when {
+                                                    updateStatusSummary?.hasUpdate == true -> MaterialTheme.colorScheme.onPrimaryContainer
+                                                    updateStatusSummary?.isError == true -> MaterialTheme.colorScheme.onErrorContainer
+                                                    else -> MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                            if (!isCheckingUpdates && !updateStatusSummary?.detailLine.isNullOrBlank()) {
+                                                Text(
+                                                    text = updateStatusSummary!!.detailLine!!,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        TextButton(onClick = onOpenGitHubReleases) {
+                                            Text("Releases", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -63,12 +63,18 @@ import com.example.data.AttendanceRepository
 import com.example.data.DateUtils
 import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.AttendanceWidgetStore
 import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckResult
+import com.example.system.UpdateCheckStatusSummary
 import com.example.system.WidgetSnapshot
+import kotlinx.coroutines.delay
 import com.example.ui.admin.AdminPanelScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.calendar.CalendarScreen
@@ -168,20 +174,69 @@ private fun AppRoot(
     var pendingUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var isCheckingUpdates by remember { mutableStateOf(false) }
     var updateFeedbackMessage by remember { mutableStateOf<String?>(null) }
+    var updateStatusSummary by remember { mutableStateOf<UpdateCheckStatusSummary?>(null) }
+
+    fun buildUpdateSummary(result: UpdateCheckResult): UpdateCheckStatusSummary {
+        val now = System.currentTimeMillis()
+        val timeLabel = DateUtils.formatClockTime(now)
+        return when (result) {
+            is UpdateCheckResult.UpdateAvailable -> UpdateCheckStatusSummary(
+                checkedAtMillis = now,
+                statusLine = "Update available: ${AppUpdateChecker.formatVersionLabel(result.info.latestVersion)}",
+                detailLine = "Checked $timeLabel • Tap Check Now to view release",
+                hasUpdate = true
+            )
+            is UpdateCheckResult.UpToDate -> UpdateCheckStatusSummary(
+                checkedAtMillis = now,
+                statusLine = "Up to date (${AppUpdateChecker.formatVersionLabel(result.currentVersion)})",
+                detailLine = buildString {
+                    if (!result.latestFoundTag.isNullOrBlank()) {
+                        append("Latest on GitHub: ${AppUpdateChecker.formatVersionLabel(result.latestFoundTag)} • ")
+                    }
+                    append("Checked $timeLabel")
+                }
+            )
+            is UpdateCheckResult.NoReleases -> UpdateCheckStatusSummary(
+                checkedAtMillis = now,
+                statusLine = "Connected to GitHub • No releases published yet",
+                detailLine = "Installed ${AppUpdateChecker.formatVersionLabel(result.currentVersion)} • Checked $timeLabel"
+            )
+            is UpdateCheckResult.Offline -> UpdateCheckStatusSummary(
+                checkedAtMillis = now,
+                statusLine = "Offline — could not reach GitHub",
+                detailLine = "Checked $timeLabel",
+                isError = true
+            )
+            is UpdateCheckResult.Error -> UpdateCheckStatusSummary(
+                checkedAtMillis = now,
+                statusLine = result.message,
+                detailLine = "Checked $timeLabel",
+                isError = true
+            )
+        }
+    }
 
     // Automatically check GitHub Releases once internet is available after the app opens
     LaunchedEffect(isOnline) {
         if (isOnline && !hasAutoCheckedUpdate) {
-            when (val result = AppUpdateChecker.checkForUpdate(context)) {
-                is UpdateCheckResult.UpdateAvailable -> {
-                    hasAutoCheckedUpdate = true
-                    pendingUpdateInfo = result.info
+            isCheckingUpdates = true
+            try {
+                val result = AppUpdateChecker.checkForUpdate(context)
+                updateStatusSummary = buildUpdateSummary(result)
+                when (result) {
+                    is UpdateCheckResult.UpdateAvailable -> {
+                        hasAutoCheckedUpdate = true
+                        pendingUpdateInfo = result.info
+                    }
+                    is UpdateCheckResult.UpToDate,
+                    is UpdateCheckResult.NoReleases -> {
+                        hasAutoCheckedUpdate = true
+                    }
+                    is UpdateCheckResult.Offline,
+                    is UpdateCheckResult.Error -> Unit
                 }
-                is UpdateCheckResult.UpToDate -> {
-                    hasAutoCheckedUpdate = true
-                }
-                is UpdateCheckResult.Offline,
-                is UpdateCheckResult.Error -> Unit
+            } finally {
+                isCheckingUpdates = false
             }
         }
     }
@@ -191,17 +246,26 @@ private fun AppRoot(
             appScope.launch {
                 isCheckingUpdates = true
                 try {
-                    when (val result = AppUpdateChecker.checkForUpdate(context)) {
+                    val result = AppUpdateChecker.checkForUpdate(context)
+                    updateStatusSummary = buildUpdateSummary(result)
+                    when (result) {
                         is UpdateCheckResult.UpdateAvailable -> {
                             hasAutoCheckedUpdate = true
                             pendingUpdateInfo = result.info
                         }
                         is UpdateCheckResult.UpToDate -> {
                             hasAutoCheckedUpdate = true
+                            val tagSuffix = result.latestFoundTag?.let {
+                                " (Latest on GitHub: ${AppUpdateChecker.formatVersionLabel(it)})"
+                            }.orEmpty()
                             updateFeedbackMessage = context.getString(
                                 R.string.update_up_to_date,
                                 AppUpdateChecker.formatVersionLabel(result.currentVersion)
-                            )
+                            ) + tagSuffix
+                        }
+                        is UpdateCheckResult.NoReleases -> {
+                            hasAutoCheckedUpdate = true
+                            updateFeedbackMessage = "Connected to GitHub — no releases published yet."
                         }
                         is UpdateCheckResult.Offline -> {
                             updateFeedbackMessage = context.getString(R.string.update_offline_message)
@@ -214,6 +278,13 @@ private fun AppRoot(
                     isCheckingUpdates = false
                 }
             }
+        }
+    }
+
+    val openGitHubReleases: () -> Unit = {
+        val opened = AppUpdateChecker.openLatestRelease(context, AppUpdateChecker.GITHUB_RELEASES_WEB)
+        if (!opened) {
+            updateFeedbackMessage = context.getString(R.string.update_browser_error)
         }
     }
 
@@ -232,9 +303,11 @@ private fun AppRoot(
                         openCheckInFromNotification = openCheckInFromNotification,
                         onConsumeNotificationTrigger = onConsumeNotificationTrigger,
                         isCheckingUpdates = isCheckingUpdates,
+                        updateStatusSummary = updateStatusSummary,
                         updateFeedbackMessage = updateFeedbackMessage,
                         onConsumeUpdateFeedback = { updateFeedbackMessage = null },
-                        onCheckForUpdates = runManualUpdateCheck
+                        onCheckForUpdates = runManualUpdateCheck,
+                        onOpenGitHubReleases = openGitHubReleases
                     )
                 }
             }
@@ -262,9 +335,11 @@ private fun AuthenticatedAppShell(
     openCheckInFromNotification: Boolean,
     onConsumeNotificationTrigger: () -> Unit,
     isCheckingUpdates: Boolean,
+    updateStatusSummary: UpdateCheckStatusSummary?,
     updateFeedbackMessage: String?,
     onConsumeUpdateFeedback: () -> Unit,
-    onCheckForUpdates: () -> Unit
+    onCheckForUpdates: () -> Unit,
+    onOpenGitHubReleases: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -283,11 +358,41 @@ private fun AuthenticatedAppShell(
                     currentUserId = user.uid,
                     userEmail = user.email.orEmpty(),
                     googleDisplayName = user.displayName,
-                    googlePhotoUrl = user.photoUrl?.toString()
+                    googlePhotoUrl = user.photoUrl?.toString(),
+                    isVerifiedAdmin = isAdmin
                 )
             }
         }
     )
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isAppForeground by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner, attendanceViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    isAppForeground = true
+                    attendanceViewModel.setPresence(true)
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    isAppForeground = false
+                    attendanceViewModel.setPresence(false)
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            attendanceViewModel.setPresence(false)
+        }
+    }
+    LaunchedEffect(isAppForeground, attendanceViewModel) {
+        while (isAppForeground) {
+            attendanceViewModel.setPresence(true)
+            delay(120_000L)
+        }
+    }
 
     val state by attendanceViewModel.uiState.collectAsStateWithLifecycle()
     val scopeMode by attendanceViewModel.scopeMode.collectAsStateWithLifecycle()
@@ -434,6 +539,7 @@ private fun AuthenticatedAppShell(
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
                             onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
+                            onDismissBroadcast = { id -> attendanceViewModel.dismissBroadcastAlert(id) },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -464,6 +570,7 @@ private fun AuthenticatedAppShell(
                             onManualSync = { attendanceViewModel.triggerManualSync() },
                             onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
                             onSignOut = {
+                                attendanceViewModel.setPresence(false)
                                 AttendanceWidgetStore.saveAndRefresh(context, WidgetSnapshot(signedIn = false))
                                 signOutGoogle(credentialManager, scope)
                             },
@@ -477,7 +584,9 @@ private fun AuthenticatedAppShell(
                             },
                             isSubmittingFeedback = isSaving,
                             isCheckingUpdates = isCheckingUpdates,
+                            updateStatusSummary = updateStatusSummary,
                             onCheckForUpdates = onCheckForUpdates,
+                            onOpenGitHubReleases = onOpenGitHubReleases,
                             bottomBarPadding = bottomScrollPadding
                         )
                     }

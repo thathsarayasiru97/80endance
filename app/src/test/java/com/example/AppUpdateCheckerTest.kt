@@ -107,4 +107,40 @@ class AppUpdateCheckerTest {
         val result = AppUpdateChecker.parseReleaseJson(json, "1.0") as UpdateCheckResult.UpdateAvailable
         assertEquals(AppUpdateChecker.GITHUB_LATEST_RELEASE_WEB, result.info.releaseUrl)
     }
+
+    @Test
+    fun isNewerVersion_handlesPrefixedTagsAndPrereleaseOrdering() {
+        assertTrue(AppUpdateChecker.isNewerVersion("Release 1.2", "1.0"))
+        assertTrue(AppUpdateChecker.isNewerVersion("80endance-v1.3.0", "1.2.9"))
+        assertTrue(AppUpdateChecker.isNewerVersion("v1.2.0", "1.2.0-beta"))
+        assertFalse(AppUpdateChecker.isNewerVersion("v1.2.0-beta", "1.2.0"))
+    }
+
+    @Test
+    fun parseReleasesArrayJson_handlesEmptyPrereleaseAndUpToDate() {
+        val noReleases = AppUpdateChecker.parseReleasesArrayJson("[]", currentVersion = "1.0")
+        assertTrue(noReleases is UpdateCheckResult.NoReleases)
+
+        val prereleaseOnlyJson = """
+            [
+              {
+                "tag_name": "v1.3.0-beta1",
+                "name": "Beta 1.3",
+                "body": "Testing new update",
+                "html_url": "https://github.com/thathsarayasiru97/80endence/releases/tag/v1.3.0-beta1",
+                "draft": false,
+                "prerelease": true
+              }
+            ]
+        """.trimIndent()
+        val preResult = AppUpdateChecker.parseReleasesArrayJson(prereleaseOnlyJson, currentVersion = "1.0")
+        assertTrue(preResult is UpdateCheckResult.UpdateAvailable)
+        val info = (preResult as UpdateCheckResult.UpdateAvailable).info
+        assertEquals("v1.3.0-beta1", info.latestVersion)
+        assertTrue(info.isPrerelease)
+
+        val upToDateResult = AppUpdateChecker.parseReleasesArrayJson(prereleaseOnlyJson, currentVersion = "1.3.0")
+        assertTrue(upToDateResult is UpdateCheckResult.UpToDate)
+        assertEquals("v1.3.0-beta1", (upToDateResult as UpdateCheckResult.UpToDate).latestFoundTag)
+    }
 }

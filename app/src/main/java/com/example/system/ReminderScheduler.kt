@@ -1,18 +1,25 @@
 package com.example.system
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.example.MainActivity
 import com.example.R
 import java.util.Calendar
 
 object ReminderScheduler {
     const val CHANNEL_ID = "daily_checkin_channel"
+    const val BROADCAST_CHANNEL_ID = "admin_broadcast_channel"
     const val NOTIFICATION_ID = 8001
     const val CONFIRMATION_NOTIFICATION_ID = 8002
     const val SUNDAY_PREP_NOTIFICATION_ID = 8003
@@ -38,7 +45,59 @@ object ReminderScheduler {
             ).apply {
                 description = context.getString(R.string.notification_channel_desc)
             }
+            val broadcastChannel = NotificationChannel(
+                BROADCAST_CHANNEL_ID,
+                "School & Class Announcements",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Custom announcements sent to your grade, stream, or class."
+            }
             manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(broadcastChannel)
+        }
+    }
+
+    fun showBroadcastNotification(
+        context: Context,
+        broadcastId: String,
+        title: String,
+        message: String
+    ) {
+        val appContext = context.applicationContext
+        ensureNotificationChannel(appContext)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        val openIntent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            appContext,
+            (broadcastId.hashCode() and 0x7FFF) + 9000,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(appContext, BROADCAST_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(contentPendingIntent)
+            .build()
+
+        runCatching {
+            val notifId = 9100 + (broadcastId.hashCode().and(0x3FF))
+            NotificationManagerCompat.from(appContext).notify(notifId, notification)
+        }.onFailure { e ->
+            Log.w(TAG, "Could not show broadcast notification: ${e.message}")
         }
     }
 

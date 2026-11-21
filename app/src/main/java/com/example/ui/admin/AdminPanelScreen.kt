@@ -1,6 +1,8 @@
 package com.example.ui.admin
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -75,7 +78,9 @@ import com.example.data.FeedbackType
 import com.example.data.Notice
 import com.example.data.NoticeTargetType
 import com.example.data.UserProfile
+import androidx.compose.ui.draw.clip
 import com.example.ui.components.ProfileAvatar
+import com.example.ui.components.PulsingLiveDot
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.AdminViewModel
 import java.util.Locale
@@ -140,7 +145,7 @@ fun AdminPanelScreen(
                 ) {
                     Icon(Icons.Rounded.Add, contentDescription = "Add notice")
                 }
-            } else if (selectedTab == 2) {
+            } else if (selectedTab == 3) {
                 FloatingActionButton(
                     onClick = { showAddEventDialog = true },
                     modifier = Modifier.testTag("admin_add_event_fab")
@@ -156,16 +161,56 @@ fun AdminPanelScreen(
                 .padding(innerPadding),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Live Online & Total Accounts Presence Strip
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("admin_live_presence_bar")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PulsingLiveDot(color = semantic.present, dotSize = 8.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${state.onlineNowCount} online right now",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = semantic.present
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = "${state.students.size} accounts",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
             val openFeedbackCount = remember(state.feedbackItems) {
                 state.feedbackItems.count { it.statusEnum == FeedbackStatus.OPEN }
             }
             PrimaryScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Notices") })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Students (${state.students.size})") })
-                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Calendar") })
+                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Notify") }, modifier = Modifier.testTag("admin_tab_notify"))
+                Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text("Calendar") })
                 Tab(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
                     text = {
                         Text(
                             if (openFeedbackCount > 0) "Feedback ($openFeedbackCount)" else "Feedback"
@@ -267,7 +312,7 @@ fun AdminPanelScreen(
                     }
 
                     1 -> {
-                        val filteredStudents = remember(state.students, searchQuery, studentFilter) {
+                        val filteredStudents = remember(state.students, searchQuery, studentFilter, state.presenceNowMillis) {
                             state.students.filter { st ->
                                 val matchesQuery = searchQuery.isBlank() ||
                                     st.fullName.contains(searchQuery, ignoreCase = true) ||
@@ -275,12 +320,17 @@ fun AdminPanelScreen(
                                     st.alStream.contains(searchQuery, ignoreCase = true) ||
                                     st.email.contains(searchQuery, ignoreCase = true)
                                 val matchesFilter = when (studentFilter) {
+                                    "online" -> st.isCurrentlyOnline(state.presenceNowMillis)
                                     "risk" -> st.quickOverallPercent < state.appSettings.defaultEligibilityPercent
                                     "eligible" -> st.quickOverallPercent >= state.appSettings.defaultEligibilityPercent
                                     else -> true
                                 }
                                 matchesQuery && matchesFilter
-                            }
+                            }.sortedWith(
+                                compareByDescending<UserProfile> { it.isCurrentlyOnline(state.presenceNowMillis) }
+                                    .thenByDescending { it.lastSeenAt?.seconds ?: 0L }
+                                    .thenBy { it.fullName.lowercase() }
+                            )
                         }
 
                         LazyColumn(
@@ -298,8 +348,17 @@ fun AdminPanelScreen(
                                 )
                             }
                             item {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
                                     FilterChip(selected = studentFilter == "all", onClick = { studentFilter = "all" }, label = { Text("All") })
+                                    FilterChip(
+                                        selected = studentFilter == "online",
+                                        onClick = { studentFilter = "online" },
+                                        label = { Text("Online (${state.onlineNowCount})") },
+                                        modifier = Modifier.testTag("admin_filter_online")
+                                    )
                                     FilterChip(selected = studentFilter == "risk", onClick = { studentFilter = "risk" }, label = { Text("Below 80%") })
                                     FilterChip(selected = studentFilter == "eligible", onClick = { studentFilter = "eligible" }, label = { Text("Eligible") })
                                 }
@@ -307,6 +366,12 @@ fun AdminPanelScreen(
                             items(filteredStudents, key = { it.userId }) { student ->
                                 val pct = student.quickOverallPercent
                                 val isOk = pct >= state.appSettings.defaultEligibilityPercent
+                                val studentOnline = student.isCurrentlyOnline(state.presenceNowMillis)
+                                val lastSeenLabel = DateUtils.formatLastSeen(
+                                    timestampMillis = student.lastSeenAt?.toDate()?.time,
+                                    isOnline = studentOnline,
+                                    nowMillis = state.presenceNowMillis
+                                )
                                 Card(
                                     shape = RoundedCornerShape(18.dp),
                                     colors = CardDefaults.cardColors(
@@ -323,14 +388,26 @@ fun AdminPanelScreen(
                                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        ProfileAvatar(
-                                            customAvatarBase64 = student.customAvatarBase64,
-                                            googlePhotoUrl = student.photoUrl,
-                                            displayName = student.fullName,
-                                            size = 46.dp,
-                                            onClick = { previewAvatarStudent = student },
-                                            modifier = Modifier.testTag("admin_student_avatar_${student.userId}")
-                                        )
+                                        Box {
+                                            ProfileAvatar(
+                                                customAvatarBase64 = student.customAvatarBase64,
+                                                googlePhotoUrl = student.photoUrl,
+                                                displayName = student.fullName,
+                                                size = 46.dp,
+                                                onClick = { previewAvatarStudent = student },
+                                                modifier = Modifier.testTag("admin_student_avatar_${student.userId}")
+                                            )
+                                            if (studentOnline) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomEnd)
+                                                        .size(13.dp)
+                                                        .clip(CircleShape)
+                                                        .background(semantic.present)
+                                                        .border(2.dp, MaterialTheme.colorScheme.surfaceContainerLowest, CircleShape)
+                                                )
+                                            }
+                                        }
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(student.fullName, style = MaterialTheme.typography.titleSmall)
                                             Text(
@@ -343,6 +420,26 @@ fun AdminPanelScreen(
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                if (studentOnline) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(7.dp)
+                                                            .clip(CircleShape)
+                                                            .background(semantic.present)
+                                                    )
+                                                }
+                                                Text(
+                                                    text = lastSeenLabel,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = if (studentOnline) FontWeight.SemiBold else FontWeight.Normal,
+                                                    color = if (studentOnline) semantic.present else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.testTag("admin_student_last_seen_${student.userId}")
+                                                )
+                                            }
                                         }
                                         Surface(
                                             color = if (isOk) semantic.presentContainer else semantic.absentContainer,
@@ -362,6 +459,28 @@ fun AdminPanelScreen(
                     }
 
                     2 -> {
+                        AdminBroadcastTab(
+                            students = state.students,
+                            broadcasts = state.broadcasts,
+                            isBusy = state.isBusy,
+                            onSendBroadcast = { title, message, targetAll, grades, streams, classes, userIds, summary, onDone ->
+                                viewModel.sendBroadcastNotification(
+                                    title = title,
+                                    message = message,
+                                    targetAll = targetAll,
+                                    targetGrades = grades,
+                                    targetStreams = streams,
+                                    targetClasses = classes,
+                                    targetUserIds = userIds,
+                                    audienceSummary = summary,
+                                    onDone = onDone
+                                )
+                            },
+                            onDeleteBroadcast = { id -> viewModel.deleteBroadcastNotification(id) }
+                        )
+                    }
+
+                    3 -> {
                         val sortedEvents = remember(state.calendarEvents, todayKey) {
                             val upcoming = state.calendarEvents
                                 .filter { it.dateKey >= todayKey }
@@ -521,7 +640,7 @@ fun AdminPanelScreen(
                         }
                     }
 
-                    3 -> {
+                    4 -> {
                         LazyColumn(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -654,12 +773,24 @@ fun AdminPanelScreen(
                         onClick = { previewAvatarStudent = student },
                         modifier = Modifier.testTag("admin_detail_student_avatar")
                     )
+                    val detailOnline = student.isCurrentlyOnline(state.presenceNowMillis)
+                    val detailLastSeen = DateUtils.formatLastSeen(
+                        timestampMillis = student.lastSeenAt?.toDate()?.time,
+                        isOnline = detailOnline,
+                        nowMillis = state.presenceNowMillis
+                    )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(student.fullName, style = MaterialTheme.typography.titleLarge)
                         Text(
                             "${student.className} • ${student.alStream} • ${student.email}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = detailLastSeen,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (detailOnline) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (detailOnline) semantic.present else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
                             text = if (!student.customAvatarBase64.isNullOrBlank()) {

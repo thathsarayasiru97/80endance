@@ -14,6 +14,7 @@ import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStatus
+import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
@@ -23,6 +24,8 @@ import com.example.data.NoticeCategory
 import com.example.data.UserProfile
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
+import com.example.system.UpdateCheckStatusSummary
+import com.example.ui.admin.AdminBroadcastTab
 import com.example.ui.admin.AdminNoSchoolCard
 import com.example.ui.admin.AdminTermRolloverCard
 import com.example.ui.calendar.CalendarScreen
@@ -558,5 +561,108 @@ class ScreensRenderRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("admin_term_rollover_card").assertIsDisplayed()
         composeTestRule.onNodeWithTag("admin_rollover_confirm_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreenShowsCommunityCountPillAdminOnlinePillAndBroadcastBanner() {
+        val stateWithLiveCommunity = sampleState.copy(
+            totalAccounts = 128,
+            adminOnlineNowCount = 9,
+            unreadBroadcasts = listOf(
+                BroadcastNotification(
+                    id = "bc_1",
+                    title = "Special Assembly Tomorrow",
+                    message = "All A/L students report to the main hall by 7:20 AM.",
+                    targetAll = true,
+                    audienceSummary = "Everyone (All Students)"
+                )
+            )
+        )
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = stateWithLiveCommunity,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(100L)
+        composeTestRule.onNodeWithTag("home_community_count_pill").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_online_now_pill").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_broadcast_alert_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun adminBroadcastTabOpensConfirmDialogOnSend() {
+        val students = listOf(
+            sampleState.profile!!.copy(id = "u1", userId = "u1"),
+            UserProfile(
+                id = "u2",
+                userId = "u2",
+                firstName = "Nimal",
+                lastName = "Silva",
+                grade = "Grade 12",
+                alStream = "Bio Science",
+                className = "12B1"
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                AdminBroadcastTab(
+                    students = students,
+                    broadcasts = emptyList(),
+                    isBusy = false,
+                    onSendBroadcast = { _, _, _, _, _, _, _, _, onDone -> onDone() },
+                    onDeleteBroadcast = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_broadcast_title_input").performTextInput("Exam Room Change")
+        composeTestRule.onNodeWithTag("admin_broadcast_message_input").performTextInput("13M2 moved to Block B.")
+        composeTestRule.onNodeWithTag("admin_broadcast_lazy_column")
+            .performScrollToNode(hasTestTag("admin_broadcast_send_button"))
+        composeTestRule.onNodeWithTag("admin_broadcast_send_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_broadcast_confirm_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_broadcast_confirm_send_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsScreenDisplaysUpdateStatusBanner() {
+        val status = UpdateCheckStatusSummary(
+            checkedAtMillis = 1_750_000_000_000L,
+            statusLine = "Up to date (latest on GitHub: v1.0)",
+            detailLine = "Checked at 10:30 AM",
+            hasUpdate = false,
+            isError = false
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    SettingsScreen(
+                        state = sampleState,
+                        isVerifiedAdmin = false,
+                        updateStatusSummary = status,
+                        onEditProfile = {},
+                        onUpdatePreferences = { _, _, _, _ -> },
+                        onPreviewCheckInPopup = {},
+                        onManualSync = {},
+                        onOpenAdminPanel = {},
+                        onSignOut = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_update_status_banner"))
+        composeTestRule.onNodeWithTag("settings_update_status_banner").assertIsDisplayed()
     }
 }

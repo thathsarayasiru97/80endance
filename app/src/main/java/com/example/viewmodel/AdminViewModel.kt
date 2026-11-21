@@ -9,9 +9,11 @@ import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStatus
+import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventTargetType
 import com.example.data.CalendarEventType
+import com.example.data.CommunityStats
 import com.example.data.DateUtils
 import com.example.data.FeedbackReport
 import com.example.data.FeedbackStatus
@@ -41,6 +43,9 @@ data class AdminUiState(
     val terms: List<AcademicTerm> = SriLankaCalendarDefaults.defaultTerms,
     val calendarEvents: List<CalendarEvent> = SriLankaCalendarDefaults.defaultEvents,
     val feedbackItems: List<FeedbackReport> = emptyList(),
+    val broadcasts: List<BroadcastNotification> = emptyList(),
+    val onlineNowCount: Int = 0,
+    val presenceNowMillis: Long = System.currentTimeMillis(),
     val appSettings: AppSettings = AppSettings(),
     val selectedStudent: UserProfile? = null,
     val selectedStudentRecords: List<AttendanceRecord> = emptyList(),
@@ -77,29 +82,62 @@ class AdminViewModel(
             }
         }
 
+    private val presenceTickFlow: Flow<Long> = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            kotlinx.coroutines.delay(30_000L)
+        }
+    }
+
+    private var lastSyncedAccountCount: Int = -1
+
+    private val adminSecondaryFlow: Flow<AdminSecondaryBundle> = combine(
+        repository.observeAppSettings().safeStream(AppSettings(), "settings"),
+        repository.observeAllFeedbackAdmin().safeStream(emptyList(), "feedback"),
+        repository.observeBroadcastNotifications().safeStream(emptyList(), "broadcasts"),
+        repository.observeCommunityStats().safeStream(CommunityStats(), "communityStats"),
+        presenceTickFlow
+    ) { settings, feedback, broadcasts, communityStats, nowMs ->
+        AdminSecondaryBundle(settings, feedback, broadcasts, communityStats, nowMs)
+    }
+
     val uiState: StateFlow<AdminUiState> = combine(
         repository.observeAllStudentsAdmin().safeStream(emptyList(), "students"),
         repository.observeAllNoticesAdmin().safeStream(emptyList(), "notices"),
         repository.observePublishedTerms().safeStream(emptyList(), "terms"),
         repository.observePublishedCalendarEvents().safeStream(emptyList(), "events"),
         combine(
-            repository.observeAppSettings().safeStream(AppSettings(), "settings"),
-            repository.observeAllFeedbackAdmin().safeStream(emptyList(), "feedback"),
+            adminSecondaryFlow,
             _selectedStudentId,
             selectedRecordsFlow,
             _isBusy
-        ) { settings, feedback, selectedId, selectedRecords, busy ->
-            AdminExtras(settings, feedback, selectedId, selectedRecords, busy)
+        ) { secondary, selectedId, selectedRecords, busy ->
+            AdminExtras(secondary, selectedId, selectedRecords, busy)
         }
     ) { students, notices, terms, events, extras ->
+        val sec = extras.secondary
+        // Reconcile the public /app_stats/community counter whenever admin observes an exact count mismatch
+        if (students.isNotEmpty() &&
+            students.size != sec.communityStats.totalAccounts &&
+            students.size != lastSyncedAccountCount
+        ) {
+            lastSyncedAccountCount = students.size
+            viewModelScope.launch {
+                repository.syncCommunityAccountCountAdmin(students.size)
+            }
+        }
         val selectedStudent = students.firstOrNull { it.userId == extras.selectedId }
+        val onlineNowCount = students.count { it.isCurrentlyOnline(sec.nowMs) }
         AdminUiState(
             students = students,
             notices = notices,
             terms = terms.ifEmpty { SriLankaCalendarDefaults.defaultTerms },
             calendarEvents = events.ifEmpty { SriLankaCalendarDefaults.defaultEvents },
-            feedbackItems = extras.feedback,
-            appSettings = extras.settings,
+            feedbackItems = sec.feedback,
+            broadcasts = sec.broadcasts,
+            onlineNowCount = onlineNowCount,
+            presenceNowMillis = sec.nowMs,
+            appSettings = sec.settings,
             selectedStudent = selectedStudent,
             selectedStudentRecords = extras.selectedRecords,
             isBusy = extras.busy
@@ -461,9 +499,57 @@ class AdminViewModel(
         }
     }
 
-    private data class AdminExtras(
+    fun sendBroadcastNotification(
+        title: String,
+        message: String,
+        targetAll: Boolean,
+        targetGrades: List<String>,
+        targetStreams: List<String>,
+        targetClasses: List<String>,
+        targetUserIds: List<String>,
+        audienceSummary: String,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.sendBroadcastNotification(
+                title = title,
+                message = message,
+                targetAll = targetAll,
+                targetGrades = targetGrades,
+                targetStreams = targetStreams,
+                targetClasses = targetClasses,
+                targetUserIds = targetUserIds,
+                audienceSummary = audienceSummary
+            )
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = "Notification released to $audienceSummary"
+                onDone()
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not release notification"
+            }
+        }
+    }
+
+    fun deleteBroadcastNotification(notificationId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteBroadcastNotification(notificationId)
+            res.onSuccess { _snackbar.value = "Broadcast removed" }
+                .onFailure { e -> _snackbar.value = e.message ?: "Delete failed" }
+        }
+    }
+
+    private data class AdminSecondaryBundle(
         val settings: AppSettings,
         val feedback: List<FeedbackReport>,
+        val broadcasts: List<BroadcastNotification>,
+        val communityStats: CommunityStats,
+        val nowMs: Long
+    )
+
+    private data class AdminExtras(
+        val secondary: AdminSecondaryBundle,
         val selectedId: String?,
         val selectedRecords: List<AttendanceRecord>,
         val busy: Boolean
