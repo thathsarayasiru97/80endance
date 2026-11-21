@@ -1,15 +1,20 @@
 package com.example
 
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import com.example.data.AttendanceRecord
+import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.UserProfile
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
+import com.example.ui.admin.AdminNoSchoolCard
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.DailyCheckInDialog
 import com.example.ui.components.LiquidGlassBackdropHost
@@ -241,5 +246,79 @@ class ScreensRenderRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("profile_photo_dialog").assertIsDisplayed()
         composeTestRule.onNodeWithTag("choose_profile_photo_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreenShowsMissedDayCatchUpBanner() {
+        val catchUpState = sampleState.copy(
+            missedSchoolDays = listOf("2026-11-19", "2026-11-18")
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = catchUpState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("home_catchup_card"))
+        composeTestRule.onNodeWithTag("home_catchup_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("catchup_present_2026-11-19").assertIsDisplayed()
+    }
+
+    @Test
+    fun reportsScreenShowsWhatIfSimulatorAndPatternsChart() {
+        val stateWithRecords = sampleState.copy(
+            attendanceRecords = listOf(
+                AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.PRESENT.raw),
+                AttendanceRecord(dateKey = "2026-10-09", status = AttendanceStatus.ABSENT.raw),
+                AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw),
+                AttendanceRecord(dateKey = "2026-11-03", status = AttendanceStatus.SCHOOL_EVENT.raw)
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    ReportsScreen(state = stateWithRecords)
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("what_if_simulator_card"))
+        composeTestRule.onNodeWithTag("what_if_simulator_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("attendance_patterns_card"))
+        composeTestRule.onNodeWithTag("attendance_patterns_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun adminNoSchoolCardRendersAllModesAndTargeting() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier.verticalScroll(
+                        androidx.compose.foundation.rememberScrollState()
+                    )
+                ) {
+                    AdminNoSchoolCard(
+                        isBusy = false,
+                        onMarkNoSchoolDays = { _, _, _, _, _ -> }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_no_school_card").assertExists()
+        composeTestRule.onNodeWithTag("admin_no_school_mode_selector").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_no_school_custom_reason_chip").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_mark_no_school_button").performScrollTo().assertIsDisplayed()
     }
 }

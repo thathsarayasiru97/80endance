@@ -29,6 +29,45 @@ data class WeekDaySummary(
     val isToday: Boolean
 )
 
+data class SkipSimulationResult(
+    val extraSkips: Int,
+    val extraAttends: Int,
+    val projectedAttended: Int,
+    val projectedTotal: Int,
+    val projectedPercent: Double,
+    val percentDelta: Double,
+    val willStayEligible: Boolean,
+    val remainingSafeSkips: Int,
+    val daysNeededToRecover: Int
+)
+
+data class MonthlyAttendancePoint(
+    val yearMonthKey: String,
+    val shortLabel: String,
+    val fullLabel: String,
+    val percentage: Double,
+    val attendedDays: Int,
+    val totalDays: Int
+)
+
+data class WeekdayStat(
+    val dayIndex: Int,
+    val shortName: String,
+    val fullName: String,
+    val attendedDays: Int,
+    val absentDays: Int,
+    val totalDays: Int,
+    val percentage: Double
+)
+
+data class AttendancePatternInsights(
+    val monthlyPoints: List<MonthlyAttendancePoint>,
+    val weekdayStats: List<WeekdayStat>,
+    val mostSkippedWeekday: WeekdayStat?,
+    val bestWeekday: WeekdayStat?,
+    val bestMonth: MonthlyAttendancePoint?
+)
+
 object AttendanceCalculator {
 
     fun resolveActiveTerm(terms: List<AcademicTerm>, todayKey: String = DateUtils.todayKey()): AcademicTerm {
@@ -223,10 +262,189 @@ object AttendanceCalculator {
         return holiday == null
     }
 
+    fun filterCalendarEventsForStudent(
+        events: List<CalendarEvent>,
+        profile: UserProfile?
+    ): List<CalendarEvent> {
+        return events.filter { it.published && it.appliesToStudent(profile) }
+    }
+
+    /**
+     * Finds recent past weekdays (before [todayKey]) that are school days for this student
+     * and do not yet have an attendance record, so HomeScreen can offer 1-tap catch-up.
+     */
+    fun findUnloggedRecentSchoolDays(
+        records: List<AttendanceRecord>,
+        calendarEvents: List<CalendarEvent>,
+        activeTermStartDate: String,
+        todayKey: String = DateUtils.todayKey(),
+        lookbackCalendarDays: Int = 10,
+        maxItems: Int = 5
+    ): List<String> {
+        val loggedDates = records.map { it.dateKey }.toSet()
+        val nonSchoolDates = calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val missing = mutableListOf<String>()
+        for (offset in 1..lookbackCalendarDays) {
+            val candidate = DateUtils.addDays(todayKey, -offset)
+            if (activeTermStartDate.length == 10 && candidate < activeTermStartDate) break
+            if (DateUtils.isWeekend(candidate)) continue
+            if (candidate in nonSchoolDates) continue
+            if (candidate !in loggedDates) {
+                missing.add(candidate)
+                if (missing.size >= maxItems) break
+            }
+        }
+        return missing
+    }
+
+    /**
+     * Interactive "What-If" simulator projecting Term or Overall attendance after
+     * skipping [extraSkips] future school days or attending [extraAttends] future school days.
+     */
+    fun simulateFutureSkips(
+        stats: AttendanceStats,
+        extraSkips: Int,
+        extraAttends: Int = 0
+    ): SkipSimulationResult {
+        val skips = max(0, extraSkips)
+        val attends = max(0, extraAttends)
+        val projectedAttended = stats.effectiveAttended + attends
+        val projectedTotal = stats.totalCountedDays + skips + attends
+        val threshold = stats.thresholdPercent.coerceIn(50, 99)
+
+        val projectedPercent = if (projectedTotal <= 0) {
+            100.0
+        } else {
+            (projectedAttended.toDouble() / projectedTotal.toDouble()) * 100.0
+        }
+        val willStayEligible = projectedTotal == 0 || (projectedAttended * 100 >= threshold * projectedTotal)
+        val remainingSafeSkips = if (projectedTotal <= 0 || !willStayEligible) {
+            0
+        } else {
+            max(0, ((projectedAttended * 100) - (threshold * projectedTotal)) / threshold)
+        }
+        val daysNeededToRecover = if (willStayEligible || projectedTotal <= 0) {
+            0
+        } else {
+            val numerator = (threshold * projectedTotal) - (projectedAttended * 100)
+            val denominator = 100 - threshold
+            max(1, (numerator + denominator - 1) / denominator)
+        }
+
+        return SkipSimulationResult(
+            extraSkips = skips,
+            extraAttends = attends,
+            projectedAttended = projectedAttended,
+            projectedTotal = projectedTotal,
+            projectedPercent = projectedPercent,
+            percentDelta = projectedPercent - stats.percentage,
+            willStayEligible = willStayEligible,
+            remainingSafeSkips = remainingSafeSkips,
+            daysNeededToRecover = daysNeededToRecover
+        )
+    }
+
+    /**
+     * Builds monthly attendance trend points (chronological, up to [maxMonths]) and
+     * Monday–Friday weekday habit insights from logged school-day records.
+     */
+    fun calculateAttendanceInsights(
+        records: List<AttendanceRecord>,
+        maxMonths: Int = 6
+    ): AttendancePatternInsights {
+        val validRecords = records.filter { rec ->
+            rec.dateKey.length == 10 &&
+                !DateUtils.isWeekend(rec.dateKey) &&
+                rec.statusEnum != AttendanceStatus.HOLIDAY
+        }
+
+        val monthlyPoints = validRecords
+            .groupBy { it.dateKey.substring(0, 7) }
+            .toSortedMap()
+            .entries
+            .toList()
+            .takeLast(maxMonths)
+            .mapNotNull { (ym, recs) ->
+                val attended = recs.count {
+                    it.statusEnum == AttendanceStatus.PRESENT ||
+                        it.statusEnum == AttendanceStatus.MEDICAL ||
+                        it.statusEnum == AttendanceStatus.SCHOOL_EVENT
+                }
+                val total = recs.count {
+                    it.statusEnum == AttendanceStatus.PRESENT ||
+                        it.statusEnum == AttendanceStatus.MEDICAL ||
+                        it.statusEnum == AttendanceStatus.SCHOOL_EVENT ||
+                        it.statusEnum == AttendanceStatus.ABSENT
+                }
+                if (total <= 0) null else {
+                    MonthlyAttendancePoint(
+                        yearMonthKey = ym,
+                        shortLabel = DateUtils.formatShortMonth(ym),
+                        fullLabel = DateUtils.currentMonthYearLabel("$ym-01"),
+                        percentage = (attended.toDouble() / total.toDouble()) * 100.0,
+                        attendedDays = attended,
+                        totalDays = total
+                    )
+                }
+            }
+
+        val shortNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri")
+        val fullNames = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+        val attendedByDay = IntArray(5)
+        val absentByDay = IntArray(5)
+
+        validRecords.forEach { rec ->
+            val dow = DateUtils.weekdayIndexMonToFri(rec.dateKey)
+            if (dow in 0..4) {
+                when (rec.statusEnum) {
+                    AttendanceStatus.PRESENT,
+                    AttendanceStatus.MEDICAL,
+                    AttendanceStatus.SCHOOL_EVENT -> attendedByDay[dow]++
+                    AttendanceStatus.ABSENT -> absentByDay[dow]++
+                    AttendanceStatus.HOLIDAY -> Unit
+                }
+            }
+        }
+
+        val weekdayStats = (0..4).map { idx ->
+            val att = attendedByDay[idx]
+            val abs = absentByDay[idx]
+            val tot = att + abs
+            val pct = if (tot <= 0) 0.0 else (att.toDouble() / tot.toDouble()) * 100.0
+            WeekdayStat(
+                dayIndex = idx,
+                shortName = shortNames[idx],
+                fullName = fullNames[idx],
+                attendedDays = att,
+                absentDays = abs,
+                totalDays = tot,
+                percentage = pct
+            )
+        }
+
+        val activeWeekdays = weekdayStats.filter { it.totalDays > 0 }
+        val mostSkipped = activeWeekdays
+            .filter { it.absentDays > 0 }
+            .maxWithOrNull(compareBy<WeekdayStat> { it.absentDays }.thenBy { -it.percentage })
+        val bestWeekday = activeWeekdays
+            .maxWithOrNull(compareBy<WeekdayStat> { it.percentage }.thenBy { it.totalDays })
+        val bestMonth = monthlyPoints
+            .maxWithOrNull(compareBy<MonthlyAttendancePoint> { it.percentage }.thenBy { it.totalDays })
+
+        return AttendancePatternInsights(
+            monthlyPoints = monthlyPoints,
+            weekdayStats = weekdayStats,
+            mostSkippedWeekday = mostSkipped,
+            bestWeekday = bestWeekday,
+            bestMonth = bestMonth
+        )
+    }
+
     fun filterNoticesForStudent(notices: List<Notice>, profile: UserProfile?): List<Notice> {
         val published = notices.filter { it.published }
         if (profile == null) return published.filter { it.targetTypeEnum == NoticeTargetType.ALL }
 
+        val userGrade = profile.grade.trim()
         val userStream = profile.alStream.trim()
         val userClass = profile.className.trim()
 
@@ -234,6 +452,8 @@ object AttendanceCalculator {
             .filter { notice ->
                 when (notice.targetTypeEnum) {
                     NoticeTargetType.ALL -> true
+                    NoticeTargetType.GRADE ->
+                        notice.targetValue?.trim()?.equals(userGrade, ignoreCase = true) == true
                     NoticeTargetType.STREAM ->
                         notice.targetValue?.trim()?.equals(userStream, ignoreCase = true) == true
                     NoticeTargetType.CLASS ->

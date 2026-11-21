@@ -120,4 +120,119 @@ class AttendanceCalculatorTest {
         )
         assertEquals(4, streak)
     }
+
+    @Test
+    fun expandDateRangeSkipsWeekendsWhenRequested() {
+        // 2026-05-07 (Thu) .. 2026-05-12 (Tue) -> skips Sat 09 and Sun 10
+        val weekdays = DateUtils.expandDateRange("2026-05-07", "2026-05-12", skipWeekends = true)
+        assertEquals(listOf("2026-05-07", "2026-05-08", "2026-05-11", "2026-05-12"), weekdays)
+
+        val allDays = DateUtils.expandDateRange("2026-05-07", "2026-05-12", skipWeekends = false)
+        assertEquals(6, allDays.size)
+    }
+
+    @Test
+    fun classAndGradeSpecificNoSchoolEventsFilterCorrectly() {
+        val student13M2 = UserProfile(grade = "Grade 13", alStream = "Physical Science", className = "13M2")
+        val student12B1 = UserProfile(grade = "Grade 12", alStream = "Bio Science", className = "12B1")
+
+        val events = listOf(
+            com.example.data.CalendarEvent(
+                id = "all_1",
+                title = "Poya Day",
+                dateKey = "2026-05-01",
+                eventType = com.example.data.CalendarEventType.POYA.raw,
+                targetType = com.example.data.CalendarEventTargetType.ALL.raw
+            ),
+            com.example.data.CalendarEvent(
+                id = "grade13_1",
+                title = "G13 Study Leave",
+                dateKey = "2026-05-04",
+                eventType = com.example.data.CalendarEventType.SCHOOL_HOLIDAY.raw,
+                targetType = com.example.data.CalendarEventTargetType.GRADE.raw,
+                targetValue = "Grade 13"
+            ),
+            com.example.data.CalendarEvent(
+                id = "class13m2_1",
+                title = "13M2 Lab Maintenance",
+                dateKey = "2026-05-05",
+                eventType = com.example.data.CalendarEventType.SCHOOL_HOLIDAY.raw,
+                targetType = com.example.data.CalendarEventTargetType.CLASS.raw,
+                targetValue = "13M2"
+            )
+        )
+
+        val for13M2 = AttendanceCalculator.filterCalendarEventsForStudent(events, student13M2)
+        val for12B1 = AttendanceCalculator.filterCalendarEventsForStudent(events, student12B1)
+
+        assertEquals(3, for13M2.size)
+        assertEquals(1, for12B1.size)
+        assertEquals("all_1", for12B1.first().id)
+    }
+
+    @Test
+    fun findUnloggedRecentSchoolDaysSkipsWeekendsHolidaysAndLoggedDays() {
+        val records = listOf(
+            AttendanceRecord(dateKey = "2026-05-11", status = AttendanceStatus.PRESENT.raw) // Mon logged
+        )
+        val events = listOf(
+            com.example.data.CalendarEvent(
+                id = "hol",
+                title = "Exam Study Leave",
+                dateKey = "2026-05-12", // Tue No School
+                eventType = com.example.data.CalendarEventType.SCHOOL_HOLIDAY.raw
+            )
+        )
+        // Today = Thu 2026-05-14; Wed 13 unlogged, Tue 12 holiday, Mon 11 logged, Sun 10 & Sat 9 weekend, Fri 8 unlogged
+        val missed = AttendanceCalculator.findUnloggedRecentSchoolDays(
+            records = records,
+            calendarEvents = events,
+            activeTermStartDate = "2026-05-08",
+            todayKey = "2026-05-14",
+            lookbackCalendarDays = 7,
+            maxItems = 5
+        )
+        assertEquals(listOf("2026-05-13", "2026-05-08"), missed)
+    }
+
+    @Test
+    fun whatIfSkipSimulatorProjectsEligibilityAndRecovery() {
+        val baseStats = AttendanceCalculator.calculateStats(
+            records = emptyList(),
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 16,
+            priorAbsent = 4 // 16 / 20 = 80.0%
+        )
+        // Skipping 2 days -> 16 / 22 = 72.7% (< 80%), needs 8 straight days to recover (24 / 30 = 80%)
+        val afterSkips = AttendanceCalculator.simulateFutureSkips(baseStats, extraSkips = 2)
+        assertFalse(afterSkips.willStayEligible)
+        assertEquals(72.72, afterSkips.projectedPercent, 0.05)
+        assertEquals(8, afterSkips.daysNeededToRecover)
+
+        // Attending 5 straight days -> 21 / 25 = 84.0% (>= 80%), 1 safe skip left (21 / 26 = 80.7%)
+        val afterAttends = AttendanceCalculator.simulateFutureSkips(baseStats, extraSkips = 0, extraAttends = 5)
+        assertTrue(afterAttends.willStayEligible)
+        assertEquals(84.0, afterAttends.projectedPercent, 0.05)
+        assertEquals(1, afterAttends.remainingSafeSkips)
+    }
+
+    @Test
+    fun attendanceInsightsComputeMonthlyTrendAndMostSkippedWeekday() {
+        val records = listOf(
+            AttendanceRecord(dateKey = "2026-04-06", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-04-10", status = AttendanceStatus.ABSENT.raw),  // Fri
+            AttendanceRecord(dateKey = "2026-05-04", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-05-05", status = AttendanceStatus.SCHOOL_EVENT.raw), // Tue
+            AttendanceRecord(dateKey = "2026-05-08", status = AttendanceStatus.ABSENT.raw)   // Fri
+        )
+        val insights = AttendanceCalculator.calculateAttendanceInsights(records)
+        assertEquals(2, insights.monthlyPoints.size)
+        assertEquals("2026-04", insights.monthlyPoints[0].yearMonthKey)
+        assertEquals(50.0, insights.monthlyPoints[0].percentage, 0.01)
+        assertEquals("2026-05", insights.monthlyPoints[1].yearMonthKey)
+        assertEquals(66.66, insights.monthlyPoints[1].percentage, 0.05)
+        assertEquals("Friday", insights.mostSkippedWeekday?.fullName)
+        assertEquals(2, insights.mostSkippedWeekday?.absentDays)
+    }
 }

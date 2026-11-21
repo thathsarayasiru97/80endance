@@ -62,11 +62,24 @@ enum class NoticeCategory(val raw: String, val label: String) {
 
 enum class NoticeTargetType(val raw: String, val label: String) {
     ALL("all", "All Students"),
+    GRADE("grade", "Grade"),
     STREAM("stream", "A/L Stream"),
     CLASS("class", "Specific Class");
 
     companion object {
         fun fromRaw(raw: String?): NoticeTargetType =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: ALL
+    }
+}
+
+enum class CalendarEventTargetType(val raw: String, val label: String) {
+    ALL("all", "Everyone"),
+    GRADE("grade", "Grade"),
+    STREAM("stream", "A/L Stream"),
+    CLASS("class", "Specific Class");
+
+    companion object {
+        fun fromRaw(raw: String?): CalendarEventTargetType =
             entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: ALL
     }
 }
@@ -211,14 +224,43 @@ data class CalendarEvent(
     val academicYear: Int = 2026,
     val description: String? = null,
     val published: Boolean = true,
+    val targetType: String = CalendarEventTargetType.ALL.raw,
+    val targetValue: String? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     val eventTypeEnum: CalendarEventType
         get() = CalendarEventType.fromRaw(eventType)
 
+    val targetTypeEnum: CalendarEventTargetType
+        get() = CalendarEventTargetType.fromRaw(targetType)
+
     val nonSchoolDay: Boolean
         get() = eventTypeEnum != CalendarEventType.EXAM
+
+    val targetDisplayLabel: String?
+        get() = when (targetTypeEnum) {
+            CalendarEventTargetType.ALL -> null
+            else -> targetValue?.trim()?.takeIf { it.isNotEmpty() } ?: targetTypeEnum.label
+        }
+
+    fun appliesToStudent(profile: UserProfile?): Boolean {
+        return when (targetTypeEnum) {
+            CalendarEventTargetType.ALL -> true
+            CalendarEventTargetType.GRADE ->
+                profile != null &&
+                    !targetValue.isNullOrBlank() &&
+                    profile.grade.trim().equals(targetValue.trim(), ignoreCase = true)
+            CalendarEventTargetType.STREAM ->
+                profile != null &&
+                    !targetValue.isNullOrBlank() &&
+                    profile.alStream.trim().equals(targetValue.trim(), ignoreCase = true)
+            CalendarEventTargetType.CLASS ->
+                profile != null &&
+                    !targetValue.isNullOrBlank() &&
+                    profile.className.trim().equals(targetValue.trim(), ignoreCase = true)
+        }
+    }
 }
 
 @Keep

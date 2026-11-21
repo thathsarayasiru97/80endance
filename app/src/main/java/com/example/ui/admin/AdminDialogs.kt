@@ -112,7 +112,9 @@ fun NoticeEditorDialog(
                             selected = targetType == tt,
                             onClick = {
                                 targetType = tt
-                                if (tt == NoticeTargetType.STREAM && targetValue !in AppConstants.AL_STREAMS) {
+                                if (tt == NoticeTargetType.GRADE && targetValue !in AppConstants.GRADES) {
+                                    targetValue = AppConstants.GRADES.last()
+                                } else if (tt == NoticeTargetType.STREAM && targetValue !in AppConstants.AL_STREAMS) {
                                     targetValue = AppConstants.AL_STREAMS.first()
                                 } else if (tt == NoticeTargetType.ALL) {
                                     targetValue = ""
@@ -123,7 +125,17 @@ fun NoticeEditorDialog(
                     }
                 }
 
-                if (targetType == NoticeTargetType.STREAM) {
+                if (targetType == NoticeTargetType.GRADE) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        AppConstants.GRADES.forEach { grade ->
+                            FilterChip(
+                                selected = targetValue == grade,
+                                onClick = { targetValue = grade },
+                                label = { Text(grade) }
+                            )
+                        }
+                    }
+                } else if (targetType == NoticeTargetType.STREAM) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         AppConstants.AL_STREAMS.forEach { stream ->
                             FilterChip(

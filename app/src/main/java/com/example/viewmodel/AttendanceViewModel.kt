@@ -20,8 +20,10 @@ import com.example.data.SriLankaCalendarDefaults
 import com.example.data.SyncStatus
 import com.example.data.UserProfile
 import com.example.data.WeekDaySummary
+import com.example.system.AttendanceWidgetStore
 import com.example.system.ReminderScheduler
 import com.example.system.SyncScheduler
+import com.example.system.WidgetSnapshot
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -71,7 +73,8 @@ data class StudentAppState(
     val todayIsWeekend: Boolean = DateUtils.isWeekend(DateUtils.todayKey()),
     val todayNonSchoolEvent: CalendarEvent? = null,
     val todayIsSchoolDay: Boolean = true,
-    val shouldAutoShowCheckIn: Boolean = false
+    val shouldAutoShowCheckIn: Boolean = false,
+    val missedSchoolDays: List<String> = emptyList()
 )
 
 private data class CoreFirestoreBundle(
@@ -162,12 +165,12 @@ class AttendanceViewModel(
         val settings = settingsPair.first
         val profile = bundle.profile
         val effectiveTerms = bundle.terms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
-        val effectiveEvents = bundle.events.ifEmpty { SriLankaCalendarDefaults.defaultEvents }
+        val rawEvents = bundle.events.ifEmpty { SriLankaCalendarDefaults.defaultEvents }
+        val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(rawEvents, profile)
         val todayKey = DateUtils.todayKey()
         val activeTerm = AttendanceCalculator.resolveActiveTerm(effectiveTerms, todayKey)
         val threshold = activeTerm.minEligibilityPercent.takeIf { it in 50..100 }
             ?: settings.defaultEligibilityPercent
-        val countExcused = profile?.countExcusedAsPresent ?: true
 
         val monthPrefix = DateUtils.currentMonthPrefix(todayKey)
         val monthLabel = DateUtils.currentMonthYearLabel(todayKey)
@@ -232,10 +235,43 @@ class AttendanceViewModel(
             !sessionDismissed &&
             prefs.lastDismissedDate != todayKey
 
+        val missedSchoolDays = if (profile?.setupCompleted == true) {
+            AttendanceCalculator.findUnloggedRecentSchoolDays(
+                records = bundle.records,
+                calendarEvents = effectiveEvents,
+                activeTermStartDate = activeTerm.startDate,
+                todayKey = todayKey,
+                lookbackCalendarDays = 10,
+                maxItems = 5
+            )
+        } else {
+            emptyList()
+        }
+
         val syncStatus = when {
             !isOnline -> SyncStatus.OFFLINE_CACHED
             hasPending -> SyncStatus.SYNCING
             else -> SyncStatus.SYNCED
+        }
+
+        if (bundle.profileLoaded && profile?.setupCompleted == true) {
+            AttendanceWidgetStore.saveAndRefresh(
+                appContext,
+                WidgetSnapshot(
+                    percentage = termStats.percentage,
+                    eligible = termStats.eligible,
+                    thresholdPercent = termStats.thresholdPercent,
+                    totalCountedDays = termStats.totalCountedDays,
+                    safeSkipsRemaining = termStats.safeSkipsRemaining,
+                    daysNeededToRecover = termStats.daysNeededToRecover,
+                    streak = streak,
+                    termName = activeTerm.name,
+                    todayDateKey = todayKey,
+                    todayStatusLabel = todayRecord?.statusEnum?.label,
+                    todayNoSchoolTitle = todayNonSchoolEvent?.title,
+                    signedIn = true
+                )
+            )
         }
 
         StudentAppState(
@@ -263,7 +299,8 @@ class AttendanceViewModel(
             todayIsWeekend = todayIsWeekend,
             todayNonSchoolEvent = todayNonSchoolEvent,
             todayIsSchoolDay = todayIsSchoolDay,
-            shouldAutoShowCheckIn = shouldAutoPrompt
+            shouldAutoShowCheckIn = shouldAutoPrompt,
+            missedSchoolDays = missedSchoolDays
         )
     }.stateIn(
         scope = viewModelScope,
@@ -406,6 +443,15 @@ class AttendanceViewModel(
                 _snackbarMessage.value = err.message ?: "Failed to save attendance"
             }
         }
+    }
+
+    fun quickLogAttendance(dateKey: String, status: AttendanceStatus) {
+        logAttendance(
+            dateKey = dateKey,
+            status = status,
+            subjectTags = emptyList(),
+            note = null
+        )
     }
 
     fun deleteAttendance(dateKey: String) {

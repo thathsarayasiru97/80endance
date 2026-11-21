@@ -14,9 +14,12 @@ import java.util.Calendar
 object ReminderScheduler {
     const val CHANNEL_ID = "daily_checkin_channel"
     const val NOTIFICATION_ID = 8001
+    const val CONFIRMATION_NOTIFICATION_ID = 8002
     const val ACTION_DAILY_REMINDER = "com.example.action.DAILY_REMINDER"
     const val ACTION_QUICK_YES = "com.example.action.QUICK_YES"
+    const val ACTION_QUICK_EXCUSED = "com.example.action.QUICK_EXCUSED"
     const val ACTION_QUICK_NO = "com.example.action.QUICK_NO"
+    const val EXTRA_SOURCE = "extra_checkin_source"
 
     private const val REQUEST_CODE_ALARM = 8010
     private const val TAG = "ReminderScheduler"

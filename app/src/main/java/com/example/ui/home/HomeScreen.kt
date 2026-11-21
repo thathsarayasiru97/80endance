@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.EventBusy
+import androidx.compose.material.icons.rounded.HistoryToggleOff
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Weekend
@@ -78,6 +79,7 @@ fun HomeScreen(
     onScopeModeChange: (DashboardScopeMode) -> Unit,
     onOpenCheckIn: (String) -> Unit,
     onSyncClick: () -> Unit,
+    onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
     onSaveCustomAvatar: (String?) -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
@@ -532,6 +534,118 @@ fun HomeScreen(
                 }
             }
 
+            // 4b. Missed-Day Catch-Up Banner (1-tap catch-up for unlogged recent school weekdays)
+            if (state.missedSchoolDays.isNotEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_catchup_card")
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    color = semantic.medicalContainer,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.HistoryToggleOff,
+                                            contentDescription = "Missed day catch-up",
+                                            tint = semantic.onMedicalContainer,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Quick Catch-Up (${state.missedSchoolDays.size} unlogged)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Tap P, E, or A to fill recent school days — or tap a date for Medical/notes",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            state.missedSchoolDays.forEach { dk ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onOpenCheckIn(dk) }
+                                        ) {
+                                            Text(
+                                                text = DateUtils.formatReadableShort(dk),
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Tap for details",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            CatchUpActionChip(
+                                                label = "P",
+                                                bg = semantic.presentContainer,
+                                                fg = semantic.onPresentContainer,
+                                                testTag = "catchup_present_$dk",
+                                                onClick = { onQuickLogDate(dk, AttendanceStatus.PRESENT) }
+                                            )
+                                            CatchUpActionChip(
+                                                label = "E",
+                                                bg = semantic.schoolEventContainer,
+                                                fg = semantic.onSchoolEventContainer,
+                                                testTag = "catchup_excused_$dk",
+                                                onClick = { onQuickLogDate(dk, AttendanceStatus.SCHOOL_EVENT) }
+                                            )
+                                            CatchUpActionChip(
+                                                label = "A",
+                                                bg = semantic.absentContainer,
+                                                fg = semantic.onAbsentContainer,
+                                                testTag = "catchup_absent_$dk",
+                                                onClick = { onQuickLogDate(dk, AttendanceStatus.ABSENT) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // 5. Personal Attendance Streak & Weekly Summary Card
             item {
                 StreakAndWeeklyCard(
@@ -650,5 +764,32 @@ fun HomeScreen(
             onSaveCustomAvatar = onSaveCustomAvatar,
             onDismiss = { showPhotoDialog = false }
         )
+    }
+}
+
+@Composable
+private fun CatchUpActionChip(
+    label: String,
+    bg: androidx.compose.ui.graphics.Color,
+    fg: androidx.compose.ui.graphics.Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .size(width = 48.dp, height = 40.dp)
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = fg
+            )
+        }
     }
 }

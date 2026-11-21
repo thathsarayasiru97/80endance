@@ -94,7 +94,7 @@ service cloud.firestore {
              data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
              data.category in ['teacher_absent', 'school_event', 'schedule_change', 'exam', 'general'] &&
              data.pinned is bool &&
-             data.targetType in ['all', 'stream', 'class'] &&
+             data.targetType in ['all', 'grade', 'stream', 'class'] &&
              (!('targetValue' in data) || data.targetValue == null || (data.targetValue is string && data.targetValue.size() <= 60)) &&
              (!('eventDate' in data) || data.eventDate == null || data.eventDate == '' || isValidDateKey(data.eventDate)) &&
              data.priority in ['normal', 'urgent'] &&
@@ -117,6 +117,8 @@ service cloud.firestore {
              data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'exam'] &&
              data.academicYear is int && data.academicYear >= 2024 && data.academicYear <= 2035 &&
              (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 200)) &&
+             (!('targetType' in data) || data.targetType == null || data.targetType in ['all', 'grade', 'stream', 'class']) &&
+             (!('targetValue' in data) || data.targetValue == null || (data.targetValue is string && data.targetValue.size() <= 60)) &&
              data.published is bool;
     }
 
@@ -311,7 +313,7 @@ service cloud.firestore {
                          'title', 'dateKey', 'eventType', 'academicYear', 'published', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'published', 'createdAt', 'updatedAt'
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'targetType', 'targetValue', 'published', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -322,7 +324,7 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'published', 'updatedAt'
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'targetType', 'targetValue', 'published', 'updatedAt'
                        ]);
 
       allow delete: if isAdmin() && isValidId(eventId);

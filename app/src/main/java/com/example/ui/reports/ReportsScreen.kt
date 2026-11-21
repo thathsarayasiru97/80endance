@@ -108,7 +108,8 @@ fun ReportsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 600.dp),
+                .widthIn(max = 600.dp)
+                .testTag("reports_lazy_column"),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
@@ -275,6 +276,22 @@ fun ReportsScreen(
                         }
                     }
                 }
+            }
+
+            // Interactive "What-If" Skip Simulator
+            item {
+                WhatIfSkipSimulatorCard(
+                    stats = stats,
+                    scopeTitle = selectedTerm?.name ?: "Overall GCE A/L"
+                )
+            }
+
+            // Monthly Attendance Chart & Weekday Habit Insights
+            item {
+                AttendancePatternsAndChartCard(
+                    records = state.attendanceRecords,
+                    thresholdPercent = stats.thresholdPercent
+                )
             }
 
             // Subject Tags Summary

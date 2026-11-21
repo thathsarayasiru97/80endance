@@ -418,6 +418,11 @@ class AttendanceRepository(
         if (uid.isNullOrBlank()) {
             return !AttendanceCalculator.isSchoolDay(dateKey, SriLankaCalendarDefaults.defaultEvents)
         }
+        val profile = runCatching {
+            withTimeoutOrNull(2_000L) {
+                db.collection("users").document(uid).get().await().toObject(UserProfile::class.java)
+            }
+        }.getOrNull()
         val fetched = runCatching {
             withTimeoutOrNull(3_000L) {
                 db.collection("calendar_events")
@@ -427,8 +432,41 @@ class AttendanceRepository(
                     .toObjects(CalendarEvent::class.java)
             }
         }.getOrNull()
-        val events = fetched?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
-        return !AttendanceCalculator.isSchoolDay(dateKey, events)
+        val rawEvents = fetched?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
+        val applicableEvents = AttendanceCalculator.filterCalendarEventsForStudent(rawEvents, profile)
+        return !AttendanceCalculator.isSchoolDay(dateKey, applicableEvents)
+    }
+
+    suspend fun hasLoggedAttendance(userId: String, dateKey: String): Boolean {
+        if (userId.isBlank()) return false
+        return runCatching {
+            withTimeoutOrNull(2_500L) {
+                db.collection("users").document(userId)
+                    .collection("attendance").document(dateKey)
+                    .get().await().exists()
+            } ?: false
+        }.getOrDefault(false)
+    }
+
+    suspend fun getQuickWidgetMetrics(userId: String, todayKey: String): Triple<UserProfile?, List<AttendanceRecord>, List<CalendarEvent>> {
+        val profile = runCatching {
+            withTimeoutOrNull(2_500L) {
+                db.collection("users").document(userId).get().await().toObject(UserProfile::class.java)
+            }
+        }.getOrNull()
+        val records = runCatching {
+            withTimeoutOrNull(2_500L) {
+                db.collection("users").document(userId).collection("attendance")
+                    .get().await().toObjects(AttendanceRecord::class.java)
+            }
+        }.getOrNull().orEmpty()
+        val events = runCatching {
+            withTimeoutOrNull(2_500L) {
+                db.collection("calendar_events").whereEqualTo("published", true)
+                    .get().await().toObjects(CalendarEvent::class.java)
+            }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
+        return Triple(profile, records, AttendanceCalculator.filterCalendarEventsForStudent(events, profile))
     }
 
     // --- ATTENDANCE MUTATIONS ---
@@ -674,7 +712,9 @@ class AttendanceRepository(
         dateKey: String,
         eventType: CalendarEventType,
         academicYear: Int,
-        description: String?
+        description: String?,
+        targetType: CalendarEventTargetType = CalendarEventTargetType.ALL,
+        targetValue: String? = null
     ): Result<Unit> {
         val docRef = if (eventId.isNullOrBlank()) {
             db.collection("calendar_events").document()
@@ -688,6 +728,11 @@ class AttendanceRepository(
             require(cleanTitle.isNotEmpty()) { "Title is required" }
             require(dateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) { "Date must be YYYY-MM-DD" }
             val cleanDesc = description?.trim()?.take(200)?.ifEmpty { null }
+            val cleanTargetVal = if (targetType == CalendarEventTargetType.ALL) {
+                null
+            } else {
+                targetValue?.trim()?.take(60)?.ifEmpty { null }
+            }
             val exists = !eventId.isNullOrBlank() && runCatching { docRef.get().await().exists() }.getOrDefault(false)
             if (exists) {
                 val updates = mutableMapOf<String, Any>(
@@ -696,6 +741,8 @@ class AttendanceRepository(
                     "eventType" to eventType.raw,
                     "academicYear" to academicYear.coerceIn(2024, 2035),
                     "description" to (cleanDesc ?: ""),
+                    "targetType" to targetType.raw,
+                    "targetValue" to (cleanTargetVal ?: ""),
                     "published" to true,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -707,6 +754,8 @@ class AttendanceRepository(
                     "eventType" to eventType.raw,
                     "academicYear" to academicYear.coerceIn(2024, 2035),
                     "description" to cleanDesc,
+                    "targetType" to targetType.raw,
+                    "targetValue" to cleanTargetVal,
                     "published" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -719,6 +768,126 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveBulkNoSchoolDays(
+        dateKeys: List<String>,
+        reason: String,
+        targetType: CalendarEventTargetType,
+        targetValue: String?,
+        alsoPostNotice: Boolean
+    ): Result<Int> {
+        return try {
+            requireUserId()
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            val uniqueDates = dateKeys
+                .map { it.trim() }
+                .filter { it.matches(dateRegex) }
+                .distinct()
+                .sorted()
+                .take(60)
+            require(uniqueDates.isNotEmpty()) { "Select at least one valid date (YYYY-MM-DD)" }
+
+            val cleanReason = reason.trim().ifEmpty { "No School Day" }.take(100)
+            val cleanTargetVal = if (targetType == CalendarEventTargetType.ALL) {
+                null
+            } else {
+                targetValue?.trim()?.take(60)?.ifEmpty { null }
+            }
+            if (targetType != CalendarEventTargetType.ALL) {
+                require(!cleanTargetVal.isNullOrBlank()) { "Enter a ${targetType.label.lowercase()} to target" }
+            }
+
+            val audienceLabel = cleanTargetVal ?: "all students"
+            val targetSlug = if (targetType == CalendarEventTargetType.ALL) {
+                "all"
+            } else {
+                val sanitized = cleanTargetVal.orEmpty()
+                    .lowercase()
+                    .replace(Regex("[^a-z0-9]+"), "_")
+                    .trim('_')
+                    .take(24)
+                    .ifEmpty { "group" }
+                "${targetType.raw}_$sanitized"
+            }
+
+            val existingIds = runCatching {
+                db.collection("calendar_events").get().await().documents.map { it.id }.toSet()
+            }.getOrDefault(emptySet())
+
+            val batch = db.batch()
+            for (dk in uniqueDates) {
+                val docId = "no_school_${dk.replace("-", "_")}_$targetSlug".take(120)
+                val ref = db.collection("calendar_events").document(docId)
+                val year = dk.take(4).toIntOrNull()?.coerceIn(2024, 2035) ?: 2026
+                val desc = "Marked as No School for $audienceLabel".take(200)
+                if (docId in existingIds) {
+                    batch.update(
+                        ref,
+                        mapOf(
+                            "title" to cleanReason,
+                            "dateKey" to dk,
+                            "eventType" to CalendarEventType.SCHOOL_HOLIDAY.raw,
+                            "academicYear" to year,
+                            "description" to desc,
+                            "targetType" to targetType.raw,
+                            "targetValue" to (cleanTargetVal ?: ""),
+                            "published" to true,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    val payload = mapOf(
+                        "title" to cleanReason,
+                        "dateKey" to dk,
+                        "eventType" to CalendarEventType.SCHOOL_HOLIDAY.raw,
+                        "academicYear" to year,
+                        "description" to desc,
+                        "targetType" to targetType.raw,
+                        "targetValue" to cleanTargetVal,
+                        "published" to true,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ).filterValues { it != null }
+                    batch.set(ref, payload)
+                }
+            }
+            batch.commit().awaitOfflineAware()
+
+            if (alsoPostNotice) {
+                val noticeTargetType = when (targetType) {
+                    CalendarEventTargetType.ALL -> NoticeTargetType.ALL
+                    CalendarEventTargetType.GRADE -> NoticeTargetType.GRADE
+                    CalendarEventTargetType.STREAM -> NoticeTargetType.STREAM
+                    CalendarEventTargetType.CLASS -> NoticeTargetType.CLASS
+                }
+                val dateSummary = if (uniqueDates.size == 1) {
+                    DateUtils.formatReadableShort(uniqueDates.first())
+                } else {
+                    "${DateUtils.formatReadableShort(uniqueDates.first())} – ${DateUtils.formatReadableShort(uniqueDates.last())} (${uniqueDates.size} days)"
+                }
+                val scopeSummary = if (cleanTargetVal != null) "for $cleanTargetVal" else "for everyone"
+                saveNotice(
+                    noticeId = null,
+                    title = "No School: $dateSummary".take(120),
+                    message = "$cleanReason — marked as No School $scopeSummary on the calendar.".take(1000),
+                    category = NoticeCategory.SCHEDULE_CHANGE,
+                    pinned = true,
+                    targetType = noticeTargetType,
+                    targetValue = cleanTargetVal,
+                    eventDate = uniqueDates.first(),
+                    urgent = true,
+                    published = true
+                )
+            }
+            scheduleSyncIfOffline()
+            Result.success(uniqueDates.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "calendar_events")
             Result.failure(e)
         }
     }

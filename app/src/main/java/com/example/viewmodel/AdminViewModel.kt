@@ -10,6 +10,7 @@ import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
+import com.example.data.CalendarEventTargetType
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
 import com.example.data.Notice
@@ -278,55 +279,71 @@ class AdminViewModel(
         }
     }
 
+    fun markNoSchoolDays(
+        dateKeys: List<String>,
+        reason: String,
+        targetType: CalendarEventTargetType,
+        targetValue: String?,
+        alsoPostNotice: Boolean,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            val validDates = dateKeys.map { it.trim() }.filter { it.matches(dateRegex) }.distinct().sorted()
+            if (validDates.isEmpty()) {
+                _snackbar.value = "Select at least one valid date (YYYY-MM-DD)"
+                return@launch
+            }
+            if (targetType != CalendarEventTargetType.ALL && targetValue.isNullOrBlank()) {
+                _snackbar.value = "Enter a ${targetType.label.lowercase()} to target"
+                return@launch
+            }
+            _isBusy.value = true
+            val res = repository.saveBulkNoSchoolDays(
+                dateKeys = validDates,
+                reason = reason,
+                targetType = targetType,
+                targetValue = targetValue,
+                alsoPostNotice = alsoPostNotice
+            )
+            _isBusy.value = false
+            res.onSuccess { count ->
+                val scopeLabel = if (targetType == CalendarEventTargetType.ALL) {
+                    "everyone"
+                } else {
+                    targetValue?.trim().orEmpty()
+                }
+                val dayText = if (count == 1) {
+                    DateUtils.formatReadableShort(validDates.first())
+                } else {
+                    "$count days"
+                }
+                _snackbar.value = if (alsoPostNotice) {
+                    "Marked $dayText as No School for $scopeLabel & posted notice"
+                } else {
+                    "Marked $dayText as No School for $scopeLabel"
+                }
+                onDone()
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not mark No School days"
+            }
+        }
+    }
+
     fun markNoSchoolDayForEveryone(
         dateKey: String,
         reason: String,
         alsoPostNotice: Boolean,
         onDone: () -> Unit = {}
     ) {
-        viewModelScope.launch {
-            val cleanReason = reason.trim().ifEmpty { "No School Day" }.take(100)
-            if (!dateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) {
-                _snackbar.value = "Enter a valid date (YYYY-MM-DD)"
-                return@launch
-            }
-            _isBusy.value = true
-            val year = dateKey.take(4).toIntOrNull() ?: 2026
-            val deterministicId = "no_school_${dateKey.replace("-", "_")}"
-            val res = repository.saveCalendarEvent(
-                eventId = deterministicId,
-                title = cleanReason,
-                dateKey = dateKey,
-                eventType = CalendarEventType.SCHOOL_HOLIDAY,
-                academicYear = year,
-                description = "Marked as No School for all students"
-            )
-            if (res.isSuccess && alsoPostNotice) {
-                repository.saveNotice(
-                    noticeId = null,
-                    title = "No School: ${DateUtils.formatReadableShort(dateKey)}",
-                    message = "$cleanReason — marked as a No School day for everyone on the school calendar.",
-                    category = NoticeCategory.SCHEDULE_CHANGE,
-                    pinned = true,
-                    targetType = NoticeTargetType.ALL,
-                    targetValue = null,
-                    eventDate = dateKey,
-                    urgent = true,
-                    published = true
-                )
-            }
-            _isBusy.value = false
-            res.onSuccess {
-                _snackbar.value = if (alsoPostNotice) {
-                    "Marked ${DateUtils.formatReadableShort(dateKey)} as No School for everyone & posted notice"
-                } else {
-                    "Marked ${DateUtils.formatReadableShort(dateKey)} as No School for everyone"
-                }
-                onDone()
-            }.onFailure { e ->
-                _snackbar.value = e.message ?: "Could not mark No School day"
-            }
-        }
+        markNoSchoolDays(
+            dateKeys = listOf(dateKey),
+            reason = reason,
+            targetType = CalendarEventTargetType.ALL,
+            targetValue = null,
+            alsoPostNotice = alsoPostNotice,
+            onDone = onDone
+        )
     }
 
     fun deleteCalendarEvent(eventId: String) {

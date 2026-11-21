@@ -368,8 +368,9 @@ fun CalendarScreen(
                                     text = ev.title,
                                     style = MaterialTheme.typography.titleSmall
                                 )
+                                val audienceSuffix = ev.targetDisplayLabel?.let { " • $it" }.orEmpty()
                                 Text(
-                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}",
+                                    text = "${DateUtils.formatReadableShort(ev.dateKey)} • ${ev.eventTypeEnum.label}$audienceSuffix",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -476,7 +477,12 @@ fun CalendarScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(ev.title, style = MaterialTheme.typography.titleSmall, color = semantic.onPoyaContainer)
-                                Text(ev.eventTypeEnum.label, style = MaterialTheme.typography.bodySmall, color = semantic.onPoyaContainer)
+                                val audienceSuffix = ev.targetDisplayLabel?.let { " • $it" }.orEmpty()
+                                Text(
+                                    "${ev.eventTypeEnum.label}$audienceSuffix",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = semantic.onPoyaContainer
+                                )
                             }
                         }
                     }

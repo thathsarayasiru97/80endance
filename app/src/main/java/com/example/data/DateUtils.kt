@@ -11,6 +11,7 @@ object DateUtils {
     private val readableDayFormat get() = SimpleDateFormat("EEE, d MMM", Locale.US)
     private val fullDateFormat get() = SimpleDateFormat("EEEE, d MMMM yyyy", Locale.US)
     private val monthYearFormat get() = SimpleDateFormat("MMMM yyyy", Locale.US)
+    private val shortMonthFormat get() = SimpleDateFormat("MMM", Locale.US)
     private val monthNameFormat get() = SimpleDateFormat("MMMM", Locale.US)
     private val weekdayFormat get() = SimpleDateFormat("EEEE", Locale.US)
 
@@ -107,6 +108,54 @@ object DateUtils {
         val end = parseDateKey(endDateKey) ?: return 0
         val diffMs = end.timeInMillis - start.timeInMillis
         return (diffMs.toDouble() / 86_400_000.0).roundToInt()
+    }
+
+    /**
+     * Expands an inclusive [startDateKey..endDateKey] date range into ISO date keys,
+     * optionally skipping Saturdays and Sundays, bounded to [maxDays].
+     */
+    fun expandDateRange(
+        startDateKey: String,
+        endDateKey: String,
+        skipWeekends: Boolean = true,
+        maxDays: Int = 60
+    ): List<String> {
+        val start = parseDateKey(startDateKey) ?: return emptyList()
+        val end = parseDateKey(endDateKey) ?: return emptyList()
+        if (end.before(start)) return emptyList()
+        val result = mutableListOf<String>()
+        val cursor = start.clone() as Calendar
+        var steps = 0
+        while (!cursor.after(end) && result.size < maxDays && steps < 180) {
+            val dow = cursor.get(Calendar.DAY_OF_WEEK)
+            val weekend = dow == Calendar.SATURDAY || dow == Calendar.SUNDAY
+            if (!skipWeekends || !weekend) {
+                result.add(formatDateKey(cursor))
+            }
+            cursor.add(Calendar.DAY_OF_YEAR, 1)
+            steps++
+        }
+        return result
+    }
+
+    /** Returns 0 for Monday .. 4 for Friday, or -1 for weekend/invalid. */
+    fun weekdayIndexMonToFri(dateKey: String): Int {
+        val cal = parseDateKey(dateKey) ?: return -1
+        return when (cal.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> 0
+            Calendar.TUESDAY -> 1
+            Calendar.WEDNESDAY -> 2
+            Calendar.THURSDAY -> 3
+            Calendar.FRIDAY -> 4
+            else -> -1
+        }
+    }
+
+    /** Formats "2026-10" into "Oct" (or "Oct '26" if [includeYear]). */
+    fun formatShortMonth(yearMonthKey: String, includeYear: Boolean = false): String {
+        val cal = parseDateKey("$yearMonthKey-01") ?: return yearMonthKey
+        val month = shortMonthFormat.format(cal.time)
+        return if (includeYear) "$month '${yearMonthKey.substring(2, 4)}" else month
     }
 
     fun daysInMonth(year: Int, monthOneBased: Int): Int {

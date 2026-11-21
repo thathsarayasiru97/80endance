@@ -64,8 +64,10 @@ import com.example.data.DateUtils
 import com.example.data.LocalPreferencesStore
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
+import com.example.system.AttendanceWidgetStore
 import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckResult
+import com.example.system.WidgetSnapshot
 import com.example.ui.admin.AdminPanelScreen
 import com.example.ui.auth.AuthScreen
 import com.example.ui.calendar.CalendarScreen
@@ -417,6 +419,7 @@ private fun AuthenticatedAppShell(
                             onScopeModeChange = { attendanceViewModel.setScopeMode(it) },
                             onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
+                            onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             bottomBarPadding = bottomScrollPadding
                         )
@@ -447,6 +450,7 @@ private fun AuthenticatedAppShell(
                             onManualSync = { attendanceViewModel.triggerManualSync() },
                             onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
                             onSignOut = {
+                                AttendanceWidgetStore.saveAndRefresh(context, WidgetSnapshot(signedIn = false))
                                 signOutGoogle(credentialManager, scope)
                             },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },

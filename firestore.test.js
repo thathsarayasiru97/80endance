@@ -264,6 +264,39 @@ test("Verified admin: full control over notices, terms, calendar events, setting
       updatedAt: now,
     })
   );
+  // Class-specific & grade-specific No School day + grade-targeted notice
+  await assertSucceeds(
+    adminDb.collection("calendar_events").doc("no_school_2026_11_26_class_13m2").set({
+      title: "13M2 Practical Lab Maintenance",
+      dateKey: "2026-11-26",
+      eventType: "school_holiday",
+      academicYear: 2026,
+      description: "Marked as No School for 13M2",
+      targetType: "class",
+      targetValue: "13M2",
+      published: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("notices").doc("notice_grade_13").set(
+      validNoticePayload({ targetType: "grade", targetValue: "Grade 13" })
+    )
+  );
+  // Reject invalid calendar event targetType
+  await assertFails(
+    adminDb.collection("calendar_events").doc("bad_target").set({
+      title: "Bad Target",
+      dateKey: "2026-11-27",
+      eventType: "school_holiday",
+      academicYear: 2026,
+      targetType: "invalid_scope",
+      published: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
   await assertSucceeds(
     adminDb.collection("app_settings").doc("global").set({
       defaultEligibilityPercent: 80,
