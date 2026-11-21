@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
@@ -68,8 +69,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceStatus
+import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.ui.admin.AdminCalendarEventEditorDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.bouncyClickable
@@ -85,6 +88,23 @@ fun CalendarScreen(
     onEditDate: (String) -> Unit,
     onDeleteDate: (String) -> Unit,
     onOpenBaselineImport: (() -> Unit)? = null,
+    isVerifiedAdmin: Boolean = false,
+    isSaving: Boolean = false,
+    onAdminSaveCalendarEvent: ((
+        eventId: String?,
+        title: String,
+        dateKey: String,
+        eventType: CalendarEventType,
+        description: String?,
+        targetAll: Boolean,
+        targetGrades: List<String>,
+        targetStreams: List<String>,
+        targetClasses: List<String>,
+        targetUserIds: List<String>,
+        audienceSummary: String,
+        alsoSendNotification: Boolean
+    ) -> Unit)? = null,
+    onAdminDeleteCalendarEvent: ((String) -> Unit)? = null,
     bottomBarPadding: Dp = 24.dp
 ) {
     val semantic = LocalAttendanceColors.current
@@ -92,20 +112,29 @@ fun CalendarScreen(
     var displayYear by remember { mutableIntStateOf(initialYm.first) }
     var displayMonth by remember { mutableIntStateOf(initialYm.second) }
     var selectedDateKey by remember { mutableStateOf<String?>(null) }
+    var adminEventDialogDate by remember { mutableStateOf<String?>(null) }
+    var editingCalendarEvent by remember { mutableStateOf<CalendarEvent?>(null) }
 
     val profile = state.profile
+    val displayedEvents = remember(isVerifiedAdmin, state.allCalendarEventsForAdmin, state.calendarEvents) {
+        if (isVerifiedAdmin && state.allCalendarEventsForAdmin.isNotEmpty()) {
+            state.allCalendarEventsForAdmin
+        } else {
+            state.calendarEvents
+        }
+    }
     val recordMap = remember(state.attendanceRecords) {
         state.attendanceRecords.associateBy { it.dateKey }
     }
-    val eventMap = remember(state.calendarEvents) {
-        state.calendarEvents.groupBy { it.dateKey }
+    val eventMap = remember(displayedEvents) {
+        displayedEvents.groupBy { it.dateKey }
     }
     val todayKey = remember { DateUtils.todayKey() }
     val monthPrefix = remember(displayYear, displayMonth) {
         String.format("%04d-%02d-", displayYear, displayMonth)
     }
-    val monthEvents = remember(state.calendarEvents, monthPrefix) {
-        state.calendarEvents.filter { it.dateKey.startsWith(monthPrefix) }
+    val monthEvents = remember(displayedEvents, monthPrefix) {
+        displayedEvents.filter { it.dateKey.startsWith(monthPrefix) }
     }
 
     Box(
@@ -133,7 +162,11 @@ fun CalendarScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "Tap any school day up to today to log or edit attendance • ${state.activeTerm.name}",
+                        text = if (isVerifiedAdmin) {
+                            "Tap any date to manage school updates or log attendance • ${state.activeTerm.name}"
+                        } else {
+                            "Tap any school day up to today to log or edit attendance • ${state.activeTerm.name}"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -334,7 +367,7 @@ fun CalendarScreen(
                                             val isPoya = dayEvents.any { it.eventTypeEnum == CalendarEventType.POYA }
                                             val isHoliday = dayEvents.any { it.nonSchoolDay }
                                             val isToday = dateKey == todayKey
-                                            val isInteractive = !isWeekend && (!isFuture || dayEvents.isNotEmpty())
+                                            val isInteractive = isVerifiedAdmin || (!isWeekend && (!isFuture || dayEvents.isNotEmpty())) || (isWeekend && dayEvents.isNotEmpty())
 
                                             val targetCellBg = when {
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
@@ -397,32 +430,46 @@ fun CalendarScreen(
                                                         color = textColor,
                                                         fontWeight = if (!isWeekend && !isFuture && (isToday || rec != null || isLocked)) FontWeight.Bold else FontWeight.Medium
                                                     )
-                                                    if (!isWeekend) {
-                                                        when {
-                                                            isPoya || isHoliday -> {
+                                                    when {
+                                                        dayEvents.size > 1 -> {
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                                                 Box(
                                                                     modifier = Modifier
                                                                         .size(5.dp)
                                                                         .clip(CircleShape)
-                                                                        .background(semantic.poya)
+                                                                        .background(if (isPoya || isHoliday) semantic.poya else MaterialTheme.colorScheme.primary)
                                                                 )
-                                                            }
-                                                            isLocked -> {
-                                                                Icon(
-                                                                    imageVector = Icons.Rounded.Lock,
-                                                                    contentDescription = "Locked imported attendance day",
-                                                                    tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f),
-                                                                    modifier = Modifier.size(10.dp)
-                                                                )
-                                                            }
-                                                            dayEvents.isNotEmpty() -> {
                                                                 Box(
                                                                     modifier = Modifier
                                                                         .size(5.dp)
                                                                         .clip(CircleShape)
-                                                                        .background(MaterialTheme.colorScheme.primary)
+                                                                        .background(MaterialTheme.colorScheme.secondary)
                                                                 )
                                                             }
+                                                        }
+                                                        isPoya || isHoliday -> {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(5.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(semantic.poya)
+                                                            )
+                                                        }
+                                                        !isWeekend && isLocked -> {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Lock,
+                                                                contentDescription = "Locked imported attendance day",
+                                                                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f),
+                                                                modifier = Modifier.size(10.dp)
+                                                            )
+                                                        }
+                                                        dayEvents.isNotEmpty() -> {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(5.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(MaterialTheme.colorScheme.primary)
+                                                            )
                                                         }
                                                     }
                                                 }
@@ -521,6 +568,13 @@ fun CalendarScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (!ev.description.isNullOrBlank()) {
+                                    Text(
+                                        text = ev.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                         }
                     }
@@ -607,31 +661,97 @@ fun CalendarScreen(
                 )
 
                 events.forEach { ev ->
+                    val isPoyaOrOff = ev.nonSchoolDay
                     Surface(
-                        color = semantic.poyaContainer,
+                        color = if (isPoyaOrOff) semantic.poyaContainer else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.Top
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.NightsStay,
+                                imageVector = if (ev.eventTypeEnum == CalendarEventType.POYA) Icons.Rounded.NightsStay else Icons.Rounded.Event,
                                 contentDescription = null,
-                                tint = semantic.onPoyaContainer
+                                tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(top = 2.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(ev.title, style = MaterialTheme.typography.titleSmall, color = semantic.onPoyaContainer)
-                                val audienceSuffix = ev.targetDisplayLabel?.let { " • $it" }.orEmpty()
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 Text(
-                                    "${ev.eventTypeEnum.label}$audienceSuffix",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = semantic.onPoyaContainer
+                                    text = ev.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer
                                 )
+                                val audienceLabel = ev.targetDisplayLabel ?: if (isVerifiedAdmin) "Everyone" else null
+                                val audienceSuffix = audienceLabel?.let { " • $it" }.orEmpty()
+                                Text(
+                                    text = "${ev.eventTypeEnum.label}$audienceSuffix",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isPoyaOrOff) semantic.onPoyaContainer.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                )
+                                if (!ev.description.isNullOrBlank()) {
+                                    Text(
+                                        text = ev.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                            if (isVerifiedAdmin && onAdminSaveCalendarEvent != null) {
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            editingCalendarEvent = ev
+                                            adminEventDialogDate = ev.dateKey
+                                            selectedDateKey = null
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Edit,
+                                            contentDescription = "Edit calendar event",
+                                            tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    if (onAdminDeleteCalendarEvent != null) {
+                                        IconButton(
+                                            onClick = { onAdminDeleteCalendarEvent(ev.id) }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.DeleteOutline,
+                                                contentDescription = "Delete calendar event",
+                                                tint = if (isPoyaOrOff) semantic.onPoyaContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
+                    }
+                }
+
+                if (isVerifiedAdmin && onAdminSaveCalendarEvent != null) {
+                    OutlinedButton(
+                        onClick = {
+                            editingCalendarEvent = null
+                            adminEventDialogDate = dateKey
+                            selectedDateKey = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("calendar_admin_add_event_button")
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add Event / Update for This Day")
                     }
                 }
 
@@ -811,6 +931,27 @@ fun CalendarScreen(
             }
             }
         }
+    }
+
+    if (isVerifiedAdmin && adminEventDialogDate != null && onAdminSaveCalendarEvent != null) {
+        AdminCalendarEventEditorDialog(
+            initialDateKey = adminEventDialogDate!!,
+            editingEvent = editingCalendarEvent,
+            students = state.adminAllStudents,
+            catalog = state.academicCatalog,
+            isBusy = isSaving,
+            onDismiss = {
+                adminEventDialogDate = null
+                editingCalendarEvent = null
+            },
+            onSave = { eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify ->
+                onAdminSaveCalendarEvent(
+                    eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify
+                )
+                adminEventDialogDate = null
+                editingCalendarEvent = null
+            }
+        )
     }
 }
 

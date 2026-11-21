@@ -243,6 +243,77 @@ class AttendanceRepository(
         )
     }
 
+    fun observeAcademicCatalog(): Flow<AcademicCatalog> = flow {
+        val uid = requireUserId()
+        val path = "app_config/academic_catalog"
+        emitAll(
+            db.collection("app_config").document("academic_catalog")
+                .snapshots()
+                .map { snapshot ->
+                    val doc = if (snapshot.exists()) {
+                        snapshot.toObject(
+                            AcademicCatalogDoc::class.java,
+                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                        )
+                    } else null
+                    doc?.toCatalog() ?: AcademicCatalog.defaultCatalog()
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.GET, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    fun observeUserFeedbackReports(userId: String): Flow<List<FeedbackReport>> = flow {
+        require(userId.isNotBlank()) { "userId must not be blank" }
+        val path = "feedback"
+        emitAll(
+            db.collection("feedback")
+                .whereEqualTo("userId", userId)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        FeedbackReport::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, userId)
+                    throw error
+                }
+        )
+    }
+
+    suspend fun saveAcademicCatalog(catalog: AcademicCatalog): Result<Unit> {
+        val path = "app_config/academic_catalog"
+        return try {
+            requireUserId()
+            val (subjectsJson, classesJson) = catalog.toFirestoreJsonPair()
+            require(subjectsJson.length <= 40_000) { "Subject list is too large" }
+            require(classesJson.length <= 20_000) { "Class list is too large" }
+            val ref = db.collection("app_config").document("academic_catalog")
+            val exists = runCatching { withTimeoutOrNull(3_000L) { ref.get().await().exists() } ?: false }.getOrDefault(false)
+            val payload = mapOf(
+                "streamSubjectBucketsJson" to subjectsJson,
+                "gradeStreamClassesJson" to classesJson,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (exists) {
+                ref.update(payload).awaitOfflineAware()
+            } else {
+                ref.set(payload).awaitOfflineAware()
+            }
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
     // --- ADMIN OBSERVABLE FLOWS (CALLED ONLY WHEN VERIFIED ADMIN) ---
 
     fun observeAllStudentsAdmin(): Flow<List<UserProfile>> = flow {
@@ -985,7 +1056,14 @@ class AttendanceRepository(
         academicYear: Int,
         description: String?,
         targetType: CalendarEventTargetType = CalendarEventTargetType.ALL,
-        targetValue: String? = null
+        targetValue: String? = null,
+        targetAll: Boolean? = null,
+        targetGrades: List<String> = emptyList(),
+        targetStreams: List<String> = emptyList(),
+        targetClasses: List<String> = emptyList(),
+        targetUserIds: List<String> = emptyList(),
+        audienceSummary: String? = null,
+        alsoSendNotification: Boolean = false
     ): Result<Unit> {
         val docRef = if (eventId.isNullOrBlank()) {
             db.collection("calendar_events").document()
@@ -998,12 +1076,31 @@ class AttendanceRepository(
             val cleanTitle = title.trim().take(100)
             require(cleanTitle.isNotEmpty()) { "Title is required" }
             require(dateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) { "Date must be YYYY-MM-DD" }
-            val cleanDesc = description?.trim()?.take(200)?.ifEmpty { null }
+            val cleanDesc = description?.trim()?.take(500)?.ifEmpty { null }
             val cleanTargetVal = if (targetType == CalendarEventTargetType.ALL) {
                 null
             } else {
                 targetValue?.trim()?.take(60)?.ifEmpty { null }
             }
+
+            val useMultiAudience = targetAll != null ||
+                targetGrades.isNotEmpty() ||
+                targetStreams.isNotEmpty() ||
+                targetClasses.isNotEmpty() ||
+                targetUserIds.isNotEmpty()
+            val resolvedTargetAll = targetAll ?: (targetType == CalendarEventTargetType.ALL)
+            val cleanGrades = if (resolvedTargetAll) emptyList() else targetGrades.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(10)
+            val cleanStreams = if (resolvedTargetAll) emptyList() else targetStreams.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(10)
+            val cleanClasses = if (resolvedTargetAll) emptyList() else targetClasses.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(30)
+            val cleanUsers = if (resolvedTargetAll) emptyList() else targetUserIds.map { it.trim().take(60) }.filter { it.isNotEmpty() }.distinct().take(50)
+            val cleanSummary = audienceSummary?.trim()?.take(200)?.ifEmpty { null }
+                ?: if (resolvedTargetAll) "All Students" else buildList {
+                    if (cleanGrades.isNotEmpty()) add(cleanGrades.joinToString(", "))
+                    if (cleanStreams.isNotEmpty()) add(cleanStreams.joinToString(", "))
+                    if (cleanClasses.isNotEmpty()) add(cleanClasses.joinToString(", "))
+                    if (cleanUsers.isNotEmpty()) add("${cleanUsers.size} student${if (cleanUsers.size == 1) "" else "s"}")
+                }.joinToString(" • ").ifEmpty { cleanTargetVal ?: "Selected Group" }
+
             val exists = !eventId.isNullOrBlank() && runCatching { docRef.get().await().exists() }.getOrDefault(false)
             if (exists) {
                 val updates = mutableMapOf<String, Any>(
@@ -1017,21 +1114,59 @@ class AttendanceRepository(
                     "published" to true,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
+                if (useMultiAudience) {
+                    updates["targetAll"] = resolvedTargetAll
+                    updates["targetGrades"] = cleanGrades
+                    updates["targetStreams"] = cleanStreams
+                    updates["targetClasses"] = cleanClasses
+                    updates["targetUserIds"] = cleanUsers
+                    updates["audienceSummary"] = cleanSummary
+                }
                 docRef.update(updates).awaitOfflineAware()
             } else {
-                val payload = mapOf(
-                    "title" to cleanTitle,
-                    "dateKey" to dateKey,
-                    "eventType" to eventType.raw,
-                    "academicYear" to academicYear.coerceIn(2024, 2035),
-                    "description" to cleanDesc,
-                    "targetType" to targetType.raw,
-                    "targetValue" to cleanTargetVal,
-                    "published" to true,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                ).filterValues { it != null }
+                val payload = buildMap<String, Any> {
+                    put("title", cleanTitle)
+                    put("dateKey", dateKey)
+                    put("eventType", eventType.raw)
+                    put("academicYear", academicYear.coerceIn(2024, 2035))
+                    if (cleanDesc != null) put("description", cleanDesc)
+                    put("targetType", targetType.raw)
+                    if (cleanTargetVal != null) put("targetValue", cleanTargetVal)
+                    if (useMultiAudience) {
+                        put("targetAll", resolvedTargetAll)
+                        put("targetGrades", cleanGrades)
+                        put("targetStreams", cleanStreams)
+                        put("targetClasses", cleanClasses)
+                        put("targetUserIds", cleanUsers)
+                        put("audienceSummary", cleanSummary)
+                    }
+                    put("published", true)
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
                 docRef.set(payload).awaitOfflineAware()
+            }
+
+            if (alsoSendNotification) {
+                val dateLabel = DateUtils.formatReadableShort(dateKey)
+                val notifTitle = "${eventType.label}: $cleanTitle ($dateLabel)".take(120)
+                val notifBody = buildString {
+                    if (!cleanDesc.isNullOrBlank()) {
+                        append(cleanDesc)
+                    } else {
+                        append("$cleanTitle scheduled on $dateLabel (${eventType.label}).")
+                    }
+                }.take(1000)
+                sendBroadcastNotification(
+                    title = notifTitle,
+                    message = notifBody,
+                    targetAll = resolvedTargetAll,
+                    targetGrades = cleanGrades,
+                    targetStreams = cleanStreams,
+                    targetClasses = cleanClasses,
+                    targetUserIds = cleanUsers,
+                    audienceSummary = cleanSummary
+                )
             }
             scheduleSyncIfOffline()
             Result.success(Unit)

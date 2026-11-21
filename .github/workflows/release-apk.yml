@@ -10,6 +10,10 @@ on:
         description: 'Release version tag (e.g., v1.0, v1.1). Leave blank to use versionName from app/build.gradle.kts.'
         required: false
         default: ''
+      release_notes:
+        description: 'Optional custom What'\''s New notes. Leave blank to automatically use RELEASE_NOTES.md.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -187,6 +191,33 @@ jobs:
           echo "checksum_path=release-output/${APK_NAME}.sha256" >> "$GITHUB_OUTPUT"
           echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
 
+      - name: Assemble Release Notes Body
+        id: notes
+        env:
+          CUSTOM_NOTES: ${{ inputs.release_notes }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          CLEAN_VERSION: ${{ steps.meta.outputs.clean_version }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          APK_NAME: ${{ steps.artifact.outputs.apk_name }}
+        run: |
+          {
+            echo "## 80endance ${RELEASE_TAG}"
+            echo ""
+            echo "- **App Version:** \`${CLEAN_VERSION}\` (versionCode \`${VERSION_CODE}\`)"
+            echo ""
+            if [ -n "$CUSTOM_NOTES" ]; then
+              echo "### What's New"
+              printf '%s\n' "$CUSTOM_NOTES"
+              echo ""
+            elif [ -f RELEASE_NOTES.md ]; then
+              cat RELEASE_NOTES.md
+              echo ""
+            fi
+            echo "### How to Install"
+            echo "1. Download **\`${APK_NAME}\`** from the Assets section below on your Android phone (Android 7.0 / API 24 or higher)."
+            echo "2. Open the downloaded \`.apk\` file and allow installation from your browser or file manager if prompted."
+          } > release-output/release_body.md
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -196,14 +227,7 @@ jobs:
           prerelease: false
           make_latest: true
           generate_release_notes: true
-          body: |
-            ## 80endance ${{ steps.meta.outputs.release_tag }}
-
-            - **App Version:** `${{ steps.meta.outputs.clean_version }}` (versionCode `${{ steps.meta.outputs.version_code }}`)
-
-            ### How to Install
-            1. Download **`${{ steps.artifact.outputs.apk_name }}`** from the Assets section below on your Android phone (Android 7.0 / API 24 or higher).
-            2. Open the downloaded `.apk` file and allow installation from your browser or file manager if prompted.
+          body_path: release-output/release_body.md
           files: |
             ${{ steps.artifact.outputs.apk_path }}
             ${{ steps.artifact.outputs.checksum_path }}

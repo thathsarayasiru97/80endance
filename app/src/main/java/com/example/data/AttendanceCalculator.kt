@@ -265,15 +265,15 @@ object AttendanceCalculator {
         lockedRange: Pair<String, String>? = null
     ): List<WeekDaySummary> {
         val recordMap = records.associateBy { it.dateKey }
-        val eventMap = calendarEvents.associateBy { it.dateKey }
+        val eventsByDate = calendarEvents.groupBy { it.dateKey }
         return DateUtils.currentWeekMonToFri().map { (label, dateKey) ->
-            val ev = eventMap[dateKey]
+            val nonSchoolEv = eventsByDate[dateKey]?.firstOrNull { it.nonSchoolDay }
             val locked = lockedRange != null && dateKey >= lockedRange.first && dateKey <= lockedRange.second
             WeekDaySummary(
                 dayLabel = label,
                 dateKey = dateKey,
                 status = if (locked) null else recordMap[dateKey]?.statusEnum,
-                holidayLabel = ev?.takeIf { it.nonSchoolDay }?.title,
+                holidayLabel = nonSchoolEv?.title,
                 isToday = dateKey == todayKey,
                 isFuture = dateKey > todayKey,
                 isLocked = locked
@@ -306,9 +306,10 @@ object AttendanceCalculator {
 
     fun filterCalendarEventsForStudent(
         events: List<CalendarEvent>,
-        profile: UserProfile?
+        profile: UserProfile?,
+        userId: String = profile?.userId.orEmpty()
     ): List<CalendarEvent> {
-        return events.filter { it.published && it.appliesToStudent(profile) }
+        return events.filter { it.published && it.appliesToStudent(profile, userId) }
     }
 
     /**

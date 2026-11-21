@@ -24,11 +24,17 @@ object AppConstants {
     )
     val EXAM_YEARS = listOf(2026, 2027, 2028)
 
+    fun defaultExamYearForGrade(grade: String): Int = when (grade.trim()) {
+        "Grade 12" -> 2028
+        "Grade 13" -> 2026
+        else -> 2026
+    }
+
     fun defaultSubjectsForStream(stream: String): List<String> = when (stream) {
         "Physical Science" -> listOf("Combined Maths", "Physics", "Chemistry")
         "Bio Science" -> listOf("Biology", "Chemistry", "Physics")
         "Commerce" -> listOf("Accounting", "Business Studies", "Economics")
-        "Arts" -> listOf("Economics", "Political Science", "Logic")
+        "Arts" -> listOf("Economics", "Political Science", "Logic & Scientific Method")
         "Technology" -> listOf("Engineering Tech", "Science for Tech", "ICT")
         else -> listOf("Combined Maths", "Physics", "Chemistry")
     }
@@ -87,7 +93,8 @@ enum class AppAccentPalette(val raw: String, val label: String) {
 
 enum class FeedbackType(val raw: String, val label: String) {
     BUG("bug", "Bug Report"),
-    SUGGESTION("suggestion", "Feature Idea");
+    SUGGESTION("suggestion", "Feature Idea"),
+    CATALOG_REQUEST("catalog_request", "Missing Subject / Class");
 
     companion object {
         fun fromRaw(raw: String?): FeedbackType =
@@ -134,7 +141,8 @@ enum class CalendarEventType(val raw: String, val label: String) {
     POYA("poya", "Poya Day"),
     PUBLIC_HOLIDAY("public_holiday", "Public Holiday"),
     TERM_BREAK("term_break", "Term Break"),
-    SCHOOL_HOLIDAY("school_holiday", "School Holiday"),
+    SCHOOL_HOLIDAY("school_holiday", "No School / Holiday"),
+    SCHOOL_EVENT("school_event", "School Event"),
     EXAM("exam", "Exam Date");
 
     companion object {
@@ -304,6 +312,12 @@ data class CalendarEvent(
     val published: Boolean = true,
     val targetType: String = CalendarEventTargetType.ALL.raw,
     val targetValue: String? = null,
+    val targetAll: Boolean? = null,
+    val targetGrades: List<String> = emptyList(),
+    val targetStreams: List<String> = emptyList(),
+    val targetClasses: List<String> = emptyList(),
+    val targetUserIds: List<String> = emptyList(),
+    val audienceSummary: String? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -314,15 +328,53 @@ data class CalendarEvent(
         get() = CalendarEventTargetType.fromRaw(targetType)
 
     val nonSchoolDay: Boolean
-        get() = eventTypeEnum != CalendarEventType.EXAM
+        get() = eventTypeEnum != CalendarEventType.EXAM && eventTypeEnum != CalendarEventType.SCHOOL_EVENT
 
-    val targetDisplayLabel: String?
-        get() = when (targetTypeEnum) {
-            CalendarEventTargetType.ALL -> null
-            else -> targetValue?.trim()?.takeIf { it.isNotEmpty() } ?: targetTypeEnum.label
+    val hasMultiAudienceTargeting: Boolean
+        get() = targetAll != null ||
+            targetGrades.isNotEmpty() ||
+            targetStreams.isNotEmpty() ||
+            targetClasses.isNotEmpty() ||
+            targetUserIds.isNotEmpty()
+
+    val isTargetedToSpecificGroup: Boolean
+        get() = if (hasMultiAudienceTargeting) {
+            targetAll != true
+        } else {
+            targetTypeEnum != CalendarEventTargetType.ALL
         }
 
-    fun appliesToStudent(profile: UserProfile?): Boolean {
+    val targetDisplayLabel: String?
+        get() {
+            if (hasMultiAudienceTargeting) {
+                if (targetAll == true) return null
+                audienceSummary?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+                val parts = buildList {
+                    if (targetGrades.isNotEmpty()) add(targetGrades.joinToString(", "))
+                    if (targetStreams.isNotEmpty()) add(targetStreams.joinToString(", "))
+                    if (targetClasses.isNotEmpty()) add(targetClasses.joinToString(", "))
+                    if (targetUserIds.isNotEmpty()) add("${targetUserIds.size} student${if (targetUserIds.size == 1) "" else "s"}")
+                }
+                return parts.joinToString(" • ").ifEmpty { "Selected Group" }
+            }
+            return when (targetTypeEnum) {
+                CalendarEventTargetType.ALL -> null
+                else -> targetValue?.trim()?.takeIf { it.isNotEmpty() } ?: targetTypeEnum.label
+            }
+        }
+
+    fun appliesToStudent(profile: UserProfile?, userId: String = profile?.userId.orEmpty()): Boolean {
+        if (hasMultiAudienceTargeting) {
+            if (targetAll == true) return true
+            if (userId.isNotBlank() && targetUserIds.any { it == userId }) return true
+            if (profile == null) return false
+            val grade = profile.grade.trim()
+            val stream = profile.alStream.trim()
+            val cls = profile.className.trim()
+            return (grade.isNotEmpty() && targetGrades.any { it.trim().equals(grade, ignoreCase = true) }) ||
+                (stream.isNotEmpty() && targetStreams.any { it.trim().equals(stream, ignoreCase = true) }) ||
+                (cls.isNotEmpty() && targetClasses.any { it.trim().equals(cls, ignoreCase = true) })
+        }
         return when (targetTypeEnum) {
             CalendarEventTargetType.ALL -> true
             CalendarEventTargetType.GRADE ->
@@ -420,3 +472,18 @@ data class BroadcastNotification(
             (cls.isNotEmpty() && targetClasses.any { it.trim().equals(cls, ignoreCase = true) })
     }
 }
+
+@Keep
+@IgnoreExtraProperties
+data class AcademicCatalogDoc(
+    @DocumentId val id: String = "academic_catalog",
+    val streamSubjectBucketsJson: String = "",
+    val gradeStreamClassesJson: String = "",
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun toCatalog(): AcademicCatalog = AcademicCatalog.fromFirestoreJson(
+        streamSubjectBucketsJson = streamSubjectBucketsJson,
+        gradeStreamClassesJson = gradeStreamClassesJson
+    )
+}
+

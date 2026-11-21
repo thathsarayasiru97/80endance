@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 object SyncScheduler {
     private const val SYNC_JOB_ID = 80801
+    private const val PERIODIC_NOTIFICATION_SYNC_JOB_ID = 80802
+    private const val PERIODIC_INTERVAL_MS = 15L * 60L * 1000L // 15 min minimum allowed by Android JobScheduler
     private const val TAG = "SyncScheduler"
 
     fun scheduleBackgroundSync(context: Context) {
@@ -32,6 +34,31 @@ object SyncScheduler {
             Log.d(TAG, "Scheduled background network sync job")
         } else {
             Log.w(TAG, "Failed to schedule background sync job")
+        }
+    }
+
+    /**
+     * Schedules a Play-policy-compliant periodic JobScheduler task (every 15 minutes, persisted across reboots)
+     * that checks Firestore for newly released admin announcements and delivers them as device notifications
+     * even when the app is closed.
+     */
+    fun schedulePeriodicNotificationSync(context: Context) {
+        val appContext = context.applicationContext
+        val scheduler = appContext.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler
+            ?: return
+        if (scheduler.getPendingJob(PERIODIC_NOTIFICATION_SYNC_JOB_ID) != null) {
+            return
+        }
+        val component = ComponentName(appContext, AttendanceSyncJobService::class.java)
+        val builder = JobInfo.Builder(PERIODIC_NOTIFICATION_SYNC_JOB_ID, component)
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+            .setPeriodic(PERIODIC_INTERVAL_MS)
+            .setPersisted(true)
+        val result = runCatching { scheduler.schedule(builder.build()) }.getOrDefault(JobScheduler.RESULT_FAILURE)
+        if (result == JobScheduler.RESULT_SUCCESS) {
+            Log.d(TAG, "Scheduled 15-min periodic background notification sync")
+        } else {
+            Log.w(TAG, "Could not schedule periodic background notification sync")
         }
     }
 

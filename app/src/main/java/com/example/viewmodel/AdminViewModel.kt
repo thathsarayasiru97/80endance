@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
 import com.example.data.AppSettings
 import com.example.data.AttendanceCalculator
@@ -47,6 +48,7 @@ data class AdminUiState(
     val onlineNowCount: Int = 0,
     val presenceNowMillis: Long = System.currentTimeMillis(),
     val appSettings: AppSettings = AppSettings(),
+    val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
     val selectedStudent: UserProfile? = null,
     val selectedStudentRecords: List<AttendanceRecord> = emptyList(),
     val isBusy: Boolean = false,
@@ -96,9 +98,12 @@ class AdminViewModel(
         repository.observeAllFeedbackAdmin().safeStream(emptyList(), "feedback"),
         repository.observeBroadcastNotifications().safeStream(emptyList(), "broadcasts"),
         repository.observeCommunityStats().safeStream(CommunityStats(), "communityStats"),
-        presenceTickFlow
-    ) { settings, feedback, broadcasts, communityStats, nowMs ->
-        AdminSecondaryBundle(settings, feedback, broadcasts, communityStats, nowMs)
+        combine(
+            presenceTickFlow,
+            repository.observeAcademicCatalog().safeStream(AcademicCatalog.defaultCatalog(), "catalog")
+        ) { nowMs, catalog -> nowMs to catalog }
+    ) { settings, feedback, broadcasts, communityStats, tickAndCatalog ->
+        AdminSecondaryBundle(settings, feedback, broadcasts, communityStats, tickAndCatalog.first, tickAndCatalog.second)
     }
 
     val uiState: StateFlow<AdminUiState> = combine(
@@ -138,6 +143,7 @@ class AdminViewModel(
             onlineNowCount = onlineNowCount,
             presenceNowMillis = sec.nowMs,
             appSettings = sec.settings,
+            academicCatalog = sec.academicCatalog,
             selectedStudent = selectedStudent,
             selectedStudentRecords = extras.selectedRecords,
             isBusy = extras.busy
@@ -295,29 +301,63 @@ class AdminViewModel(
     }
 
     fun saveCalendarEvent(
+        eventId: String? = null,
         title: String,
         dateKey: String,
         eventType: CalendarEventType,
         description: String?,
+        targetAll: Boolean = true,
+        targetGrades: List<String> = emptyList(),
+        targetStreams: List<String> = emptyList(),
+        targetClasses: List<String> = emptyList(),
+        targetUserIds: List<String> = emptyList(),
+        audienceSummary: String = "All Students",
+        alsoSendNotification: Boolean = false,
         onDone: () -> Unit = {}
     ) {
         viewModelScope.launch {
             _isBusy.value = true
             val year = dateKey.take(4).toIntOrNull() ?: 2026
             val res = repository.saveCalendarEvent(
-                eventId = null,
+                eventId = eventId,
                 title = title,
                 dateKey = dateKey,
                 eventType = eventType,
                 academicYear = year,
-                description = description
+                description = description,
+                targetType = if (targetAll) CalendarEventTargetType.ALL else CalendarEventTargetType.CLASS,
+                targetValue = if (targetAll) null else audienceSummary.take(60),
+                targetAll = targetAll,
+                targetGrades = targetGrades,
+                targetStreams = targetStreams,
+                targetClasses = targetClasses,
+                targetUserIds = targetUserIds,
+                audienceSummary = audienceSummary,
+                alsoSendNotification = alsoSendNotification
             )
             _isBusy.value = false
             res.onSuccess {
-                _snackbar.value = "Calendar event saved"
+                _snackbar.value = if (alsoSendNotification) {
+                    "Calendar event saved & notified $audienceSummary"
+                } else {
+                    "Calendar event saved"
+                }
                 onDone()
             }.onFailure { e ->
                 _snackbar.value = e.message ?: "Could not save event"
+            }
+        }
+    }
+
+    fun saveAcademicCatalog(catalog: AcademicCatalog, successMessage: String = "Subjects & classes updated") {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.saveAcademicCatalog(catalog)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = successMessage
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not save catalog"
             }
         }
     }
@@ -545,7 +585,8 @@ class AdminViewModel(
         val feedback: List<FeedbackReport>,
         val broadcasts: List<BroadcastNotification>,
         val communityStats: CommunityStats,
-        val nowMs: Long
+        val nowMs: Long,
+        val academicCatalog: AcademicCatalog
     )
 
     private data class AdminExtras(

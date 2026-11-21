@@ -432,4 +432,79 @@ class AttendanceCalculatorTest {
         assertTrue(specificStudentAlert.matchesStudent(student13M2, "uid_yasiru"))
         assertFalse(specificStudentAlert.matchesStudent(student12B1, "uid_nimal"))
     }
+
+    @Test
+    fun defaultExamYearMatchesGrade12And13() {
+        assertEquals(2028, com.example.data.AppConstants.defaultExamYearForGrade("Grade 12"))
+        assertEquals(2026, com.example.data.AppConstants.defaultExamYearForGrade("Grade 13"))
+    }
+
+    @Test
+    fun academicCatalogSupportsBucketsClassesAndMutations() {
+        val base = com.example.data.AcademicCatalog.defaultCatalog()
+        val bio12Classes = base.classesFor("Grade 12", "Bio Science")
+        assertTrue(bio12Classes.contains("12S1"))
+        assertTrue(bio12Classes.contains("12S2"))
+        assertTrue(base.subjectsFor("Physical Science", com.example.data.AcademicCatalog.BUCKET_3).contains("ICT"))
+
+        val updated = base
+            .withAddedSubject("Physical Science", com.example.data.AcademicCatalog.BUCKET_3, "Higher Mathematics")
+            .withRemovedSubject("Physical Science", com.example.data.AcademicCatalog.BUCKET_3, "ICT")
+            .withAddedClass("Grade 12", "Bio Science", "12S7")
+            .withRemovedClass("Grade 12", "Bio Science", "12S6")
+
+        val updatedBucket3 = updated.subjectsFor("Physical Science", com.example.data.AcademicCatalog.BUCKET_3)
+        assertTrue(updatedBucket3.contains("Higher Mathematics"))
+        assertFalse(updatedBucket3.contains("ICT"))
+
+        val updatedClasses = updated.classesFor("Grade 12", "Bio Science")
+        assertTrue(updatedClasses.contains("12S7"))
+        assertFalse(updatedClasses.contains("12S6"))
+    }
+
+    @Test
+    fun multiAudienceCalendarEventIsStrictlyIsolatedToTargetStudents() {
+        val student12S1 = UserProfile(
+            id = "u_bio",
+            userId = "u_bio",
+            grade = "Grade 12",
+            alStream = "Bio Science",
+            className = "12S1"
+        )
+        val student13M2 = UserProfile(
+            id = "u_maths",
+            userId = "u_maths",
+            grade = "Grade 13",
+            alStream = "Physical Science",
+            className = "13M2"
+        )
+
+        val targetedEvent = CalendarEvent(
+            id = "ev_bio_only",
+            title = "Biology Practical Workshop",
+            dateKey = "2026-06-15",
+            eventType = CalendarEventType.SCHOOL_EVENT.raw,
+            description = "There might be no teaching during periods 4-6 for 12S1.",
+            targetAll = false,
+            targetClasses = listOf("12S1"),
+            audienceSummary = "12S1"
+        )
+        val secondEventSameDay = CalendarEvent(
+            id = "ev_school_wide",
+            title = "Morning Assembly",
+            dateKey = "2026-06-15",
+            eventType = CalendarEventType.SCHOOL_EVENT.raw,
+            targetAll = true,
+            audienceSummary = "All Students"
+        )
+
+        val allEvents = listOf(targetedEvent, secondEventSameDay)
+        val bioVisible = AttendanceCalculator.filterCalendarEventsForStudent(allEvents, student12S1, "u_bio")
+        val mathsVisible = AttendanceCalculator.filterCalendarEventsForStudent(allEvents, student13M2, "u_maths")
+
+        assertEquals(2, bioVisible.size)
+        assertEquals(1, mathsVisible.size)
+        assertEquals("ev_school_wide", mathsVisible.first().id)
+    }
 }
+

@@ -497,3 +497,82 @@ test("User presence, community account stats, and admin broadcast notifications 
   await assertFails(studentA.collection("broadcast_notifications").doc("bc_1").delete());
   await assertSucceeds(adminDb.collection("broadcast_notifications").doc("bc_1").delete());
 });
+
+test("Academic catalog, targeted multi-audience calendar events, and catalog_request feedback obey zero-trust rules", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+
+  // Academic catalog: unauth denied; student read-only; admin create/update; list & delete denied
+  await assertFails(unauthDb.collection("app_config").doc("academic_catalog").get());
+  const catalogPayload = {
+    streamSubjectBucketsJson: JSON.stringify({ "Physical Science": { "Bucket 1": ["Combined Maths"] } }),
+    gradeStreamClassesJson: JSON.stringify({ "Grade 12|Bio Science": ["12S1", "12S2"] }),
+    updatedAt: now,
+  };
+  await assertFails(studentA.collection("app_config").doc("academic_catalog").set(catalogPayload));
+  await assertSucceeds(adminDb.collection("app_config").doc("academic_catalog").set(catalogPayload));
+  await assertSucceeds(studentA.collection("app_config").doc("academic_catalog").get());
+  await assertFails(studentA.collection("app_config").get());
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("academic_catalog").update({
+      gradeStreamClassesJson: JSON.stringify({ "Grade 12|Bio Science": ["12S1", "12S2", "12S3"] }),
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertFails(adminDb.collection("app_config").doc("academic_catalog").delete());
+
+  // Targeted multi-audience school_event calendar entry + edit
+  const targetedEvent = {
+    title: "Science Day Practice",
+    dateKey: "2026-11-28",
+    eventType: "school_event",
+    academicYear: 2026,
+    description: "There might be no teaching for Grade 12 Bio Science classes 12S1 & 12S2.",
+    targetAll: false,
+    targetGrades: ["Grade 12"],
+    targetStreams: ["Bio Science"],
+    targetClasses: ["12S1", "12S2"],
+    targetUserIds: [],
+    audienceSummary: "Grade 12 • Bio Science • 12S1, 12S2",
+    published: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await assertFails(studentA.collection("calendar_events").doc("ev_multi_1").set(targetedEvent));
+  await assertSucceeds(adminDb.collection("calendar_events").doc("ev_multi_1").set(targetedEvent));
+  await assertSucceeds(
+    adminDb.collection("calendar_events").doc("ev_multi_1").update({
+      description: "Updated note for 12S1 only.",
+      targetClasses: ["12S1"],
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  // Student submits catalog_request feedback & queries own feedback list
+  await assertSucceeds(
+    studentA.collection("feedback").doc("fb_catalog_1").set({
+      userId: STUDENT_A_UID,
+      userName: "Kavindu Perera",
+      userEmail: "a@royal.lk",
+      className: "12S1",
+      type: "catalog_request",
+      title: "Missing Subject: French",
+      message: "Student entered custom subject 'French' under Arts → Bucket 3.",
+      appVersion: "1.5",
+      status: "open",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(studentA.collection("feedback").where("userId", "==", STUDENT_A_UID).get());
+});
+

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceRecord
@@ -19,24 +20,30 @@ import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.data.FeedbackReport
+import com.example.data.FeedbackStatus
 import com.example.data.FeedbackType
 import com.example.data.Notice
 import com.example.data.NoticeCategory
+import com.example.data.ReleaseNotesCatalog
 import com.example.data.UserProfile
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.UpdateCheckStatusSummary
 import com.example.ui.admin.AdminBroadcastTab
+import com.example.ui.admin.AdminCatalogTab
 import com.example.ui.admin.AdminNoSchoolCard
 import com.example.ui.admin.AdminTermRolloverCard
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
 import com.example.ui.components.FeedbackReportDialog
+import com.example.ui.components.FeedbackWelcomeDialog
 import com.example.ui.components.LiquidGlassBackdropHost
 import com.example.ui.components.PinnedNoticeSlideshow
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.UpdateAvailableDialog
+import com.example.ui.components.WhatsNewDialog
 import com.example.ui.home.HomeScreen
 import com.example.ui.reports.ReportsScreen
 import com.example.ui.settings.SettingsScreen
@@ -149,7 +156,7 @@ class ScreensRenderRobolectricTest {
                         initialDisplayName = "Yasiru Perera",
                         existingProfile = sampleState.profile,
                         isSaving = false,
-                        onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> }
+                        onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> }
                     )
                     DailyCheckInDialog(
                         dateKey = "2026-11-20",
@@ -668,4 +675,140 @@ class ScreensRenderRobolectricTest {
             .performScrollToNode(hasTestTag("settings_update_status_banner"))
         composeTestRule.onNodeWithTag("settings_update_status_banner").assertIsDisplayed()
     }
+
+    @Test
+    fun homeScreenShowsHeroAlCountdownAndInAppResolvedFeedbackBanner() {
+        val stateWithHeroAndResolved = sampleState.copy(
+            daysUntilAlExam = 142,
+            resolvedFeedbackAlerts = listOf(
+                FeedbackReport(
+                    id = "fb_1",
+                    userId = "u1",
+                    type = FeedbackType.BUG.raw,
+                    title = "Test popup on weekends",
+                    message = "Doesn't open on Saturday",
+                    status = FeedbackStatus.RESOLVED.raw
+                )
+            )
+        )
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = stateWithHeroAndResolved,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(300L)
+        composeTestRule.onNodeWithTag("home_al_countdown_hero").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_resolved_feedback_banner").assertIsDisplayed()
+
+        // Advance past the 2000ms spotlight hold so the countdown docks smoothly into the compact chip
+        composeTestRule.mainClock.advanceTimeBy(2300L)
+        composeTestRule.onNodeWithTag("home_al_countdown_chip").assertIsDisplayed()
+    }
+
+    @Test
+    fun whatsNewAndFeedbackWelcomeDialogsRenderCorrectly() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                WhatsNewDialog(
+                    releaseNotes = ReleaseNotesCatalog.forVersion("1.6"),
+                    onContinue = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("whats_new_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("whats_new_continue_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun feedbackWelcomeDialogShowsLocationAndButtons() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                FeedbackWelcomeDialog(
+                    isAfterUpdate = true,
+                    onGoToSettings = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("feedback_welcome_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("feedback_welcome_go_settings").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("feedback_welcome_dismiss").assertIsDisplayed()
+    }
+
+    @Test
+    fun adminCatalogTabRendersSubjectAndClassEditors() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                AdminCatalogTab(
+                    catalog = AcademicCatalog.defaultCatalog(),
+                    isBusy = false,
+                    onSaveCatalog = { _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_catalog_tab").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_catalog_tab")
+            .performScrollToNode(hasTestTag("admin_catalog_add_subject_input"))
+        composeTestRule.onNodeWithTag("admin_catalog_add_subject_input").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_catalog_tab")
+            .performScrollToNode(hasTestTag("admin_catalog_add_class_input"))
+        composeTestRule.onNodeWithTag("admin_catalog_add_class_input").assertIsDisplayed()
+    }
+
+    @Test
+    fun academicCatalogJsonRoundTripWorksOnAndroid() {
+        val updated = AcademicCatalog.defaultCatalog()
+            .withAddedSubject("Physical Science", AcademicCatalog.BUCKET_3, "Higher Mathematics")
+            .withAddedClass("Grade 12", "Bio Science", "12S7")
+        val (streamsJson, classesJson) = updated.toFirestoreJsonPair()
+        val restored = AcademicCatalog.fromFirestoreJson(streamsJson, classesJson)
+        org.junit.Assert.assertTrue(
+            restored.subjectsFor("Physical Science", AcademicCatalog.BUCKET_3).contains("Higher Mathematics")
+        )
+        org.junit.Assert.assertTrue(
+            restored.classesFor("Grade 12", "Bio Science").contains("12S7")
+        )
+    }
+
+    @Test
+    fun adminCanTapAnyFutureDayOnCalendarAndSeeAddEventButton() {
+        val today = DateUtils.todayKey()
+        val (curY, curM) = DateUtils.currentYearMonth()
+        val daysInMonth = DateUtils.daysInMonth(curY, curM)
+        val futureDay = (1..daysInMonth)
+            .map { DateUtils.formatDateKey(curY, curM, it) }
+            .firstOrNull { it > today } ?: today
+
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    CalendarScreen(
+                        state = sampleState.copy(calendarEvents = emptyList()),
+                        onEditDate = {},
+                        onDeleteDate = {},
+                        isVerifiedAdmin = true,
+                        onAdminSaveCalendarEvent = { _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                        onAdminDeleteCalendarEvent = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_day_$futureDay").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_admin_add_event_button").assertIsDisplayed()
+    }
 }
+

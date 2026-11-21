@@ -27,7 +27,16 @@ data class LocalReminderPrefs(
     val sundayPrepEnabled: Boolean = true,
     val themeModeRaw: String = AppThemeMode.SYSTEM.raw,
     val accentPaletteRaw: String = AppAccentPalette.ROYAL_BLUE.raw,
-    val seenBroadcastIds: Set<String> = emptySet()
+    /** IDs dismissed from the in-app Home broadcast banner. */
+    val seenBroadcastIds: Set<String> = emptySet(),
+    /** IDs that have ALREADY triggered a device status-bar notification (strictly once per device). */
+    val notifiedBroadcastIds: Set<String> = emptySet(),
+    /** Feedback report IDs whose "Resolved" in-app notification banner has been acknowledged. */
+    val acknowledgedResolvedFeedbackIds: Set<String> = emptySet(),
+    /** Last app versionName whose "What's New" dialog or initial setup was recorded. */
+    val lastSeenAppVersion: String = "",
+    /** Last app versionName for which the Feedback Encouragement popup was shown. */
+    val lastFeedbackPromptVersion: String = ""
 ) {
     val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
     val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
@@ -43,6 +52,10 @@ class LocalPreferencesStore(private val context: Context) {
     private val keyThemeMode = stringPreferencesKey("app_theme_mode")
     private val keyAccentPalette = stringPreferencesKey("app_accent_palette")
     private val keySeenBroadcastIds = stringSetPreferencesKey("seen_broadcast_ids")
+    private val keyNotifiedBroadcastIds = stringSetPreferencesKey("notified_broadcast_ids")
+    private val keyAckResolvedFeedbackIds = stringSetPreferencesKey("ack_resolved_feedback_ids")
+    private val keyLastSeenAppVersion = stringPreferencesKey("last_seen_app_version")
+    private val keyLastFeedbackPromptVersion = stringPreferencesKey("last_feedback_prompt_version")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -54,7 +67,11 @@ class LocalPreferencesStore(private val context: Context) {
             sundayPrepEnabled = prefs[keySundayPrepEnabled] ?: true,
             themeModeRaw = prefs[keyThemeMode] ?: AppThemeMode.SYSTEM.raw,
             accentPaletteRaw = prefs[keyAccentPalette] ?: AppAccentPalette.ROYAL_BLUE.raw,
-            seenBroadcastIds = prefs[keySeenBroadcastIds] ?: emptySet()
+            seenBroadcastIds = prefs[keySeenBroadcastIds] ?: emptySet(),
+            notifiedBroadcastIds = prefs[keyNotifiedBroadcastIds] ?: emptySet(),
+            acknowledgedResolvedFeedbackIds = prefs[keyAckResolvedFeedbackIds] ?: emptySet(),
+            lastSeenAppVersion = prefs[keyLastSeenAppVersion] ?: "",
+            lastFeedbackPromptVersion = prefs[keyLastFeedbackPromptVersion] ?: ""
         )
     }
 
@@ -100,7 +117,43 @@ class LocalPreferencesStore(private val context: Context) {
             ids.forEach { id ->
                 if (id.isNotBlank() && id !in current) current.add(id)
             }
-            prefs[keySeenBroadcastIds] = current.takeLast(80).toSet()
+            prefs[keySeenBroadcastIds] = current.takeLast(120).toSet()
+        }
+    }
+
+    suspend fun markBroadcastsNotified(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        context.appPrefsDataStore.edit { prefs ->
+            val current = prefs[keyNotifiedBroadcastIds]?.toMutableList() ?: mutableListOf()
+            ids.forEach { id ->
+                if (id.isNotBlank() && id !in current) current.add(id)
+            }
+            prefs[keyNotifiedBroadcastIds] = current.takeLast(150).toSet()
+        }
+    }
+
+    suspend fun acknowledgeResolvedFeedback(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        context.appPrefsDataStore.edit { prefs ->
+            val current = prefs[keyAckResolvedFeedbackIds]?.toMutableList() ?: mutableListOf()
+            ids.forEach { id ->
+                if (id.isNotBlank() && id !in current) current.add(id)
+            }
+            prefs[keyAckResolvedFeedbackIds] = current.takeLast(120).toSet()
+        }
+    }
+
+    suspend fun markAppVersionSeen(versionName: String) {
+        if (versionName.isBlank()) return
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastSeenAppVersion] = versionName.trim()
+        }
+    }
+
+    suspend fun markFeedbackPromptShownForVersion(versionName: String) {
+        if (versionName.isBlank()) return
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastFeedbackPromptVersion] = versionName.trim()
         }
     }
 }

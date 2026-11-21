@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
 import com.example.data.AppAccentPalette
 import com.example.data.AppSettings
@@ -17,8 +18,12 @@ import com.example.data.AttendanceStats
 import com.example.data.AttendanceStatus
 import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
+import com.example.data.CalendarEventTargetType
+import com.example.data.CalendarEventType
 import com.example.data.CommunityStats
 import com.example.data.DateUtils
+import com.example.data.FeedbackReport
+import com.example.data.FeedbackStatus
 import com.example.data.FeedbackType
 import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
@@ -40,6 +45,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -60,6 +66,9 @@ data class StudentAppState(
     val terms: List<AcademicTerm> = SriLankaCalendarDefaults.defaultTerms,
     val activeTerm: AcademicTerm = SriLankaCalendarDefaults.defaultTerms[2],
     val calendarEvents: List<CalendarEvent> = SriLankaCalendarDefaults.defaultEvents,
+    val allCalendarEventsForAdmin: List<CalendarEvent> = emptyList(),
+    val adminAllStudents: List<UserProfile> = emptyList(),
+    val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
     val appSettings: AppSettings = AppSettings(),
     val syncStatus: SyncStatus = SyncStatus.SYNCED,
     val currentMonthLabel: String = DateUtils.currentMonthYearLabel(),
@@ -88,7 +97,11 @@ data class StudentAppState(
     val accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE,
     val totalAccounts: Int = 0,
     val adminOnlineNowCount: Int? = null,
-    val unreadBroadcasts: List<BroadcastNotification> = emptyList()
+    val unreadBroadcasts: List<BroadcastNotification> = emptyList(),
+    val resolvedFeedbackAlerts: List<FeedbackReport> = emptyList(),
+    val lastSeenAppVersion: String = "",
+    val lastFeedbackPromptVersion: String = "",
+    val localPrefsLoaded: Boolean = false
 )
 
 private data class CoreFirestoreBundle(
@@ -98,15 +111,29 @@ private data class CoreFirestoreBundle(
     val notices: List<Notice> = emptyList(),
     val terms: List<AcademicTerm> = emptyList(),
     val events: List<CalendarEvent> = emptyList(),
-    val settings: AppSettings = AppSettings(),
     val streamError: String? = null
+)
+
+private data class AdminStreamBundle(
+    val students: List<UserProfile> = emptyList(),
+    val onlineNowCount: Int? = null
 )
 
 private data class CommunityExtrasBundle(
     val settings: AppSettings = AppSettings(),
     val communityStats: CommunityStats = CommunityStats(),
     val broadcasts: List<BroadcastNotification> = emptyList(),
-    val adminOnlineNowCount: Int? = null
+    val adminBundle: AdminStreamBundle = AdminStreamBundle(),
+    val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
+    val userFeedback: List<FeedbackReport> = emptyList()
+)
+
+private data class LocalSessionState(
+    val prefs: LocalReminderPrefs = LocalReminderPrefs(),
+    val prefsLoaded: Boolean = false,
+    val sessionDismissedCheckIn: Boolean = false,
+    val sessionDismissedBroadcastIds: Set<String> = emptySet(),
+    val sessionAckResolvedFeedbackIds: Set<String> = emptySet()
 )
 
 class AttendanceViewModel(
@@ -125,6 +152,9 @@ class AttendanceViewModel(
 
     private val _manualCheckInDate = MutableStateFlow<String?>(null)
     val manualCheckInDate: StateFlow<String?> = _manualCheckInDate.asStateFlow()
+
+    private val _manualCheckInIsPreview = MutableStateFlow(false)
+    val manualCheckInIsPreview: StateFlow<Boolean> = _manualCheckInIsPreview.asStateFlow()
 
     private val _sessionDismissedCheckIn = MutableStateFlow(false)
 
@@ -172,9 +202,10 @@ class AttendanceViewModel(
     }
 
     private val _sessionDismissedBroadcastIds = MutableStateFlow<Set<String>>(emptySet())
-    private val notifiedBroadcastIds = mutableSetOf<String>()
+    private val _sessionAckResolvedFeedbackIds = MutableStateFlow<Set<String>>(emptySet())
+    private val inMemoryNotifiedBroadcastIds = mutableSetOf<String>()
 
-    private val adminOnlineCountFlow: Flow<Int?> = if (isVerifiedAdmin) {
+    private val adminStreamFlow: Flow<AdminStreamBundle> = if (isVerifiedAdmin) {
         combine(
             repository.observeAllStudentsAdmin().safeFirestoreFlow(emptyList(), "adminStudents"),
             kotlinx.coroutines.flow.flow {
@@ -184,23 +215,51 @@ class AttendanceViewModel(
                 }
             }
         ) { studentsPair, nowMs ->
-            studentsPair.first.count { it.isCurrentlyOnline(nowMs) }
+            AdminStreamBundle(
+                students = studentsPair.first,
+                onlineNowCount = studentsPair.first.count { it.isCurrentlyOnline(nowMs) }
+            )
         }
     } else {
-        kotlinx.coroutines.flow.flowOf(null)
+        kotlinx.coroutines.flow.flowOf(AdminStreamBundle())
+    }
+
+    private val catalogAndFeedbackFlow: Flow<Pair<AcademicCatalog, List<FeedbackReport>>> = combine(
+        repository.observeAcademicCatalog().safeFirestoreFlow(AcademicCatalog.defaultCatalog(), "catalog"),
+        repository.observeUserFeedbackReports(currentUserId).safeFirestoreFlow(emptyList(), "userFeedback")
+    ) { catalogPair, feedbackPair ->
+        catalogPair.first to feedbackPair.first
     }
 
     private val extrasBundleFlow: Flow<CommunityExtrasBundle> = combine(
         repository.observeAppSettings().safeFirestoreFlow(AppSettings(), "settings"),
         repository.observeCommunityStats().safeFirestoreFlow(CommunityStats(), "communityStats"),
         repository.observeBroadcastNotifications().safeFirestoreFlow(emptyList(), "broadcasts"),
-        adminOnlineCountFlow
-    ) { settingsPair, statsPair, broadcastsPair, onlineCount ->
+        adminStreamFlow,
+        catalogAndFeedbackFlow
+    ) { settingsPair, statsPair, broadcastsPair, adminBundle, catalogAndFeedback ->
         CommunityExtrasBundle(
             settings = settingsPair.first,
             communityStats = statsPair.first,
             broadcasts = broadcastsPair.first,
-            adminOnlineNowCount = onlineCount
+            adminBundle = adminBundle,
+            academicCatalog = catalogAndFeedback.first,
+            userFeedback = catalogAndFeedback.second
+        )
+    }
+
+    private val localSessionFlow: Flow<LocalSessionState> = combine(
+        localPrefs.prefsFlow.map { it to true },
+        _sessionDismissedCheckIn,
+        _sessionDismissedBroadcastIds,
+        _sessionAckResolvedFeedbackIds
+    ) { prefsPair, dismissedCheckIn, dismissedBroadcasts, ackFeedback ->
+        LocalSessionState(
+            prefs = prefsPair.first,
+            prefsLoaded = prefsPair.second,
+            sessionDismissedCheckIn = dismissedCheckIn,
+            sessionDismissedBroadcastIds = dismissedBroadcasts,
+            sessionAckResolvedFeedbackIds = ackFeedback
         )
     }
 
@@ -211,18 +270,18 @@ class AttendanceViewModel(
         extrasBundleFlow,
         networkFlow,
         repository.hasPendingWrites,
-        combine(
-            localPrefs.prefsFlow,
-            _sessionDismissedCheckIn,
-            _sessionDismissedBroadcastIds
-        ) { prefs, dismissed, dismissedBroadcasts -> Triple(prefs, dismissed, dismissedBroadcasts) }
-    ) { bundle, extras, isOnline, hasPending, localTriple ->
-        val (prefs, sessionDismissed, sessionDismissedBroadcasts) = localTriple
+        localSessionFlow
+    ) { bundle, extras, isOnline, hasPending, localState ->
+        val prefs = localState.prefs
+        val sessionDismissed = localState.sessionDismissedCheckIn
+        val sessionDismissedBroadcasts = localState.sessionDismissedBroadcastIds
+        val sessionAckFeedback = localState.sessionAckResolvedFeedbackIds
+
         val settings = extras.settings
         val profile = bundle.profile
         val effectiveTerms = bundle.terms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
         val rawEvents = bundle.events.ifEmpty { SriLankaCalendarDefaults.defaultEvents }
-        val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(rawEvents, profile)
+        val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(rawEvents, profile, currentUserId)
         val todayKey = DateUtils.todayKey()
         val activeTerm = AttendanceCalculator.resolveActiveTerm(effectiveTerms, todayKey)
         val threshold = activeTerm.minEligibilityPercent.takeIf { it in 50..100 }
@@ -363,18 +422,40 @@ class AttendanceViewModel(
             emptyList()
         }
 
-        // Fire real Android system notification once per newly received matching broadcast (within 48h)
-        recentMatchingBroadcasts.forEach { bc ->
-            val createdMs = bc.createdAt?.toDate()?.time
-            val freshEnough = createdMs == null || (nowMs - createdMs) <= 48L * 3_600_000L
-            if (freshEnough && notifiedBroadcastIds.add(bc.id)) {
-                ReminderScheduler.showBroadcastNotification(
-                    context = appContext,
-                    broadcastId = bc.id,
-                    title = bc.title,
-                    message = bc.message
-                )
+        // Fire real Android system notification STRICTLY ONCE per device (persisted in DataStore notifiedBroadcastIds)
+        if (localState.prefsLoaded && recentMatchingBroadcasts.isNotEmpty()) {
+            val newlyNotifiedIds = mutableListOf<String>()
+            recentMatchingBroadcasts.forEach { bc ->
+                val createdMs = bc.createdAt?.toDate()?.time
+                val freshEnough = createdMs == null || (nowMs - createdMs) <= 48L * 3_600_000L
+                val alreadyNotified = bc.id in prefs.notifiedBroadcastIds || bc.id in prefs.seenBroadcastIds
+                if (freshEnough && !alreadyNotified && inMemoryNotifiedBroadcastIds.add(bc.id)) {
+                    newlyNotifiedIds.add(bc.id)
+                    ReminderScheduler.showBroadcastNotification(
+                        context = appContext,
+                        broadcastId = bc.id,
+                        title = bc.title,
+                        message = bc.message
+                    )
+                }
             }
+            if (newlyNotifiedIds.isNotEmpty()) {
+                viewModelScope.launch {
+                    localPrefs.markBroadcastsNotified(newlyNotifiedIds)
+                }
+            }
+        }
+
+        // In-app-only notification whenever the admin marks a student's bug/suggestion as Resolved
+        val resolvedFeedbackAlerts = if (profile?.setupCompleted == true) {
+            extras.userFeedback.filter { fb ->
+                fb.id.isNotBlank() &&
+                    fb.statusEnum == FeedbackStatus.RESOLVED &&
+                    fb.id !in prefs.acknowledgedResolvedFeedbackIds &&
+                    fb.id !in sessionAckFeedback
+            }
+        } else {
+            emptyList()
         }
 
         val displayedAccounts = maxOf(
@@ -393,6 +474,9 @@ class AttendanceViewModel(
             terms = effectiveTerms,
             activeTerm = activeTerm,
             calendarEvents = effectiveEvents,
+            allCalendarEventsForAdmin = if (isVerifiedAdmin) rawEvents else emptyList(),
+            adminAllStudents = if (isVerifiedAdmin) extras.adminBundle.students else emptyList(),
+            academicCatalog = extras.academicCatalog,
             appSettings = settings,
             syncStatus = syncStatus,
             currentMonthLabel = monthLabel,
@@ -414,8 +498,12 @@ class AttendanceViewModel(
             themeMode = prefs.themeMode,
             accentPalette = prefs.accentPalette,
             totalAccounts = displayedAccounts,
-            adminOnlineNowCount = extras.adminOnlineNowCount,
-            unreadBroadcasts = recentMatchingBroadcasts
+            adminOnlineNowCount = extras.adminBundle.onlineNowCount,
+            unreadBroadcasts = recentMatchingBroadcasts,
+            resolvedFeedbackAlerts = resolvedFeedbackAlerts,
+            lastSeenAppVersion = prefs.lastSeenAppVersion,
+            lastFeedbackPromptVersion = prefs.lastFeedbackPromptVersion,
+            localPrefsLoaded = localState.prefsLoaded
         )
     }.stateIn(
         scope = viewModelScope,
@@ -434,6 +522,27 @@ class AttendanceViewModel(
         _sessionDismissedBroadcastIds.value = _sessionDismissedBroadcastIds.value + broadcastId
         viewModelScope.launch {
             localPrefs.markBroadcastsSeen(listOf(broadcastId))
+            localPrefs.markBroadcastsNotified(listOf(broadcastId))
+        }
+    }
+
+    fun dismissResolvedFeedbackAlert(feedbackId: String) {
+        if (feedbackId.isBlank()) return
+        _sessionAckResolvedFeedbackIds.value = _sessionAckResolvedFeedbackIds.value + feedbackId
+        viewModelScope.launch {
+            localPrefs.acknowledgeResolvedFeedback(listOf(feedbackId))
+        }
+    }
+
+    fun markAppVersionSeen(versionName: String) {
+        viewModelScope.launch {
+            localPrefs.markAppVersionSeen(versionName)
+        }
+    }
+
+    fun markFeedbackPromptShown(versionName: String) {
+        viewModelScope.launch {
+            localPrefs.markFeedbackPromptShownForVersion(versionName)
         }
     }
 
@@ -441,7 +550,16 @@ class AttendanceViewModel(
         _scopeMode.value = mode
     }
 
-    fun openCheckInPopup(dateKey: String = DateUtils.todayKey()) {
+    fun openCheckInPopup(
+        dateKey: String = DateUtils.todayKey(),
+        forcePreview: Boolean = false
+    ) {
+        if (forcePreview) {
+            _manualCheckInIsPreview.value = true
+            _manualCheckInDate.value = dateKey
+            return
+        }
+        _manualCheckInIsPreview.value = false
         if (DateUtils.isWeekend(dateKey)) return
         if (dateKey > DateUtils.todayKey()) {
             _snackbarMessage.value = "You can't mark attendance for future dates"
@@ -456,6 +574,7 @@ class AttendanceViewModel(
 
     fun dismissCheckInPopup(markDismissedToday: Boolean) {
         _manualCheckInDate.value = null
+        _manualCheckInIsPreview.value = false
         if (markDismissedToday) {
             _sessionDismissedCheckIn.value = true
             viewModelScope.launch {
@@ -488,6 +607,8 @@ class AttendanceViewModel(
         baselineEndDate: String? = null,
         baselinePercent: Double? = null,
         updateBaselineFields: Boolean = false,
+        missingSubjectAlerts: List<Pair<String, String>> = emptyList(),
+        missingClassAlert: String? = null,
         onComplete: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -523,6 +644,41 @@ class AttendanceViewModel(
             result.onSuccess {
                 localPrefs.saveReminder(reminderEnabled, reminderHour, reminderMinute)
                 ReminderScheduler.scheduleDailyReminder(appContext, reminderEnabled, reminderHour, reminderMinute)
+                if (!isExisting) {
+                    // Record current version so first-time users see Feedback Welcome (not What's New)
+                    localPrefs.markAppVersionSeen(BuildConfig.VERSION_NAME)
+                }
+
+                // Notify admin about any manually typed subjects/classes missing from the catalog
+                val studentFullName = "$firstName $lastName".trim().ifEmpty { googleDisplayName ?: "Student" }
+                missingSubjectAlerts.forEach { (bucketName, customSubject) ->
+                    val cleanSub = customSubject.trim()
+                    if (cleanSub.isNotEmpty()) {
+                        repository.submitFeedback(
+                            userId = currentUserId,
+                            userName = studentFullName,
+                            userEmail = userEmail,
+                            className = className,
+                            type = FeedbackType.CATALOG_REQUEST,
+                            title = "Missing Subject: $cleanSub",
+                            message = "Subject '$cleanSub' was not listed under $alStream → $bucketName. Student ($grade • $className) added it manually.",
+                            appVersion = BuildConfig.VERSION_NAME
+                        )
+                    }
+                }
+                missingClassAlert?.trim()?.takeIf { it.isNotEmpty() }?.let { customClass ->
+                    repository.submitFeedback(
+                        userId = currentUserId,
+                        userName = studentFullName,
+                        userEmail = userEmail,
+                        className = customClass,
+                        type = FeedbackType.CATALOG_REQUEST,
+                        title = "Missing Class: $customClass",
+                        message = "Class '$customClass' was not listed under $grade → $alStream. Student entered it manually.",
+                        appVersion = BuildConfig.VERSION_NAME
+                    )
+                }
+
                 _snackbarMessage.value = if (isExisting) "Profile updated" else "Welcome to 80endance!"
                 onComplete()
             }.onFailure { err ->
@@ -606,6 +762,12 @@ class AttendanceViewModel(
         subjectTags: List<String>,
         note: String?
     ) {
+        if (_manualCheckInIsPreview.value && (DateUtils.isWeekend(dateKey) || dateKey > DateUtils.todayKey())) {
+            _manualCheckInDate.value = null
+            _manualCheckInIsPreview.value = false
+            _snackbarMessage.value = "Check-in popup preview works! (Weekend / non-school day wasn't logged)"
+            return
+        }
         if (DateUtils.isWeekend(dateKey)) {
             _snackbarMessage.value = "Weekends are automatically marked as off days"
             return
@@ -635,6 +797,7 @@ class AttendanceViewModel(
             _isSaving.value = false
             result.onSuccess {
                 _manualCheckInDate.value = null
+                _manualCheckInIsPreview.value = false
                 if (dateKey == DateUtils.todayKey()) {
                     _sessionDismissedCheckIn.value = true
                 }
@@ -671,6 +834,67 @@ class AttendanceViewModel(
             }.onFailure { err ->
                 _snackbarMessage.value = err.message ?: "Failed to remove entry"
             }
+        }
+    }
+
+    fun adminSaveCalendarEvent(
+        eventId: String?,
+        title: String,
+        dateKey: String,
+        eventType: CalendarEventType,
+        description: String?,
+        targetAll: Boolean,
+        targetGrades: List<String>,
+        targetStreams: List<String>,
+        targetClasses: List<String>,
+        targetUserIds: List<String>,
+        audienceSummary: String,
+        alsoSendNotification: Boolean,
+        onComplete: () -> Unit = {}
+    ) {
+        if (!isVerifiedAdmin) return
+        viewModelScope.launch {
+            _isSaving.value = true
+            val year = dateKey.take(4).toIntOrNull() ?: 2026
+            val result = repository.saveCalendarEvent(
+                eventId = eventId,
+                title = title,
+                dateKey = dateKey,
+                eventType = eventType,
+                academicYear = year,
+                description = description,
+                targetType = if (targetAll) CalendarEventTargetType.ALL else CalendarEventTargetType.CLASS,
+                targetValue = if (targetAll) null else audienceSummary.take(60),
+                targetAll = targetAll,
+                targetGrades = targetGrades,
+                targetStreams = targetStreams,
+                targetClasses = targetClasses,
+                targetUserIds = targetUserIds,
+                audienceSummary = audienceSummary,
+                alsoSendNotification = alsoSendNotification
+            )
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = if (alsoSendNotification) {
+                    "Calendar updated & notification sent to $audienceSummary"
+                } else if (eventId == null) {
+                    "Calendar update added for ${DateUtils.formatReadableShort(dateKey)}"
+                } else {
+                    "Calendar update saved"
+                }
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not save calendar update"
+            }
+        }
+    }
+
+    fun adminDeleteCalendarEvent(eventId: String) {
+        if (!isVerifiedAdmin) return
+        viewModelScope.launch {
+            val res = repository.deleteCalendarEvent(eventId)
+            res.onSuccess { _snackbarMessage.value = "Calendar event deleted" }
+                .onFailure { err -> _snackbarMessage.value = err.message ?: "Could not delete event" }
         }
     }
 

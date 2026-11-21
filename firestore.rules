@@ -119,11 +119,17 @@ service cloud.firestore {
     function isValidCalendarEvent(data) {
       return data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
              isValidDateKey(data.dateKey) &&
-             data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'exam'] &&
+             data.eventType in ['poya', 'public_holiday', 'term_break', 'school_holiday', 'exam', 'school_event'] &&
              data.academicYear is int && data.academicYear >= 2024 && data.academicYear <= 2035 &&
-             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 200)) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
              (!('targetType' in data) || data.targetType == null || data.targetType in ['all', 'grade', 'stream', 'class']) &&
              (!('targetValue' in data) || data.targetValue == null || (data.targetValue is string && data.targetValue.size() <= 60)) &&
+             (!('targetAll' in data) || data.targetAll is bool) &&
+             (!('targetGrades' in data) || isValidBoundedStringList(data.targetGrades, 10)) &&
+             (!('targetStreams' in data) || isValidBoundedStringList(data.targetStreams, 10)) &&
+             (!('targetClasses' in data) || isValidBoundedStringList(data.targetClasses, 30)) &&
+             (!('targetUserIds' in data) || isValidBoundedStringList(data.targetUserIds, 50)) &&
+             (!('audienceSummary' in data) || data.audienceSummary == null || (data.audienceSummary is string && data.audienceSummary.size() <= 200)) &&
              data.published is bool;
     }
 
@@ -142,11 +148,20 @@ service cloud.firestore {
              data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 100 &&
              data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 120 &&
              (!('className' in data) || data.className == null || (data.className is string && data.className.size() <= 20)) &&
-             data.type in ['bug', 'suggestion'] &&
+             data.type in ['bug', 'suggestion', 'catalog_request'] &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.message is string && data.message.size() >= 1 && data.message.size() <= 1500 &&
              data.appVersion is string && data.appVersion.size() >= 1 && data.appVersion.size() <= 40 &&
              data.status in ['open', 'reviewed', 'resolved'];
+    }
+
+    function isValidAcademicCatalog(data) {
+      return data.streamSubjectBucketsJson is string &&
+             data.streamSubjectBucketsJson.size() >= 2 &&
+             data.streamSubjectBucketsJson.size() <= 40000 &&
+             data.gradeStreamClassesJson is string &&
+             data.gradeStreamClassesJson.size() >= 2 &&
+             data.gradeStreamClassesJson.size() <= 20000;
     }
 
     function isValidCommunityStats(data) {
@@ -349,7 +364,10 @@ service cloud.firestore {
                          'title', 'dateKey', 'eventType', 'academicYear', 'published', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'targetType', 'targetValue', 'published', 'createdAt', 'updatedAt'
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description',
+                         'targetType', 'targetValue', 'targetAll', 'targetGrades', 'targetStreams',
+                         'targetClasses', 'targetUserIds', 'audienceSummary',
+                         'published', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -360,7 +378,10 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'title', 'dateKey', 'eventType', 'academicYear', 'description', 'targetType', 'targetValue', 'published', 'updatedAt'
+                         'title', 'dateKey', 'eventType', 'academicYear', 'description',
+                         'targetType', 'targetValue', 'targetAll', 'targetGrades', 'targetStreams',
+                         'targetClasses', 'targetUserIds', 'audienceSummary',
+                         'published', 'updatedAt'
                        ]);
 
       allow delete: if isAdmin() && isValidId(eventId);
@@ -472,6 +493,28 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    // --- COLLECTION 10: ADMIN-EDITABLE ACADEMIC CATALOG (SUBJECT BUCKETS & CLASSES) ---
+    match /app_config/{configId} {
+      allow get: if isSignedIn() && configId == 'academic_catalog';
+      allow list: if false;
+
+      allow create: if isAdmin() &&
+                       configId == 'academic_catalog' &&
+                       isValidAcademicCatalog(incoming()) &&
+                       incoming().keys().hasAll(['streamSubjectBucketsJson', 'gradeStreamClassesJson', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['streamSubjectBucketsJson', 'gradeStreamClassesJson', 'updatedAt']) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isAdmin() &&
+                       configId == 'academic_catalog' &&
+                       isValidAcademicCatalog(incoming()) &&
+                       incoming().keys().hasOnly(['streamSubjectBucketsJson', 'gradeStreamClassesJson', 'updatedAt']) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['streamSubjectBucketsJson', 'gradeStreamClassesJson', 'updatedAt']);
+
+      allow delete: if false;
     }
   }
 }

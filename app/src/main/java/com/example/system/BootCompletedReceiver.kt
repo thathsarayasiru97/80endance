@@ -14,18 +14,20 @@ class BootCompletedReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val prefs = LocalPreferencesStore(context.applicationContext).getSnapshot()
+                val appContext = context.applicationContext
+                val prefs = LocalPreferencesStore(appContext).getSnapshot()
                 if (prefs.enabled) {
                     ReminderScheduler.scheduleDailyReminder(
-                        context.applicationContext,
+                        appContext,
                         true,
                         prefs.hour,
                         prefs.minute
                     )
                 }
                 if (prefs.sundayPrepEnabled) {
-                    ReminderScheduler.scheduleSundayPrep(context.applicationContext, true)
+                    ReminderScheduler.scheduleSundayPrep(appContext, true)
                 }
+                SyncScheduler.schedulePeriodicNotificationSync(appContext)
             } finally {
                 pendingResult.finish()
             }

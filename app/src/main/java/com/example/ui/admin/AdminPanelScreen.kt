@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -72,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.AppSettings
+import com.example.data.CalendarEvent
 import com.example.data.DateUtils
 import com.example.data.FeedbackStatus
 import com.example.data.FeedbackType
@@ -102,6 +104,7 @@ fun AdminPanelScreen(
     var showNoticeDialog by remember { mutableStateOf(false) }
     var editingNotice by remember { mutableStateOf<Notice?>(null) }
     var showAddEventDialog by remember { mutableStateOf(false) }
+    var editingCalendarEvent by remember { mutableStateOf<CalendarEvent?>(null) }
 
     // Student filter state
     var searchQuery by remember { mutableStateOf("") }
@@ -147,7 +150,7 @@ fun AdminPanelScreen(
                 }
             } else if (selectedTab == 3) {
                 FloatingActionButton(
-                    onClick = { showAddEventDialog = true },
+                    onClick = { editingCalendarEvent = null; showAddEventDialog = true },
                     modifier = Modifier.testTag("admin_add_event_fab")
                 ) {
                     Icon(Icons.Rounded.Add, contentDescription = "Add calendar event")
@@ -211,6 +214,12 @@ fun AdminPanelScreen(
                 Tab(
                     selected = selectedTab == 4,
                     onClick = { selectedTab = 4 },
+                    text = { Text("Catalog") },
+                    modifier = Modifier.testTag("admin_tab_catalog")
+                )
+                Tab(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
                     text = {
                         Text(
                             if (openFeedbackCount > 0) "Feedback ($openFeedbackCount)" else "Feedback"
@@ -629,9 +638,26 @@ fun AdminPanelScreen(
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
+                                            if (!ev.description.isNullOrBlank()) {
+                                                Text(
+                                                    text = ev.description,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
-                                        IconButton(onClick = { viewModel.deleteCalendarEvent(ev.id) }) {
-                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete event")
+                                        Row {
+                                            IconButton(
+                                                onClick = {
+                                                    editingCalendarEvent = ev
+                                                    showAddEventDialog = true
+                                                }
+                                            ) {
+                                                Icon(Icons.Rounded.Edit, contentDescription = "Edit event")
+                                            }
+                                            IconButton(onClick = { viewModel.deleteCalendarEvent(ev.id) }) {
+                                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete event")
+                                            }
                                         }
                                     }
                                 }
@@ -641,6 +667,16 @@ fun AdminPanelScreen(
                     }
 
                     4 -> {
+                        AdminCatalogTab(
+                            catalog = state.academicCatalog,
+                            isBusy = state.isBusy,
+                            onSaveCatalog = { updated, message ->
+                                viewModel.saveAcademicCatalog(updated, message)
+                            }
+                        )
+                    }
+
+                    5 -> {
                         LazyColumn(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -670,6 +706,7 @@ fun AdminPanelScreen(
                             } else {
                                 items(state.feedbackItems, key = { it.id }) { fb ->
                                     val isBug = fb.typeEnum == FeedbackType.BUG
+                                    val isCatalogReq = fb.typeEnum == FeedbackType.CATALOG_REQUEST
                                     val isResolved = fb.statusEnum == FeedbackStatus.RESOLVED
                                     Card(
                                         shape = RoundedCornerShape(18.dp),
@@ -692,9 +729,17 @@ fun AdminPanelScreen(
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Icon(
-                                                        imageVector = if (isBug) Icons.Rounded.BugReport else Icons.Rounded.Lightbulb,
+                                                        imageVector = when {
+                                                            isBug -> Icons.Rounded.BugReport
+                                                            isCatalogReq -> Icons.Rounded.MenuBook
+                                                            else -> Icons.Rounded.Lightbulb
+                                                        },
                                                         contentDescription = fb.typeEnum.label,
-                                                        tint = if (isBug) semantic.absent else MaterialTheme.colorScheme.primary,
+                                                        tint = when {
+                                                            isBug -> semantic.absent
+                                                            isCatalogReq -> MaterialTheme.colorScheme.tertiary
+                                                            else -> MaterialTheme.colorScheme.primary
+                                                        },
                                                         modifier = Modifier.size(18.dp)
                                                     )
                                                     Text(
@@ -898,11 +943,33 @@ fun AdminPanelScreen(
     }
 
     if (showAddEventDialog) {
-        AddCalendarEventDialog(
-            onDismiss = { showAddEventDialog = false },
-            onSave = { title, dk, type, desc ->
-                viewModel.saveCalendarEvent(title, dk, type, desc) {
+        AdminCalendarEventEditorDialog(
+            initialDateKey = editingCalendarEvent?.dateKey ?: todayKey,
+            editingEvent = editingCalendarEvent,
+            students = state.students,
+            catalog = state.academicCatalog,
+            isBusy = state.isBusy,
+            onDismiss = {
+                showAddEventDialog = false
+                editingCalendarEvent = null
+            },
+            onSave = { eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify ->
+                viewModel.saveCalendarEvent(
+                    eventId = eventId,
+                    title = title,
+                    dateKey = dk,
+                    eventType = type,
+                    description = desc,
+                    targetAll = targetAll,
+                    targetGrades = grades,
+                    targetStreams = streams,
+                    targetClasses = classes,
+                    targetUserIds = userIds,
+                    audienceSummary = summary,
+                    alsoSendNotification = notify
+                ) {
                     showAddEventDialog = false
+                    editingCalendarEvent = null
                 }
             }
         )

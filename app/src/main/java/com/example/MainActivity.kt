@@ -74,10 +74,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.data.ReleaseNotesCatalog
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.AttendanceWidgetStore
 import com.example.system.ReminderScheduler
+import com.example.system.SyncScheduler
 import com.example.system.UpdateCheckResult
 import com.example.system.UpdateCheckStatusSummary
 import com.example.system.WidgetSnapshot
@@ -87,7 +89,9 @@ import com.example.ui.auth.AuthScreen
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
+import com.example.ui.components.FeedbackWelcomeDialog
 import com.example.ui.components.UpdateAvailableDialog
+import com.example.ui.components.WhatsNewDialog
 import com.example.ui.home.HomeScreen
 import com.example.ui.reports.ReportsScreen
 import com.example.ui.settings.SettingsScreen
@@ -120,6 +124,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ReminderScheduler.ensureNotificationChannel(this)
+        SyncScheduler.schedulePeriodicNotificationSync(this)
         if (intent?.getBooleanExtra(AppConstants.EXTRA_OPEN_CHECKIN, false) == true) {
             openCheckInTrigger = true
         }
@@ -411,6 +416,7 @@ private fun AuthenticatedAppShell(
     var editingProfileInSettings by rememberSaveable { mutableStateOf(false) }
     var showAdminPanel by rememberSaveable { mutableStateOf(false) }
     var showBaselineImportDialog by rememberSaveable { mutableStateOf(false) }
+    var feedbackPromptIsAfterUpdate by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(snackbarMessage) {
@@ -451,7 +457,8 @@ private fun AuthenticatedAppShell(
             initialDisplayName = user.displayName,
             existingProfile = state.profile,
             isSaving = isSaving,
-            onSave = { first, last, nick, school, grade, stream, cls, examYr, subjects, remOn, remH, remM, countExc, priorP, priorA ->
+            catalog = state.academicCatalog,
+            onSave = { first, last, nick, school, grade, stream, cls, examYr, subjects, remOn, remH, remM, countExc, priorP, priorA, missingSubjects, missingClass ->
                 attendanceViewModel.saveStudentProfile(
                     firstName = first,
                     lastName = last,
@@ -468,6 +475,8 @@ private fun AuthenticatedAppShell(
                     countExcusedAsPresent = countExc,
                     priorPresentCount = priorP,
                     priorAbsentCount = priorA,
+                    missingSubjectAlerts = missingSubjects,
+                    missingClassAlert = missingClass,
                     onComplete = { editingProfileInSettings = false }
                 )
             }
@@ -557,6 +566,7 @@ private fun AuthenticatedAppShell(
                             onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onDismissBroadcast = { id -> attendanceViewModel.dismissBroadcastAlert(id) },
+                            onDismissResolvedFeedback = { id -> attendanceViewModel.dismissResolvedFeedbackAlert(id) },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -565,6 +575,27 @@ private fun AuthenticatedAppShell(
                             onEditDate = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onDeleteDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
                             onOpenBaselineImport = { showBaselineImportDialog = true },
+                            isVerifiedAdmin = isAdmin,
+                            isSaving = isSaving,
+                            onAdminSaveCalendarEvent = { eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify ->
+                                attendanceViewModel.adminSaveCalendarEvent(
+                                    eventId = eventId,
+                                    title = title,
+                                    dateKey = dk,
+                                    eventType = type,
+                                    description = desc,
+                                    targetAll = targetAll,
+                                    targetGrades = grades,
+                                    targetStreams = streams,
+                                    targetClasses = classes,
+                                    targetUserIds = userIds,
+                                    audienceSummary = summary,
+                                    alsoSendNotification = notify
+                                )
+                            },
+                            onAdminDeleteCalendarEvent = { eventId ->
+                                attendanceViewModel.adminDeleteCalendarEvent(eventId)
+                            },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -582,7 +613,7 @@ private fun AuthenticatedAppShell(
                                 attendanceViewModel.updateReminderAndExcused(enabled, hour, minute, countExc)
                             },
                             onPreviewCheckInPopup = {
-                                attendanceViewModel.openCheckInPopup(DateUtils.todayKey())
+                                attendanceViewModel.openCheckInPopup(DateUtils.todayKey(), forcePreview = true)
                             },
                             onManualSync = { attendanceViewModel.triggerManualSync() },
                             onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
@@ -687,6 +718,41 @@ private fun AuthenticatedAppShell(
             },
             onClearBaseline = {
                 attendanceViewModel.clearAttendancePercentageBaseline()
+            }
+        )
+    }
+
+    // Post-Update "What's New & Bug Fixes" popup + First-Time / Post-Update Feedback Encouragement popup
+    val installedVersion = BuildConfig.VERSION_NAME
+    val showWhatsNewDialog = state.localPrefsLoaded &&
+        state.profile?.setupCompleted == true &&
+        !editingProfileInSettings &&
+        !showAdminPanel &&
+        state.lastSeenAppVersion != installedVersion
+    val showFeedbackWelcomeDialog = state.localPrefsLoaded &&
+        state.profile?.setupCompleted == true &&
+        !editingProfileInSettings &&
+        !showAdminPanel &&
+        !showWhatsNewDialog &&
+        state.lastFeedbackPromptVersion != installedVersion
+
+    if (showWhatsNewDialog) {
+        WhatsNewDialog(
+            releaseNotes = ReleaseNotesCatalog.forVersion(installedVersion),
+            onContinue = {
+                feedbackPromptIsAfterUpdate = true
+                attendanceViewModel.markAppVersionSeen(installedVersion)
+            }
+        )
+    } else if (showFeedbackWelcomeDialog) {
+        FeedbackWelcomeDialog(
+            isAfterUpdate = feedbackPromptIsAfterUpdate,
+            onGoToSettings = {
+                attendanceViewModel.markFeedbackPromptShown(installedVersion)
+                currentTab = AppTab.SETTINGS
+            },
+            onDismiss = {
+                attendanceViewModel.markFeedbackPromptShown(installedVersion)
             }
         )
     }

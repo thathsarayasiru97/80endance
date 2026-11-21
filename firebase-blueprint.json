@@ -107,11 +107,17 @@
       "properties": {
         "title": { "type": "string", "description": "Event name such as Vesak Full Moon Poya Day." },
         "dateKey": { "type": "string", "description": "ISO date YYYY-MM-DD." },
-        "eventType": { "type": "string", "enum": ["poya", "public_holiday", "term_break", "school_holiday", "exam"], "description": "Category of calendar event." },
+        "eventType": { "type": "string", "enum": ["poya", "public_holiday", "term_break", "school_holiday", "exam", "school_event"], "description": "Category of calendar event." },
         "academicYear": { "type": "integer", "description": "Calendar year integer." },
-        "description": { "type": "string", "description": "Optional extra details." },
-        "targetType": { "type": "string", "enum": ["all", "grade", "stream", "class"], "description": "Optional audience scope for class/grade/stream-specific off days (defaults to all)." },
-        "targetValue": { "type": "string", "description": "Optional grade, stream, or class code when targetType is not all." },
+        "description": { "type": "string", "description": "Optional extra details or admin note (e.g., no teaching advisory)." },
+        "targetType": { "type": "string", "enum": ["all", "grade", "stream", "class"], "description": "Optional legacy audience scope (defaults to all)." },
+        "targetValue": { "type": "string", "description": "Optional legacy grade, stream, or class code when targetType is not all." },
+        "targetAll": { "type": "boolean", "description": "Optional multi-audience flag indicating visibility to all students." },
+        "targetGrades": { "type": "array", "description": "Optional list of targeted grades." },
+        "targetStreams": { "type": "array", "description": "Optional list of targeted A/L streams." },
+        "targetClasses": { "type": "array", "description": "Optional list of targeted class codes." },
+        "targetUserIds": { "type": "array", "description": "Optional list of targeted individual student UIDs." },
+        "audienceSummary": { "type": "string", "description": "Optional human-readable audience label." },
         "published": { "type": "boolean", "description": "Whether published to students." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
@@ -146,7 +152,7 @@
         "userName": { "type": "string", "description": "Display name of the reporting student." },
         "userEmail": { "type": "string", "description": "Email address of the reporting student." },
         "className": { "type": "string", "description": "Student class code (optional)." },
-        "type": { "type": "string", "enum": ["bug", "suggestion"], "description": "Whether this is a bug report or feature suggestion." },
+        "type": { "type": "string", "enum": ["bug", "suggestion", "catalog_request"], "description": "Whether this is a bug report, feature suggestion, or missing subject/class catalog request." },
         "title": { "type": "string", "description": "Short summary headline." },
         "message": { "type": "string", "description": "Detailed description of the bug or idea." },
         "appVersion": { "type": "string", "description": "App version string when submitted." },
@@ -183,6 +189,17 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp when released." }
       },
       "required": ["title", "message", "targetAll", "targetGrades", "targetStreams", "targetClasses", "targetUserIds", "audienceSummary", "sentByEmail", "createdAt"]
+    },
+    "AcademicCatalog": {
+      "title": "AcademicCatalog",
+      "description": "Admin-managed GCE A/L subject buckets per stream and class lists per grade and stream.",
+      "type": "object",
+      "properties": {
+        "streamSubjectBucketsJson": { "type": "string", "description": "JSON map of stream -> bucket -> subject list." },
+        "gradeStreamClassesJson": { "type": "string", "description": "JSON map of grade|stream -> class code list." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["streamSubjectBucketsJson", "gradeStreamClassesJson", "updatedAt"]
     }
   },
   "firestore": {
@@ -221,6 +238,10 @@
     "/broadcast_notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/BroadcastNotification" },
       "description": "Admin-released custom notifications targeting one or multiple audiences."
+    },
+    "/app_config/{configId}": {
+      "schema": { "$ref": "#/entities/AcademicCatalog" },
+      "description": "Admin-editable structured subject buckets and grade/stream class catalog (academic_catalog)."
     }
   }
 }

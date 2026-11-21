@@ -9,9 +9,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -82,6 +86,8 @@ import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.AdminOnlineNowPill
 import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
+import com.example.ui.components.ResolvedFeedbackBanner
+import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SyncStatusPill
@@ -89,6 +95,8 @@ import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.DashboardScopeMode
 import com.example.viewmodel.StudentAppState
+import androidx.compose.ui.graphics.Brush
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -101,6 +109,7 @@ fun HomeScreen(
     onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
     onSaveCustomAvatar: (String?) -> Unit = {},
     onDismissBroadcast: (String) -> Unit = {},
+    onDismissResolvedFeedback: (String) -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -120,8 +129,15 @@ fun HomeScreen(
     var focusedNotice by remember { mutableStateOf<Notice?>(null) }
     var showPhotoDialog by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
+    var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
 
-    LaunchedEffect(Unit) { visible = true }
+    LaunchedEffect(Unit) {
+        visible = true
+        if (state.daysUntilAlExam > 0) {
+            delay(2000L)
+            heroCountdownExpanded = false
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -188,36 +204,145 @@ fun HomeScreen(
                         )
                     }
 
+                    val examYear = profile?.alExamYear ?: state.appSettings.currentAcademicYear
+
+                    // Hero "Days Left for A/L" First-Glance Spotlight — starts large, then docks into compact chip
+                    AnimatedVisibility(
+                        visible = heroCountdownExpanded && state.daysUntilAlExam > 0,
+                        enter = expandVertically(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        ) + fadeIn(tween(260)) + scaleIn(initialScale = 0.92f),
+                        exit = shrinkVertically(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        ) + fadeOut(tween(300)) + scaleOut(targetScale = 0.84f, animationSpec = tween(280))
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .bouncyClickable(pressedScale = 0.97f) { heroCountdownExpanded = false }
+                                .testTag("home_al_countdown_hero")
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.primaryContainer,
+                                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)
+                                            )
+                                        )
+                                    )
+                                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Timer,
+                                                contentDescription = "A/L Exam Countdown",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "$examYear GCE A/L COUNTDOWN",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Every school day counts toward your goal.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        RollingCounterText(
+                                            count = state.daysUntilAlExam,
+                                            style = MaterialTheme.typography.displayMedium,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            text = "DAYS LEFT",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // A/L Exam Countdown, Pulsing Green Community Accounts Counter & Notices Chip Row
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val examYear = profile?.alExamYear ?: state.appSettings.currentAcademicYear
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(50)
+                        AnimatedVisibility(
+                            visible = !heroCountdownExpanded || state.daysUntilAlExam <= 0,
+                            enter = fadeIn(tween(260)) + scaleIn(
+                                initialScale = 0.72f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                )
+                            ),
+                            exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.82f)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .bouncyClickable(
+                                        enabled = state.daysUntilAlExam > 0,
+                                        pressedScale = 0.93f
+                                    ) {
+                                        if (state.daysUntilAlExam > 0) heroCountdownExpanded = true
+                                    }
+                                    .testTag("home_al_countdown_chip")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Timer,
-                                    contentDescription = "A/L exam countdown",
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (state.daysUntilAlExam > 0) {
-                                        "$examYear A/L • ${state.daysUntilAlExam}d left"
-                                    } else {
-                                        "$examYear A/L Exam Period"
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Timer,
+                                        contentDescription = "A/L exam countdown",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (state.daysUntilAlExam > 0) {
+                                            "$examYear A/L • ${state.daysUntilAlExam}d left"
+                                        } else {
+                                            "$examYear A/L Exam Period"
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
                             }
                         }
 
@@ -266,6 +391,18 @@ fun HomeScreen(
                         broadcast = activeBroadcast,
                         remainingCount = state.unreadBroadcasts.size,
                         onDismiss = { onDismissBroadcast(activeBroadcast.id) }
+                    )
+                }
+            }
+
+            // 1c. In-App-Only Resolved Bug/Suggestion Alert Banner
+            val activeResolved = state.resolvedFeedbackAlerts.firstOrNull()
+            if (activeResolved != null) {
+                item(key = "resolved_feedback_${activeResolved.id}") {
+                    ResolvedFeedbackBanner(
+                        report = activeResolved,
+                        remainingCount = state.resolvedFeedbackAlerts.size,
+                        onDismiss = { onDismissResolvedFeedback(activeResolved.id) }
                     )
                 }
             }
