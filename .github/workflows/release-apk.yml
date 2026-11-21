@@ -7,13 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release version tag (e.g., v1.0, v1.1). Leave blank to use versionName from app/build.gradle.kts.'
+        description: "Release version tag (e.g., v1.6). Leave blank to use versionName from app/build.gradle.kts."
         required: false
-        default: ''
+        default: ""
+        type: string
       release_notes:
-        description: 'Optional custom What'\''s New notes. Leave blank to automatically use RELEASE_NOTES.md.'
+        description: "Optional custom What's New notes. Leave blank to automatically use RELEASE_NOTES.md."
         required: false
-        default: ''
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -75,7 +77,7 @@ jobs:
           INPUT_TAG: ${{ inputs.version_tag }}
         run: |
           APP_VERSION=$(grep -oE '(defaultAppVersionName|versionName)\s*=\s*"[^"]+"' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)"/\1/')
-          APP_VERSION="${APP_VERSION:-1.5}"
+          APP_VERSION="${APP_VERSION:-1.6}"
 
           TRIMMED_INPUT=$(printf '%s' "$INPUT_TAG" | tr -d '[:space:]')
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
