@@ -12,22 +12,20 @@
 
 - **80% Eligibility Dashboard**
   - Animated eligibility gauge (**Current Term / Overall**), safe-skip & recovery-day math, spotlight A/L countdown, personal attendance streak, and live student count pulse.
-  - Pinned updates slideshow always on top, followed by targeted announcements and feedback resolution alerts.
+  - Pinned updates slideshow always on top, followed by school, stream, and class announcements.
 - **Daily Check-In, Baseline Import & Period Locking**
   - Daily reminder with quick **Yes / No** actions and in-app check-in sheet (Present with subject tags, Absent, Medical, School Event, or No School).
-  - **Import Attendance Calculator** (percentage or days attended up to a date) and **Custom Time-Period Locking** (log days missed, days attended, or % for any date range and lock it on the calendar to avoid duplicate counts).
+  - **Import Attendance Calculator** (percentage or days attended up to a date) and **Custom Time-Period Locking** (enter days missed, days attended, or % for any date range and lock it on the calendar to avoid duplicate counts).
 - **Sri Lankan Holiday & School Calendar**
-  - Pre-loaded with Sri Lankan Full Moon Poya and public holidays, separate from school events, exam-break no-school days, and audience-targeted class/stream notes.
+  - Pre-loaded with Sri Lankan Full Moon Poya and public holidays, separate from school events, exam-break no-school days, and class or stream schedule notes.
 - **Community & Personal Trends & Reports**
   - Slidable **Everyone** (default) and **My Stats** cards with **All Time** and **Monthly** views, monthly bar charts, Mon–Fri weekday patterns, term breakdowns, and one-tap summary sharing.
 - **Dynamic Resizable Home Screen Widget**
   - Adaptive 2×2 to 4×4 widget showing live eligibility progress, **This Week's Mon–Fri attendance strip**, A/L countdown, next holiday, 1-tap **Present / Absent** buttons, and manual refresh.
 - **Background Notifications & In-App Updates**
-  - Background notification delivery for targeted admin broadcasts, automatic GitHub Releases update checking, and What's New release popups.
-- **Admin Panel**
-  - Live online counter, student directory with last-seen timestamps and installed app versions, multi-audience broadcast composer, bug/suggestion inbox, calendar event editor, and editable stream/class/subject catalogs.
+  - Background notifications for important school and class updates, automatic GitHub Releases update checking, and What's New release popups.
 - **Offline-First Sync & Guided Setup**
-  - Google Sign-In, stream-aware class and subject pickers, automatic A/L exam year mapping, and offline Firestore caching with automatic background sync.
+  - Google Sign-In, stream-aware class and subject pickers, automatic A/L exam year mapping, built-in bug/suggestion reporting, and offline Firestore caching with automatic background sync.
 
 ---
 
