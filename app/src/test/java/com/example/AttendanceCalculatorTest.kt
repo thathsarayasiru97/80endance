@@ -302,4 +302,77 @@ class AttendanceCalculatorTest {
         )
         assertEquals(listOf("2026-05-13"), missed)
     }
+
+    @Test
+    fun calculateMilestonesUnlocksStreaksPerfectMonthAndCleanSheet() {
+        // 10 consecutive weekdays of Present/Excused in May 2026
+        val dates = listOf(
+            "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08",
+            "2026-05-11", "2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15"
+        )
+        val records = dates.mapIndexed { index, key ->
+            AttendanceRecord(
+                dateKey = key,
+                status = if (index == 2) AttendanceStatus.SCHOOL_EVENT.raw else AttendanceStatus.PRESENT.raw
+            )
+        }
+        val stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = false,
+            priorPresent = 0,
+            priorAbsent = 0
+        )
+
+        val milestones = AttendanceCalculator.calculateMilestones(
+            records = records,
+            currentStreak = 10,
+            termStats = stats,
+            overallStats = stats
+        )
+
+        val byId = milestones.associateBy { it.id }
+        assertTrue(byId["streak_5"]!!.unlocked)
+        assertTrue(byId["streak_10"]!!.unlocked)
+        assertTrue(byId["safe_zone_80"]!!.unlocked)
+        assertTrue(byId["perfect_month"]!!.unlocked)
+        assertFalse(byId["consistent_logger"]!!.unlocked) // 10 < 20
+        assertEquals(0.5f, byId["consistent_logger"]!!.progressFraction, 0.01f)
+        assertTrue(byId["clean_sheet"]!!.unlocked)
+    }
+
+    @Test
+    fun calculateUpcomingWeekPrepCountsSchoolDaysAndHolidaysFromSunday() {
+        // 2026-05-10 is Sunday -> upcoming Mon..Fri is 2026-05-11 .. 2026-05-15
+        val events = listOf(
+            CalendarEvent(
+                id = "poya",
+                title = "Vesak Poya",
+                dateKey = "2026-05-13", // Wednesday
+                eventType = CalendarEventType.POYA.raw,
+                academicYear = 2026
+            )
+        )
+        val termStats = AttendanceCalculator.calculateStats(
+            records = emptyList(),
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 18,
+            priorAbsent = 2 // 90% -> 2 safe skips
+        )
+
+        val prep = AttendanceCalculator.calculateUpcomingWeekPrep(
+            calendarEvents = events,
+            termStats = termStats,
+            referenceDateKey = "2026-05-10"
+        )
+
+        assertEquals("2026-05-11", prep.mondayKey)
+        assertEquals("2026-05-15", prep.fridayKey)
+        assertEquals(4, prep.schoolDaysCount)
+        assertEquals(1, prep.offDays.size)
+        assertEquals("Vesak Poya", prep.offDays.first().title)
+        assertTrue(prep.eligible)
+        assertEquals(2, prep.safeSkipsRemaining)
+    }
 }

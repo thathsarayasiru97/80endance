@@ -79,6 +79,27 @@ data class AttendancePatternInsights(
     val bestMonth: MonthlyAttendancePoint?
 )
 
+data class AttendanceMilestone(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val unlocked: Boolean,
+    val progressText: String,
+    val progressFraction: Float,
+    val iconKey: String
+)
+
+data class UpcomingWeekPrep(
+    val mondayKey: String,
+    val fridayKey: String,
+    val schoolDaysCount: Int,
+    val offDays: List<CalendarEvent>,
+    val termPercentage: Double,
+    val eligible: Boolean,
+    val safeSkipsRemaining: Int,
+    val daysNeededToRecover: Int
+)
+
 object AttendanceCalculator {
 
     fun resolveActiveTerm(terms: List<AcademicTerm>, todayKey: String = DateUtils.todayKey()): AcademicTerm {
@@ -583,5 +604,143 @@ object AttendanceCalculator {
             appendLine("Current Streak: $streak school day(s)")
             appendLine(guidance)
         }
+    }
+
+    /**
+     * Computes visual milestone badges and unlock progress for the Reports milestone shelf.
+     */
+    fun calculateMilestones(
+        records: List<AttendanceRecord>,
+        currentStreak: Int,
+        termStats: AttendanceStats,
+        overallStats: AttendanceStats
+    ): List<AttendanceMilestone> {
+        val insights = calculateAttendanceInsights(records, maxMonths = 24)
+        val loggedCount = records.count {
+            !DateUtils.isWeekend(it.dateKey) && it.statusEnum != AttendanceStatus.HOLIDAY
+        }
+        val bestPerfectMonth = insights.monthlyPoints
+            .filter { it.totalDays >= 5 }
+            .maxByOrNull { it.percentage }
+        val hasPerfectMonth = bestPerfectMonth != null && bestPerfectMonth.percentage >= 99.95
+
+        val safeZoneUnlocked = termStats.totalCountedDays >= 5 && termStats.eligible
+        val cleanSheetDays = overallStats.totalCountedDays
+        val totalUnexcusedAbsent = overallStats.absentDays + overallStats.priorAbsentDays
+        val cleanSheetUnlocked = cleanSheetDays >= 10 && totalUnexcusedAbsent == 0
+
+        return listOf(
+            AttendanceMilestone(
+                id = "streak_5",
+                title = "5-Day Streak",
+                subtitle = "Attend 5 school days in a row",
+                unlocked = currentStreak >= 5,
+                progressText = if (currentStreak >= 5) "Unlocked ($currentStreak d)" else "$currentStreak / 5 days",
+                progressFraction = (currentStreak / 5f).coerceIn(0f, 1f),
+                iconKey = "flame"
+            ),
+            AttendanceMilestone(
+                id = "streak_10",
+                title = "10-Day Unstoppable",
+                subtitle = "Maintain a 10-day consecutive streak",
+                unlocked = currentStreak >= 10,
+                progressText = if (currentStreak >= 10) "Unlocked ($currentStreak d)" else "$currentStreak / 10 days",
+                progressFraction = (currentStreak / 10f).coerceIn(0f, 1f),
+                iconKey = "bolt"
+            ),
+            AttendanceMilestone(
+                id = "safe_zone_80",
+                title = "${termStats.thresholdPercent}% Safe Zone",
+                subtitle = "Hold eligibility across 5+ term days",
+                unlocked = safeZoneUnlocked,
+                progressText = when {
+                    safeZoneUnlocked -> String.format(java.util.Locale.US, "%.1f%% Eligible", termStats.percentage)
+                    termStats.totalCountedDays < 5 -> "${termStats.totalCountedDays} / 5 days"
+                    else -> String.format(java.util.Locale.US, "%.1f%% / %d%%", termStats.percentage, termStats.thresholdPercent)
+                },
+                progressFraction = if (termStats.totalCountedDays < 5) {
+                    (termStats.totalCountedDays / 5f).coerceIn(0f, 1f)
+                } else {
+                    (termStats.percentage.toFloat() / termStats.thresholdPercent.toFloat()).coerceIn(0f, 1f)
+                },
+                iconKey = "shield"
+            ),
+            AttendanceMilestone(
+                id = "perfect_month",
+                title = "Perfect Month",
+                subtitle = "Hit 100% in any month (5+ school days)",
+                unlocked = hasPerfectMonth,
+                progressText = when {
+                    hasPerfectMonth -> "100% in ${bestPerfectMonth.shortLabel}"
+                    bestPerfectMonth != null -> String.format(java.util.Locale.US, "Best: %.0f%% (%s)", bestPerfectMonth.percentage, bestPerfectMonth.shortLabel)
+                    else -> "Log 5+ days in a month"
+                },
+                progressFraction = if (hasPerfectMonth) 1f else ((bestPerfectMonth?.percentage ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f),
+                iconKey = "star"
+            ),
+            AttendanceMilestone(
+                id = "consistent_logger",
+                title = "Consistent Logger",
+                subtitle = "Log 20 or more school days",
+                unlocked = loggedCount >= 20,
+                progressText = if (loggedCount >= 20) "$loggedCount days logged" else "$loggedCount / 20 days",
+                progressFraction = (loggedCount / 20f).coerceIn(0f, 1f),
+                iconKey = "calendar"
+            ),
+            AttendanceMilestone(
+                id = "clean_sheet",
+                title = "Zero Unexcused",
+                subtitle = "0 unexcused absences across 10+ days",
+                unlocked = cleanSheetUnlocked,
+                progressText = when {
+                    cleanSheetUnlocked -> "$cleanSheetDays clean days"
+                    totalUnexcusedAbsent > 0 -> "$totalUnexcusedAbsent unexcused"
+                    else -> "$cleanSheetDays / 10 days"
+                },
+                progressFraction = if (totalUnexcusedAbsent > 0) 0f else (cleanSheetDays / 10f).coerceIn(0f, 1f),
+                iconKey = "verified"
+            )
+        )
+    }
+
+    /**
+     * Summarizes the upcoming Monday–Friday school week relative to [referenceDateKey]
+     * (typically Sunday evening) for the Smart Sunday Evening Prep notification.
+     */
+    fun calculateUpcomingWeekPrep(
+        calendarEvents: List<CalendarEvent>,
+        termStats: AttendanceStats,
+        referenceDateKey: String = DateUtils.todayKey()
+    ): UpcomingWeekPrep {
+        val cal = DateUtils.parseDateKey(referenceDateKey) ?: java.util.Calendar.getInstance()
+        val daysUntilMonday = when (cal.get(java.util.Calendar.DAY_OF_WEEK)) {
+            java.util.Calendar.SUNDAY -> 1
+            java.util.Calendar.SATURDAY -> 2
+            java.util.Calendar.FRIDAY -> 3
+            java.util.Calendar.THURSDAY -> 4
+            java.util.Calendar.WEDNESDAY -> 5
+            java.util.Calendar.TUESDAY -> 6
+            else -> 7
+        }
+        val mondayKey = DateUtils.addDays(referenceDateKey, daysUntilMonday)
+        val weekKeys = (0..4).map { DateUtils.addDays(mondayKey, it) }
+        val fridayKey = weekKeys.last()
+
+        val eventByDate = calendarEvents
+            .filter { it.nonSchoolDay }
+            .associateBy { it.dateKey }
+        val offDays = weekKeys.mapNotNull { eventByDate[it] }
+        val schoolDays = (5 - offDays.size).coerceIn(0, 5)
+
+        return UpcomingWeekPrep(
+            mondayKey = mondayKey,
+            fridayKey = fridayKey,
+            schoolDaysCount = schoolDays,
+            offDays = offDays,
+            termPercentage = termStats.percentage,
+            eligible = termStats.eligible,
+            safeSkipsRemaining = termStats.safeSkipsRemaining,
+            daysNeededToRecover = termStats.daysNeededToRecover
+        )
     }
 }

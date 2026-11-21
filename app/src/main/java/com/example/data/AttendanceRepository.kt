@@ -245,6 +245,110 @@ class AttendanceRepository(
         )
     }
 
+    fun observeAllFeedbackAdmin(): Flow<List<FeedbackReport>> = flow {
+        val uid = requireUserId()
+        val path = "feedback"
+        emitAll(
+            db.collection("feedback")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        FeedbackReport::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    // --- STUDENT FEEDBACK SUBMISSIONS ---
+
+    suspend fun submitFeedback(
+        userId: String,
+        userName: String,
+        userEmail: String,
+        className: String?,
+        type: FeedbackType,
+        title: String,
+        message: String,
+        appVersion: String
+    ): Result<Unit> {
+        val docRef = db.collection("feedback").document()
+        val path = docRef.path
+        return try {
+            requireUserId()
+            val cleanTitle = title.trim().take(120)
+            val cleanMessage = message.trim().take(1500)
+            require(cleanTitle.isNotEmpty()) { "Please enter a short summary" }
+            require(cleanMessage.isNotEmpty()) { "Please describe the bug or suggestion" }
+            val cleanName = userName.trim().ifEmpty { "Student" }.take(100)
+            val cleanEmail = userEmail.trim().ifEmpty { "student@80endance.app" }.take(120)
+            val cleanClass = className?.trim()?.take(20)?.ifEmpty { null }
+            val cleanVersion = appVersion.trim().ifEmpty { "1.0" }.take(40)
+
+            val payload = mapOf(
+                "userId" to userId,
+                "userName" to cleanName,
+                "userEmail" to cleanEmail,
+                "className" to cleanClass,
+                "type" to type.raw,
+                "title" to cleanTitle,
+                "message" to cleanMessage,
+                "appVersion" to cleanVersion,
+                "status" to FeedbackStatus.OPEN.raw,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            ).filterValues { it != null }
+
+            docRef.set(payload).awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateFeedbackStatus(feedbackId: String, status: FeedbackStatus): Result<Unit> {
+        val path = "feedback/$feedbackId"
+        return try {
+            requireUserId()
+            db.collection("feedback").document(feedbackId).update(
+                mapOf(
+                    "status" to status.raw,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteFeedback(feedbackId: String): Result<Unit> {
+        val path = "feedback/$feedbackId"
+        return try {
+            requireUserId()
+            db.collection("feedback").document(feedbackId).delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
     // --- PROFILE MUTATIONS ---
 
     suspend fun saveUserProfile(
@@ -1103,6 +1207,110 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Atomically transitions the school to a new active term using a WriteBatch:
+     * deactivates all previously active terms in Firestore, activates (or creates) the target term,
+     * preserves all historical student attendance for Overall (G12 & G13), and optionally posts a pinned notice.
+     */
+    suspend fun rolloverActiveTerm(
+        targetTerm: AcademicTerm,
+        alsoPostNotice: Boolean
+    ): Result<String> {
+        return try {
+            requireUserId()
+            val cleanName = targetTerm.name.trim().take(60)
+            require(cleanName.isNotEmpty()) { "Term name is required" }
+            require(targetTerm.startDate.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) { "Invalid start date" }
+            require(targetTerm.endDate.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) { "Invalid end date" }
+            require(targetTerm.startDate <= targetTerm.endDate) { "End date must be on or after start date" }
+
+            val existingDocs = runCatching {
+                db.collection("academic_terms").get().await().documents
+            }.getOrDefault(emptyList())
+            val existingIds = existingDocs.map { it.id }.toSet()
+
+            val targetDocRef = if (targetTerm.id.isNotBlank()) {
+                db.collection("academic_terms").document(targetTerm.id)
+            } else {
+                db.collection("academic_terms").document()
+            }
+            val targetId = targetDocRef.id
+            val year = targetTerm.startDate.take(4).toIntOrNull()?.coerceIn(2024, 2035)
+                ?: targetTerm.academicYear.coerceIn(2024, 2035)
+            val eligibility = targetTerm.minEligibilityPercent.coerceIn(50, 100)
+
+            val batch = db.batch()
+            // Deactivate all other stored terms
+            for (doc in existingDocs) {
+                if (doc.id != targetId && doc.getBoolean("active") == true) {
+                    batch.update(
+                        doc.reference,
+                        mapOf(
+                            "active" to false,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+            }
+
+            if (targetId in existingIds) {
+                batch.update(
+                    targetDocRef,
+                    mapOf(
+                        "name" to cleanName,
+                        "startDate" to targetTerm.startDate,
+                        "endDate" to targetTerm.endDate,
+                        "academicYear" to year,
+                        "minEligibilityPercent" to eligibility,
+                        "active" to true,
+                        "published" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } else {
+                batch.set(
+                    targetDocRef,
+                    mapOf(
+                        "name" to cleanName,
+                        "startDate" to targetTerm.startDate,
+                        "endDate" to targetTerm.endDate,
+                        "academicYear" to year,
+                        "minEligibilityPercent" to eligibility,
+                        "active" to true,
+                        "published" to true,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+
+            batch.commit().awaitOfflineAware()
+
+            if (alsoPostNotice) {
+                saveNotice(
+                    noticeId = null,
+                    title = "Welcome to $cleanName!".take(120),
+                    message = "$cleanName (${DateUtils.formatReadableShort(targetTerm.startDate)} – ${DateUtils.formatReadableShort(targetTerm.endDate)}) is now active. Your Overall (G12 & 13) attendance history is preserved while Term tracking starts fresh!".take(1000),
+                    category = NoticeCategory.NORMAL_NOTE,
+                    pinned = true,
+                    targetType = NoticeTargetType.ALL,
+                    targetValue = null,
+                    eventDate = targetTerm.startDate,
+                    urgent = false,
+                    published = true
+                )
+            }
+
+            scheduleSyncIfOffline()
+            Result.success(cleanName)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "academic_terms")
             Result.failure(e)
         }
     }

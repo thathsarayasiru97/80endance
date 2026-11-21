@@ -52,11 +52,57 @@ enum class NoticeCategory(val raw: String, val label: String) {
     SCHOOL_EVENT("school_event", "School Event"),
     SCHEDULE_CHANGE("schedule_change", "Schedule Change"),
     EXAM("exam", "Exam Notice"),
+    NORMAL_NOTE("normal_note", "Normal Note"),
     GENERAL("general", "School Note");
 
     companion object {
         fun fromRaw(raw: String?): NoticeCategory =
             entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: GENERAL
+    }
+}
+
+enum class AppThemeMode(val raw: String, val label: String) {
+    SYSTEM("system", "System"),
+    LIGHT("light", "Light"),
+    DARK("dark", "Dark"),
+    OLED_BLACK("oled_black", "OLED");
+
+    companion object {
+        fun fromRaw(raw: String?): AppThemeMode =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: SYSTEM
+    }
+}
+
+enum class AppAccentPalette(val raw: String, val label: String) {
+    ROYAL_BLUE("royal_blue", "Royal Blue"),
+    EMERALD("emerald", "Emerald"),
+    CRIMSON("crimson", "Crimson"),
+    AMETHYST("amethyst", "Amethyst");
+
+    companion object {
+        fun fromRaw(raw: String?): AppAccentPalette =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: ROYAL_BLUE
+    }
+}
+
+enum class FeedbackType(val raw: String, val label: String) {
+    BUG("bug", "Bug Report"),
+    SUGGESTION("suggestion", "Feature Idea");
+
+    companion object {
+        fun fromRaw(raw: String?): FeedbackType =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: SUGGESTION
+    }
+}
+
+enum class FeedbackStatus(val raw: String, val label: String) {
+    OPEN("open", "Open"),
+    REVIEWED("reviewed", "Reviewed"),
+    RESOLVED("resolved", "Resolved");
+
+    companion object {
+        fun fromRaw(raw: String?): FeedbackStatus =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: OPEN
     }
 }
 
@@ -301,4 +347,27 @@ data class AppSettings(
         2028 -> al2028ExamDate
         else -> "$year-08-10"
     }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class FeedbackReport(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val userName: String = "",
+    val userEmail: String = "",
+    val className: String? = null,
+    val type: String = FeedbackType.SUGGESTION.raw,
+    val title: String = "",
+    val message: String = "",
+    val appVersion: String = "",
+    val status: String = FeedbackStatus.OPEN.raw,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val typeEnum: FeedbackType
+        get() = FeedbackType.fromRaw(type)
+
+    val statusEnum: FeedbackStatus
+        get() = FeedbackStatus.fromRaw(status)
 }

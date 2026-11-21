@@ -339,4 +339,82 @@ test("Verified admin: full control over notices, terms, calendar events, setting
   await assertFails(studentA.collection("notices").get());
   await assertFails(studentA.collection("notices").doc("hack_notice").set(validNoticePayload()));
   await assertFails(studentA.collection("app_settings").get());
+
+  // Admin can publish normal_note notice
+  await assertSucceeds(
+    adminDb.collection("notices").doc("notice_normal_note").set(
+      validNoticePayload({ category: "normal_note", title: "Lab Coat Reminder", pinned: false })
+    )
+  );
+});
+
+test("Feedback collection: students submit open bugs/suggestions, isolated from others; admin reviews & deletes", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+  const studentB = testEnv.authenticatedContext(STUDENT_B_UID, {
+    email: "b@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+  const validFeedback = {
+    userId: STUDENT_A_UID,
+    userName: "Kavindu Perera",
+    userEmail: "a@royal.lk",
+    className: "13M2",
+    type: "suggestion",
+    title: "Add OLED dark theme",
+    message: "Would love a true black theme for battery savings.",
+    appVersion: "1.4.0",
+    status: "open",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Student A can create own open feedback
+  await assertSucceeds(studentA.collection("feedback").doc("fb_1").set(validFeedback));
+
+  // Student A cannot spoof another userId or pre-resolve status
+  await assertFails(
+    studentA.collection("feedback").doc("fb_spoof_uid").set({
+      ...validFeedback,
+      userId: STUDENT_B_UID,
+    })
+  );
+  await assertFails(
+    studentA.collection("feedback").doc("fb_spoof_status").set({
+      ...validFeedback,
+      status: "resolved",
+    })
+  );
+
+  // Student A can read own feedback; Student B cannot read or list all feedback
+  await assertSucceeds(studentA.collection("feedback").doc("fb_1").get());
+  await assertFails(studentB.collection("feedback").doc("fb_1").get());
+  await assertFails(studentB.collection("feedback").get());
+
+  // Student A cannot update or delete feedback after submitting
+  await assertFails(
+    studentA.collection("feedback").doc("fb_1").update({
+      status: "resolved",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertFails(studentA.collection("feedback").doc("fb_1").delete());
+
+  // Admin can list all feedback, mark resolved, and delete
+  await assertSucceeds(adminDb.collection("feedback").get());
+  await assertSucceeds(
+    adminDb.collection("feedback").doc("fb_1").update({
+      status: "resolved",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertSucceeds(adminDb.collection("feedback").doc("fb_1").delete());
 });

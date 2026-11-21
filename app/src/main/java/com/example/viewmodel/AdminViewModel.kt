@@ -13,6 +13,8 @@ import com.example.data.CalendarEvent
 import com.example.data.CalendarEventTargetType
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.data.FeedbackReport
+import com.example.data.FeedbackStatus
 import com.example.data.Notice
 import com.example.data.NoticeCategory
 import com.example.data.NoticeTargetType
@@ -38,6 +40,7 @@ data class AdminUiState(
     val notices: List<Notice> = emptyList(),
     val terms: List<AcademicTerm> = SriLankaCalendarDefaults.defaultTerms,
     val calendarEvents: List<CalendarEvent> = SriLankaCalendarDefaults.defaultEvents,
+    val feedbackItems: List<FeedbackReport> = emptyList(),
     val appSettings: AppSettings = AppSettings(),
     val selectedStudent: UserProfile? = null,
     val selectedStudentRecords: List<AttendanceRecord> = emptyList(),
@@ -81,23 +84,25 @@ class AdminViewModel(
         repository.observePublishedCalendarEvents().safeStream(emptyList(), "events"),
         combine(
             repository.observeAppSettings().safeStream(AppSettings(), "settings"),
+            repository.observeAllFeedbackAdmin().safeStream(emptyList(), "feedback"),
             _selectedStudentId,
             selectedRecordsFlow,
             _isBusy
-        ) { settings, selectedId, selectedRecords, busy ->
-            Quadruple(settings, selectedId, selectedRecords, busy)
+        ) { settings, feedback, selectedId, selectedRecords, busy ->
+            AdminExtras(settings, feedback, selectedId, selectedRecords, busy)
         }
     ) { students, notices, terms, events, extras ->
-        val selectedStudent = students.firstOrNull { it.userId == extras.second }
+        val selectedStudent = students.firstOrNull { it.userId == extras.selectedId }
         AdminUiState(
             students = students,
             notices = notices,
             terms = terms.ifEmpty { SriLankaCalendarDefaults.defaultTerms },
             calendarEvents = events.ifEmpty { SriLankaCalendarDefaults.defaultEvents },
-            appSettings = extras.first,
+            feedbackItems = extras.feedback,
+            appSettings = extras.settings,
             selectedStudent = selectedStudent,
-            selectedStudentRecords = extras.third,
-            isBusy = extras.fourth
+            selectedStudentRecords = extras.selectedRecords,
+            isBusy = extras.busy
         )
     }.stateIn(
         scope = viewModelScope,
@@ -415,5 +420,52 @@ class AdminViewModel(
         }
     }
 
-    private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+    fun rolloverTerm(
+        targetTerm: AcademicTerm,
+        alsoPostNotice: Boolean,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.rolloverActiveTerm(
+                targetTerm = targetTerm,
+                alsoPostNotice = alsoPostNotice
+            )
+            _isBusy.value = false
+            res.onSuccess { activeName ->
+                _snackbar.value = if (alsoPostNotice) {
+                    "Rolled over to $activeName & posted welcome notice"
+                } else {
+                    "Active term switched to $activeName"
+                }
+                onDone()
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Term rollover failed"
+            }
+        }
+    }
+
+    fun updateFeedbackStatus(feedbackId: String, status: FeedbackStatus) {
+        viewModelScope.launch {
+            val res = repository.updateFeedbackStatus(feedbackId, status)
+            res.onSuccess { _snackbar.value = "Feedback marked as ${status.label}" }
+                .onFailure { e -> _snackbar.value = e.message ?: "Could not update feedback" }
+        }
+    }
+
+    fun deleteFeedback(feedbackId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteFeedback(feedbackId)
+            res.onSuccess { _snackbar.value = "Feedback removed" }
+                .onFailure { e -> _snackbar.value = e.message ?: "Delete failed" }
+        }
+    }
+
+    private data class AdminExtras(
+        val settings: AppSettings,
+        val feedback: List<FeedbackReport>,
+        val selectedId: String?,
+        val selectedRecords: List<AttendanceRecord>,
+        val busy: Boolean
+    )
 }

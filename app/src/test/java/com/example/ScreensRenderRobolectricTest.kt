@@ -10,19 +10,27 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import com.example.data.AcademicTerm
+import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.data.FeedbackType
+import com.example.data.Notice
+import com.example.data.NoticeCategory
 import com.example.data.UserProfile
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.ui.admin.AdminNoSchoolCard
+import com.example.ui.admin.AdminTermRolloverCard
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
+import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassBackdropHost
+import com.example.ui.components.PinnedNoticeSlideshow
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.home.HomeScreen
@@ -401,5 +409,154 @@ class ScreensRenderRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("baseline_preview_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("baseline_save_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun pinnedNoticeSlideshowRendersMultipleNoticesIncludingNormalNote() {
+        val notices = listOf(
+            Notice(
+                id = "n1",
+                title = "Lab Coat Reminder",
+                message = "Bring lab coats for tomorrow's Chemistry practical.",
+                category = NoticeCategory.NORMAL_NOTE.raw,
+                pinned = true,
+                published = true
+            ),
+            Notice(
+                id = "n2",
+                title = "Term Test Timetable",
+                message = "Term 2 timetable is posted on the main notice board.",
+                category = NoticeCategory.EXAM.raw,
+                pinned = true,
+                published = true
+            )
+        )
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                PinnedNoticeSlideshow(
+                    pinnedNotices = notices,
+                    totalNoticeCount = notices.size,
+                    onNoticeClick = {},
+                    onViewAllClick = {}
+                )
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(100L)
+        composeTestRule.onNodeWithTag("pinned_notices_slideshow").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("pinned_slide_dot_0").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("pinned_slide_dot_1").assertIsDisplayed()
+        // Advance past the 5s auto-advance timer to confirm smooth slideshow transition without crashing
+        composeTestRule.mainClock.advanceTimeBy(5600L)
+        composeTestRule.onNodeWithTag("pinned_notices_slideshow").assertIsDisplayed()
+    }
+
+    @Test
+    fun reportsScreenRendersMilestoneBadgesCard() {
+        val milestones = AttendanceCalculator.calculateMilestones(
+            records = listOf(
+                AttendanceRecord(dateKey = "2026-05-04", status = AttendanceStatus.PRESENT.raw)
+            ),
+            currentStreak = 5,
+            termStats = sampleState.currentTermStats,
+            overallStats = sampleState.overallStats
+        )
+        val stateWithMilestones = sampleState.copy(milestones = milestones)
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    ReportsScreen(state = stateWithMilestones)
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("reports_milestones_card"))
+        composeTestRule.onNodeWithTag("reports_milestones_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsScreenRendersAppearanceSundayPrepAndFeedbackCards() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    SettingsScreen(
+                        state = sampleState,
+                        isVerifiedAdmin = false,
+                        onEditProfile = {},
+                        onUpdatePreferences = { _, _, _, _ -> },
+                        onPreviewCheckInPopup = {},
+                        onManualSync = {},
+                        onOpenAdminPanel = {},
+                        onSignOut = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_sunday_prep_switch"))
+        composeTestRule.onNodeWithTag("settings_sunday_prep_switch").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_appearance_card"))
+        composeTestRule.onNodeWithTag("settings_appearance_card").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_feedback_card"))
+        composeTestRule.onNodeWithTag("settings_feedback_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun feedbackReportDialogRendersAndAcceptsInput() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                FeedbackReportDialog(
+                    initialType = FeedbackType.BUG,
+                    isSubmitting = false,
+                    onDismiss = {},
+                    onSubmit = { _, _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("feedback_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("feedback_title_input").performTextInput("Slideshow lag")
+        composeTestRule.onNodeWithTag("feedback_message_input").performTextInput("Happens on home tab")
+        composeTestRule.onNodeWithTag("feedback_submit_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun adminTermRolloverCardRendersActiveAndTargetTermControls() {
+        val terms = listOf(
+            AcademicTerm(
+                id = "term_1_2026",
+                name = "Term 1 — 2026",
+                startDate = "2026-01-05",
+                endDate = "2026-04-09",
+                academicYear = 2026,
+                active = true
+            ),
+            AcademicTerm(
+                id = "term_2_2026",
+                name = "Term 2 — 2026",
+                startDate = "2026-04-27",
+                endDate = "2026-08-07",
+                academicYear = 2026,
+                active = false
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                AdminTermRolloverCard(
+                    terms = terms,
+                    isBusy = false,
+                    onRolloverTerm = { _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_term_rollover_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_rollover_confirm_button").assertIsDisplayed()
     }
 }

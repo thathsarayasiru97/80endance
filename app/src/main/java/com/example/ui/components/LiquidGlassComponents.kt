@@ -69,6 +69,7 @@ import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.Shadow
+import com.example.ui.theme.LocalIsOledBlack
 
 /**
  * Provides a non-recursive ambient [Backdrop] captured from the atmospheric background layer
@@ -99,6 +100,7 @@ fun LiquidGlassBackdropHost(
     val ambientBackdrop = rememberLayerBackdrop()
     val colorScheme = MaterialTheme.colorScheme
     val isDark = colorScheme.background.luminance() < 0.5f
+    val isOled = LocalIsOledBlack.current
 
     Box(modifier = modifier.fillMaxSize()) {
         // Layer 0: Atmospheric background captured into ambientBackdrop (sibling to foreground UI)
@@ -109,9 +111,27 @@ fun LiquidGlassBackdropHost(
         ) {
             drawRect(color = colorScheme.background)
 
-            val primaryGlow = colorScheme.primary.copy(alpha = if (isDark) 0.22f else 0.14f)
-            val secondaryGlow = colorScheme.secondary.copy(alpha = if (isDark) 0.18f else 0.13f)
-            val tertiaryGlow = colorScheme.tertiary.copy(alpha = if (isDark) 0.14f else 0.09f)
+            val primaryGlow = colorScheme.primary.copy(
+                alpha = when {
+                    isOled -> 0.08f
+                    isDark -> 0.22f
+                    else -> 0.14f
+                }
+            )
+            val secondaryGlow = colorScheme.secondary.copy(
+                alpha = when {
+                    isOled -> 0.05f
+                    isDark -> 0.18f
+                    else -> 0.13f
+                }
+            )
+            val tertiaryGlow = colorScheme.tertiary.copy(
+                alpha = when {
+                    isOled -> 0.04f
+                    isDark -> 0.14f
+                    else -> 0.09f
+                }
+            )
 
             drawCircle(
                 brush = Brush.radialGradient(

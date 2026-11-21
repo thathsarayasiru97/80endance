@@ -1,11 +1,20 @@
 package com.example.ui.home
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +62,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -301,11 +311,20 @@ fun HomeScreen(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Text(
-                                text = activeScopeCaption,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            AnimatedContent(
+                                targetState = activeScopeCaption,
+                                transitionSpec = {
+                                    (fadeIn(tween(200)) + slideInVertically { -10 })
+                                        .togetherWith(fadeOut(tween(150)) + slideOutVertically { 10 })
+                                },
+                                label = "scope_caption_anim"
+                            ) { caption ->
+                                Text(
+                                    text = caption,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
 
                             Spacer(modifier = Modifier.height(10.dp))
 
@@ -314,38 +333,47 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(12.dp))
 
                             // Actionable Safe-Skip / Recovery Forecast Banner
-                            val forecastBg = if (activeStats.eligible) {
-                                semantic.presentContainer.copy(alpha = 0.7f)
-                            } else {
-                                semantic.absentContainer.copy(alpha = 0.85f)
-                            }
-                            val forecastFg = if (activeStats.eligible) {
-                                semantic.onPresentContainer
-                            } else {
-                                semantic.onAbsentContainer
-                            }
-                            val forecastText = when {
-                                activeStats.totalCountedDays == 0 ->
-                                    "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
-                                activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
-                                    "You're on track! Safe buffer: up to ${activeStats.safeSkipsRemaining} more skip${if (activeStats.safeSkipsRemaining == 1) "" else "s"} without dropping below ${activeStats.thresholdPercent}%."
-                                activeStats.eligible ->
-                                    "Right on the ${activeStats.thresholdPercent}% line — attend the next school day to build a safe buffer."
-                                else ->
-                                    "Below ${activeStats.thresholdPercent}% — attend the next ${activeStats.daysNeededToRecover} consecutive school day${if (activeStats.daysNeededToRecover == 1) "" else "s"} to recover eligibility."
-                            }
+                            AnimatedContent(
+                                targetState = Triple(scopeMode, activeStats.eligible, activeStats.totalCountedDays to activeStats.safeSkipsRemaining),
+                                transitionSpec = {
+                                    (fadeIn(tween(240)) + slideInVertically { 12 })
+                                        .togetherWith(fadeOut(tween(180)) + slideOutVertically { -12 })
+                                },
+                                label = "forecast_banner_anim"
+                            ) { _ ->
+                                val forecastBg = if (activeStats.eligible) {
+                                    semantic.presentContainer.copy(alpha = 0.7f)
+                                } else {
+                                    semantic.absentContainer.copy(alpha = 0.85f)
+                                }
+                                val forecastFg = if (activeStats.eligible) {
+                                    semantic.onPresentContainer
+                                } else {
+                                    semantic.onAbsentContainer
+                                }
+                                val forecastText = when {
+                                    activeStats.totalCountedDays == 0 ->
+                                        "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
+                                    activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
+                                        "You're on track! Safe buffer: up to ${activeStats.safeSkipsRemaining} more skip${if (activeStats.safeSkipsRemaining == 1) "" else "s"} without dropping below ${activeStats.thresholdPercent}%."
+                                    activeStats.eligible ->
+                                        "Right on the ${activeStats.thresholdPercent}% line — attend the next school day to build a safe buffer."
+                                    else ->
+                                        "Below ${activeStats.thresholdPercent}% — attend the next ${activeStats.daysNeededToRecover} consecutive school day${if (activeStats.daysNeededToRecover == 1) "" else "s"} to recover eligibility."
+                                }
 
-                            Surface(
-                                color = forecastBg,
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = forecastText,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = forecastFg,
-                                    modifier = Modifier.padding(14.dp)
-                                )
+                                Surface(
+                                    color = forecastBg,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = forecastText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = forecastFg,
+                                        modifier = Modifier.padding(14.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -551,14 +579,35 @@ fun HomeScreen(
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = when {
-                                            todayRec != null -> "Today: ${todayRec.statusEnum.label}"
-                                            else -> "Did you attend school today?"
-                                        },
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        AnimatedVisibility(
+                                            visible = todayRec?.statusEnum == AttendanceStatus.PRESENT ||
+                                                todayRec?.statusEnum == AttendanceStatus.SCHOOL_EVENT ||
+                                                todayRec?.statusEnum == AttendanceStatus.MEDICAL,
+                                            enter = fadeIn() + scaleIn(
+                                                initialScale = 0.5f,
+                                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CheckCircle,
+                                                contentDescription = "Logged present",
+                                                tint = semantic.present,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = when {
+                                                todayRec != null -> "Today: ${todayRec.statusEnum.label}"
+                                                else -> "Did you attend school today?"
+                                            },
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                     if (todayRec?.note?.isNotBlank() == true) {
                                         Text(
                                             text = todayRec.note,
@@ -831,12 +880,30 @@ private fun CatchUpActionChip(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.90f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "catchup_chip_scale"
+    )
     Surface(
         color = bg,
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .size(width = 48.dp, height = 40.dp)
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .testTag(testTag)
     ) {
         Box(contentAlignment = Alignment.Center) {

@@ -4,7 +4,16 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,18 +28,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.AdminPanelSettings
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Campaign
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
@@ -43,6 +58,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -56,19 +74,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.R
+import com.example.data.AppAccentPalette
+import com.example.data.AppThemeMode
 import com.example.data.DateUtils
+import com.example.data.FeedbackType
 import com.example.system.AppUpdateChecker
+import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.SyncStatusPill
+import com.example.ui.theme.accentSwatchColor
 import com.example.viewmodel.StudentAppState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,6 +113,10 @@ fun SettingsScreen(
     onSaveCustomAvatar: (String?) -> Unit = {},
     onOpenBaselineImport: () -> Unit = {},
     onClearBaseline: () -> Unit = {},
+    onToggleSundayPrep: (Boolean) -> Unit = {},
+    onUpdateAppearance: (AppThemeMode, AppAccentPalette) -> Unit = { _, _ -> },
+    onSubmitFeedback: (type: FeedbackType, title: String, message: String, onDone: () -> Unit) -> Unit = { _, _, _, _ -> },
+    isSubmittingFeedback: Boolean = false,
     isCheckingUpdates: Boolean = false,
     onCheckForUpdates: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
@@ -99,6 +131,7 @@ fun SettingsScreen(
     var showNoticeSheet by remember { mutableStateOf(false) }
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showPhotoDialog by remember { mutableStateOf(false) }
+    var feedbackDialogInitialType by remember { mutableStateOf<FeedbackType?>(null) }
 
     val notifLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -111,7 +144,8 @@ fun SettingsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 600.dp),
+                .widthIn(max = 600.dp)
+                .testTag("settings_lazy_column"),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
@@ -383,6 +417,175 @@ fun SettingsScreen(
                                 Text("Test Popup")
                             }
                         }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Sunday Evening Prep",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "7:00 PM briefing of upcoming school days, Poya holidays & safe skips",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = state.sundayPrepEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    onToggleSundayPrep(enabled)
+                                },
+                                modifier = Modifier.testTag("settings_sunday_prep_switch")
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Appearance: Theme Mode (incl. True Black OLED) & Accent Palette Picker
+            item {
+                val systemDark = isSystemInDarkTheme()
+                val previewDark = when (state.themeMode) {
+                    AppThemeMode.SYSTEM -> systemDark
+                    AppThemeMode.LIGHT -> false
+                    AppThemeMode.DARK, AppThemeMode.OLED_BLACK -> true
+                }
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_appearance_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Palette,
+                                        contentDescription = "Appearance and theme",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text("Appearance & Accent", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Choose light, dark, or true-black OLED + custom accent",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_theme_mode_row")
+                        ) {
+                            AppThemeMode.entries.forEachIndexed { idx, mode ->
+                                SegmentedButton(
+                                    selected = state.themeMode == mode,
+                                    onClick = { onUpdateAppearance(mode, state.accentPalette) },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = idx,
+                                        count = AppThemeMode.entries.size
+                                    ),
+                                    modifier = Modifier.testTag("theme_mode_${mode.raw}")
+                                ) {
+                                    Text(
+                                        text = mode.label,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AppAccentPalette.entries.forEach { palette ->
+                                val selected = state.accentPalette == palette
+                                val swatchColor = accentSwatchColor(palette, previewDark)
+                                val scale by animateFloatAsState(
+                                    targetValue = if (selected) 1.08f else 1.0f,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                                    label = "swatch_scale_${palette.raw}"
+                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { onUpdateAppearance(state.themeMode, palette) }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        .testTag("accent_swatch_${palette.raw}")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .graphicsLayer {
+                                                scaleX = scale
+                                                scaleY = scale
+                                            }
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(swatchColor)
+                                            .border(
+                                                width = if (selected) 3.dp else 1.dp,
+                                                color = if (selected) MaterialTheme.colorScheme.onSurface else Color.White.copy(alpha = 0.25f),
+                                                shape = CircleShape
+                                            )
+                                    ) {
+                                        androidx.compose.animation.AnimatedVisibility(
+                                            visible = selected,
+                                            enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)),
+                                            exit = scaleOut()
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Check,
+                                                contentDescription = "${palette.label} selected",
+                                                tint = if (previewDark) Color.Black else Color.White,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = palette.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -508,6 +711,90 @@ fun SettingsScreen(
                 }
             }
 
+            // Encouraging Bug Report & Feature Suggestion Card
+            item {
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_feedback_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AutoAwesome,
+                                        contentDescription = "Share feedback",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Help Shape 80endance!",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = "Found a sneaky bug or have a cool idea? Your feedback directly builds the next update for everyone!",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                )
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick = { feedbackDialogInitialType = FeedbackType.BUG },
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("settings_report_bug_button")
+                            ) {
+                                Icon(Icons.Rounded.BugReport, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Report Bug", maxLines = 1)
+                            }
+                            LiquidGlassButton(
+                                onClick = { feedbackDialogInitialType = FeedbackType.SUGGESTION },
+                                tint = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                minHeight = 48.dp,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_suggest_idea_button")
+                            ) {
+                                Icon(Icons.Rounded.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Suggest Idea", maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Discreet Admin Panel Entry — rendered ONLY for the verified developer Google account
             if (isVerifiedAdmin) {
                 item {
@@ -627,6 +914,19 @@ fun SettingsScreen(
             googlePhotoUrl = state.googlePhotoUrl,
             onSaveCustomAvatar = onSaveCustomAvatar,
             onDismiss = { showPhotoDialog = false }
+        )
+    }
+
+    feedbackDialogInitialType?.let { initialType ->
+        FeedbackReportDialog(
+            initialType = initialType,
+            isSubmitting = isSubmittingFeedback,
+            onDismiss = { feedbackDialogInitialType = null },
+            onSubmit = { type, title, message ->
+                onSubmitFeedback(type, title, message) {
+                    feedbackDialogInitialType = null
+                }
+            }
         )
     }
 }

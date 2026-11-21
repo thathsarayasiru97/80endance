@@ -2,6 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -12,6 +13,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.example.data.AppAccentPalette
+import com.example.data.AppThemeMode
 
 @Immutable
 data class AttendanceSemanticColors(
@@ -132,6 +135,8 @@ private val DarkColorScheme = darkColorScheme(
     onErrorContainer = DarkOnErrorContainer
 )
 
+val LocalIsOledBlack = staticCompositionLocalOf { false }
+
 val AppShapes = Shapes(
     small = RoundedCornerShape(10.dp),
     medium = RoundedCornerShape(16.dp),
@@ -139,15 +144,107 @@ val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(28.dp)
 )
 
+fun accentSwatchColor(palette: AppAccentPalette, isDark: Boolean): Color = when (palette) {
+    AppAccentPalette.ROYAL_BLUE -> if (isDark) DarkPrimary else LightPrimary
+    AppAccentPalette.EMERALD -> if (isDark) EmeraldAccentDarkPrimary else EmeraldAccentLightPrimary
+    AppAccentPalette.CRIMSON -> if (isDark) CrimsonAccentDarkPrimary else CrimsonAccentLightPrimary
+    AppAccentPalette.AMETHYST -> if (isDark) AmethystAccentDarkPrimary else AmethystAccentLightPrimary
+}
+
+private fun buildColorScheme(
+    isDark: Boolean,
+    isOledBlack: Boolean,
+    accentPalette: AppAccentPalette
+): ColorScheme {
+    val base = when {
+        isDark && isOledBlack -> DarkColorScheme.copy(
+            background = OledBackground,
+            onBackground = OledOnBackground,
+            surface = OledSurface,
+            onSurface = OledOnSurface,
+            surfaceVariant = OledSurfaceVariant,
+            onSurfaceVariant = OledOnSurfaceVariant,
+            surfaceContainerLowest = OledSurfaceContainerLowest,
+            surfaceContainerLow = OledSurfaceContainerLow,
+            surfaceContainer = OledSurfaceContainer,
+            surfaceContainerHigh = OledSurfaceContainerHigh,
+            outline = OledOutline,
+            outlineVariant = OledOutlineVariant
+        )
+        isDark -> DarkColorScheme
+        else -> LightColorScheme
+    }
+
+    return when (accentPalette) {
+        AppAccentPalette.ROYAL_BLUE -> base
+        AppAccentPalette.EMERALD -> if (isDark) {
+            base.copy(
+                primary = EmeraldAccentDarkPrimary,
+                onPrimary = EmeraldAccentDarkOnPrimary,
+                primaryContainer = EmeraldAccentDarkPrimaryContainer,
+                onPrimaryContainer = EmeraldAccentDarkOnPrimaryContainer
+            )
+        } else {
+            base.copy(
+                primary = EmeraldAccentLightPrimary,
+                primaryContainer = EmeraldAccentLightPrimaryContainer,
+                onPrimaryContainer = EmeraldAccentLightOnPrimaryContainer,
+                secondary = EmeraldAccentLightSecondary
+            )
+        }
+        AppAccentPalette.CRIMSON -> if (isDark) {
+            base.copy(
+                primary = CrimsonAccentDarkPrimary,
+                onPrimary = CrimsonAccentDarkOnPrimary,
+                primaryContainer = CrimsonAccentDarkPrimaryContainer,
+                onPrimaryContainer = CrimsonAccentDarkOnPrimaryContainer
+            )
+        } else {
+            base.copy(
+                primary = CrimsonAccentLightPrimary,
+                primaryContainer = CrimsonAccentLightPrimaryContainer,
+                onPrimaryContainer = CrimsonAccentLightOnPrimaryContainer,
+                secondary = CrimsonAccentLightSecondary
+            )
+        }
+        AppAccentPalette.AMETHYST -> if (isDark) {
+            base.copy(
+                primary = AmethystAccentDarkPrimary,
+                onPrimary = AmethystAccentDarkOnPrimary,
+                primaryContainer = AmethystAccentDarkPrimaryContainer,
+                onPrimaryContainer = AmethystAccentDarkOnPrimaryContainer
+            )
+        } else {
+            base.copy(
+                primary = AmethystAccentLightPrimary,
+                primaryContainer = AmethystAccentLightPrimaryContainer,
+                onPrimaryContainer = AmethystAccentLightOnPrimaryContainer,
+                secondary = AmethystAccentLightSecondary
+            )
+        }
+    }
+}
+
 @Composable
 fun EightyEndanceTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    val semanticColors = if (darkTheme) DarkSemanticColors else LightSemanticColors
+    val resolvedDark = when (themeMode) {
+        AppThemeMode.SYSTEM -> darkTheme
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK, AppThemeMode.OLED_BLACK -> true
+    }
+    val isOledBlack = themeMode == AppThemeMode.OLED_BLACK
+    val colorScheme = buildColorScheme(resolvedDark, isOledBlack, accentPalette)
+    val semanticColors = if (resolvedDark) DarkSemanticColors else LightSemanticColors
 
-    CompositionLocalProvider(LocalAttendanceColors provides semanticColors) {
+    CompositionLocalProvider(
+        LocalAttendanceColors provides semanticColors,
+        LocalIsOledBlack provides isOledBlack
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

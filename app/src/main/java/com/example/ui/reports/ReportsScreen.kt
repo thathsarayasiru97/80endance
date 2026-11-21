@@ -279,6 +279,13 @@ fun ReportsScreen(
                 }
             }
 
+            // Milestone Badges & Achievements Shelf
+            if (state.milestones.isNotEmpty()) {
+                item {
+                    MilestoneBadgesCard(milestones = state.milestones)
+                }
+            }
+
             // Interactive "What-If" Skip Simulator
             item {
                 WhatIfSkipSimulatorCard(

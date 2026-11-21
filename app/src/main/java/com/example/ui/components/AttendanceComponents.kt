@@ -2,9 +2,16 @@ package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -15,6 +22,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +34,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,6 +80,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,6 +111,7 @@ import com.example.ui.theme.LocalAttendanceColors
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.absoluteValue
@@ -126,23 +137,49 @@ fun AnimatedEligibilityGauge(
 
     val accentColor by animateColorAsState(
         targetValue = if (stats.eligible) semantic.present else semantic.absent,
-        animationSpec = tween(400),
+        animationSpec = tween(420),
         label = "gauge_color"
+    )
+    val pulseTransition = rememberInfiniteTransition(label = "gauge_halo_pulse")
+    val haloAlpha by pulseTransition.animateFloat(
+        initialValue = 0.08f,
+        targetValue = 0.22f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "gauge_halo_alpha"
     )
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
     val thresholdColor = MaterialTheme.colorScheme.secondary
 
     Box(
         contentAlignment = Alignment.Center,
-        modifier = modifier.size(188.dp)
+        modifier = modifier.size(192.dp)
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val strokePx = 16.dp.toPx()
-            val inset = strokePx / 2f + 4.dp.toPx()
+            val inset = strokePx / 2f + 6.dp.toPx()
             val arcSize = Size(size.width - inset * 2f, size.height - inset * 2f)
             val topLeft = Offset(inset, inset)
             val startAngle = 140f
             val totalSweep = 260f
+
+            // Subtle breathing halo behind the active progress arc
+            if (stats.totalCountedDays > 0) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            accentColor.copy(alpha = haloAlpha),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width / 2f, size.height / 2f),
+                        radius = size.minDimension * 0.50f
+                    ),
+                    center = Offset(size.width / 2f, size.height / 2f),
+                    radius = size.minDimension * 0.50f
+                )
+            }
 
             // Background track
             drawArc(
@@ -160,7 +197,7 @@ fun AnimatedEligibilityGauge(
             if (progressSweep > 0.5f) {
                 drawArc(
                     brush = Brush.sweepGradient(
-                        colors = listOf(accentColor.copy(alpha = 0.78f), accentColor)
+                        colors = listOf(accentColor.copy(alpha = 0.72f), accentColor)
                     ),
                     startAngle = startAngle,
                     sweepAngle = progressSweep,
@@ -195,16 +232,25 @@ fun AnimatedEligibilityGauge(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(2.dp))
-            Surface(
-                color = if (stats.eligible) semantic.presentContainer else semantic.absentContainer,
-                shape = RoundedCornerShape(50)
-            ) {
-                Text(
-                    text = if (stats.eligible) "Eligible (≥${stats.thresholdPercent}%)" else "At Risk (<${stats.thresholdPercent}%)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (stats.eligible) semantic.onPresentContainer else semantic.onAbsentContainer,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+            AnimatedContent(
+                targetState = stats.eligible,
+                transitionSpec = {
+                    (fadeIn(tween(240)) + scaleIn(initialScale = 0.9f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)))
+                        .togetherWith(fadeOut(tween(180)))
+                },
+                label = "eligibility_pill_transition"
+            ) { eligible ->
+                Surface(
+                    color = if (eligible) semantic.presentContainer else semantic.absentContainer,
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Text(
+                        text = if (eligible) "Eligible (≥${stats.thresholdPercent}%)" else "At Risk (<${stats.thresholdPercent}%)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (eligible) semantic.onPresentContainer else semantic.onAbsentContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
             }
             if (stats.totalCountedDays > 0) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -229,21 +275,40 @@ fun PinnedNoticeSlideshow(
     if (pinnedNotices.isEmpty()) return
 
     val pagerState = rememberPagerState(pageCount = { pinnedNotices.size })
+    val coroutineScope = rememberCoroutineScope()
+    val isDragged by pagerState.interactionSource.collectIsDraggedAsState()
+    val slideProgress = remember { Animatable(0f) }
+    val noticeKey = remember(pinnedNotices) { pinnedNotices.joinToString("|") { it.id } }
 
-    // Auto-advance every 5 seconds when multiple pinned notices exist (pauses during user drag)
-    LaunchedEffect(pinnedNotices.size, pagerState.isScrollInProgress) {
-        if (pinnedNotices.size > 1 && !pagerState.isScrollInProgress) {
-            while (true) {
-                delay(5000L)
-                val nextPage = (pagerState.currentPage + 1) % pinnedNotices.size
-                pagerState.animateScrollToPage(
-                    page = nextPage,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
-                )
-            }
+    // Keep currentPage valid if notices are dynamically unpinned/deleted
+    LaunchedEffect(pinnedNotices.size) {
+        if (pinnedNotices.isNotEmpty() && pagerState.currentPage >= pinnedNotices.size) {
+            pagerState.scrollToPage(0)
+        }
+    }
+
+    // Reliable 5-second auto-advance: pauses ONLY during user drag (never cancels mid-animation!)
+    LaunchedEffect(noticeKey, isDragged, pagerState.settledPage) {
+        if (pinnedNotices.size <= 1) {
+            slideProgress.snapTo(0f)
+            return@LaunchedEffect
+        }
+        if (isDragged) {
+            slideProgress.stop()
+            return@LaunchedEffect
+        }
+        slideProgress.snapTo(0f)
+        slideProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 5000, easing = LinearEasing)
+        )
+        val count = pinnedNotices.size
+        if (count > 1) {
+            val nextPage = (pagerState.currentPage + 1) % count
+            pagerState.animateScrollToPage(
+                page = nextPage,
+                animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing)
+            )
         }
     }
 
@@ -262,7 +327,11 @@ fun PinnedNoticeSlideshow(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (pinnedNotices.size > 1) "Pinned Updates (${pinnedNotices.size})" else "Pinned Update",
+                    text = if (pinnedNotices.size > 1) {
+                        "Pinned Updates (${(pagerState.currentPage + 1).coerceAtMost(pinnedNotices.size)}/${pinnedNotices.size})"
+                    } else {
+                        "Pinned Update"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -275,17 +344,19 @@ fun PinnedNoticeSlideshow(
         HorizontalPager(
             state = pagerState,
             pageSpacing = 12.dp,
+            beyondViewportPageCount = 1,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("pinned_notices_slideshow")
         ) { page ->
-            val notice = pinnedNotices[page]
+            val notice = pinnedNotices.getOrNull(page) ?: return@HorizontalPager
             val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
             val scale = (1f - (pageOffset.coerceIn(0f, 1f) * 0.04f))
-            val alpha = (1f - (pageOffset.coerceIn(0f, 1f) * 0.25f))
+            val alpha = (1f - (pageOffset.coerceIn(0f, 1f) * 0.22f))
 
             NoticeBannerCard(
                 notice = notice,
+                progressFraction = if (pinnedNotices.size > 1 && page == pagerState.currentPage) slideProgress.value else null,
                 onClick = { onNoticeClick(notice) },
                 modifier = Modifier.graphicsLayer {
                     scaleX = scale
@@ -305,20 +376,32 @@ fun PinnedNoticeSlideshow(
                 repeat(pinnedNotices.size) { index ->
                     val selected = pagerState.currentPage == index
                     val dotWidth by animateDpAsState(
-                        targetValue = if (selected) 20.dp else 6.dp,
-                        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                        targetValue = if (selected) 22.dp else 7.dp,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
                         label = "dot_width"
                     )
                     Box(
                         modifier = Modifier
                             .padding(horizontal = 3.dp)
-                            .height(6.dp)
+                            .height(7.dp)
                             .width(dotWidth)
                             .clip(CircleShape)
                             .background(
                                 if (selected) MaterialTheme.colorScheme.secondary
                                 else MaterialTheme.colorScheme.outlineVariant
                             )
+                            .clickable {
+                                coroutineScope.launch {
+                                    pagerState.animateScrollToPage(
+                                        page = index,
+                                        animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing)
+                                    )
+                                }
+                            }
+                            .testTag("pinned_slide_dot_$index")
                     )
                 }
             }
@@ -329,19 +412,21 @@ fun PinnedNoticeSlideshow(
 @Composable
 private fun NoticeBannerCard(
     notice: Notice,
+    progressFraction: Float? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isUrgent = notice.urgentFlag || notice.categoryEnum == NoticeCategory.TEACHER_ABSENT
-    val containerColor = if (isUrgent) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+    val isNormalNote = notice.categoryEnum == NoticeCategory.NORMAL_NOTE && !notice.urgentFlag
+    val containerColor = when {
+        isUrgent -> MaterialTheme.colorScheme.secondaryContainer
+        isNormalNote -> MaterialTheme.colorScheme.surfaceContainerHigh
+        else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
     }
-    val contentColor = if (isUrgent) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onPrimaryContainer
+    val contentColor = when {
+        isUrgent -> MaterialTheme.colorScheme.onSecondaryContainer
+        isNormalNote -> MaterialTheme.colorScheme.onSurface
+        else -> MaterialTheme.colorScheme.onPrimaryContainer
     }
 
     Card(
@@ -349,68 +434,87 @@ private fun NoticeBannerCard(
         colors = CardDefaults.cardColors(containerColor = containerColor),
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 120.dp)
             .clickable(onClick = onClick)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        color = contentColor.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(50)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = notice.categoryEnum.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = contentColor,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    if (notice.targetTypeEnum != NoticeTargetType.ALL && !notice.targetValue.isNullOrBlank()) {
                         Surface(
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                            color = contentColor.copy(alpha = 0.14f),
                             shape = RoundedCornerShape(50)
                         ) {
                             Text(
-                                text = notice.targetValue,
+                                text = notice.categoryEnum.label,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = contentColor,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
+                        if (notice.targetTypeEnum != NoticeTargetType.ALL && !notice.targetValue.isNullOrBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Text(
+                                    text = notice.targetValue,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                    if (!notice.eventDate.isNullOrBlank()) {
+                        Text(
+                            text = DateUtils.formatReadableShort(notice.eventDate),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = contentColor.copy(alpha = 0.85f)
+                        )
                     }
                 }
-                if (!notice.eventDate.isNullOrBlank()) {
-                    Text(
-                        text = DateUtils.formatReadableShort(notice.eventDate),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = contentColor.copy(alpha = 0.85f)
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = notice.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = notice.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor.copy(alpha = 0.88f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (progressFraction != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(contentColor.copy(alpha = 0.12f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                            .height(3.dp)
+                            .background(contentColor.copy(alpha = 0.55f))
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = notice.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = contentColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = notice.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = contentColor.copy(alpha = 0.88f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -488,6 +592,17 @@ fun StreakAndWeeklyCard(
                     )
                 }
 
+                val flameTransition = rememberInfiniteTransition(label = "streak_flame_pulse")
+                val flameScale by flameTransition.animateFloat(
+                    initialValue = 1.0f,
+                    targetValue = if (streak > 0) 1.18f else 1.0f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "flame_scale"
+                )
+
                 Surface(
                     color = if (streak > 0) semantic.poyaContainer else MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(14.dp)
@@ -500,7 +615,12 @@ fun StreakAndWeeklyCard(
                             imageVector = Icons.Rounded.LocalFireDepartment,
                             contentDescription = "Attendance streak",
                             tint = if (streak > 0) semantic.poya else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier
+                                .size(18.dp)
+                                .graphicsLayer {
+                                    scaleX = flameScale
+                                    scaleY = flameScale
+                                }
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(

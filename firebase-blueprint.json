@@ -69,7 +69,7 @@
       "properties": {
         "title": { "type": "string", "description": "Short notice headline." },
         "message": { "type": "string", "description": "Full notice body text." },
-        "category": { "type": "string", "enum": ["teacher_absent", "school_event", "schedule_change", "exam", "general"], "description": "Notice category." },
+        "category": { "type": "string", "enum": ["teacher_absent", "school_event", "schedule_change", "exam", "normal_note", "general"], "description": "Notice category." },
         "pinned": { "type": "boolean", "description": "Whether displayed in the 5-second dashboard slideshow." },
         "targetType": { "type": "string", "enum": ["all", "grade", "stream", "class"], "description": "Target audience scope." },
         "targetValue": { "type": "string", "description": "Optional grade, stream name, or class code when targeted." },
@@ -134,6 +134,25 @@
         "defaultEligibilityPercent", "defaultReminderHour", "defaultReminderMinute",
         "currentAcademicYear", "al2026ExamDate", "al2027ExamDate", "al2028ExamDate", "updatedAt"
       ]
+    },
+    "FeedbackReport": {
+      "title": "FeedbackReport",
+      "description": "Student-submitted bug reports and feature suggestions.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the reporting student." },
+        "userName": { "type": "string", "description": "Display name of the reporting student." },
+        "userEmail": { "type": "string", "description": "Email address of the reporting student." },
+        "className": { "type": "string", "description": "Student class code (optional)." },
+        "type": { "type": "string", "enum": ["bug", "suggestion"], "description": "Whether this is a bug report or feature suggestion." },
+        "title": { "type": "string", "description": "Short summary headline." },
+        "message": { "type": "string", "description": "Detailed description of the bug or idea." },
+        "appVersion": { "type": "string", "description": "App version string when submitted." },
+        "status": { "type": "string", "enum": ["open", "reviewed", "resolved"], "description": "Review lifecycle status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["userId", "userName", "userEmail", "type", "title", "message", "appVersion", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -160,6 +179,10 @@
     "/app_settings/{settingId}": {
       "schema": { "$ref": "#/entities/AppSettings" },
       "description": "Global application defaults document (global)."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": { "$ref": "#/entities/FeedbackReport" },
+      "description": "Student bug reports and feature suggestions."
     }
   }
 }

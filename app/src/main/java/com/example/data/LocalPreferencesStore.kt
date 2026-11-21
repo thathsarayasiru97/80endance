@@ -22,8 +22,14 @@ data class LocalReminderPrefs(
     val hour: Int = AppConstants.DEFAULT_REMINDER_HOUR,
     val minute: Int = AppConstants.DEFAULT_REMINDER_MINUTE,
     val lastDismissedDate: String = "",
-    val lastSyncedMillis: Long = 0L
-)
+    val lastSyncedMillis: Long = 0L,
+    val sundayPrepEnabled: Boolean = true,
+    val themeModeRaw: String = AppThemeMode.SYSTEM.raw,
+    val accentPaletteRaw: String = AppAccentPalette.ROYAL_BLUE.raw
+) {
+    val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
+    val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
+}
 
 class LocalPreferencesStore(private val context: Context) {
     private val keyReminderEnabled = booleanPreferencesKey("reminder_enabled")
@@ -31,6 +37,9 @@ class LocalPreferencesStore(private val context: Context) {
     private val keyReminderMinute = intPreferencesKey("reminder_minute")
     private val keyDismissedDate = stringPreferencesKey("last_dismissed_date")
     private val keyLastSynced = longPreferencesKey("last_synced_millis")
+    private val keySundayPrepEnabled = booleanPreferencesKey("sunday_prep_enabled")
+    private val keyThemeMode = stringPreferencesKey("app_theme_mode")
+    private val keyAccentPalette = stringPreferencesKey("app_accent_palette")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -38,7 +47,10 @@ class LocalPreferencesStore(private val context: Context) {
             hour = prefs[keyReminderHour] ?: AppConstants.DEFAULT_REMINDER_HOUR,
             minute = prefs[keyReminderMinute] ?: AppConstants.DEFAULT_REMINDER_MINUTE,
             lastDismissedDate = prefs[keyDismissedDate] ?: "",
-            lastSyncedMillis = prefs[keyLastSynced] ?: 0L
+            lastSyncedMillis = prefs[keyLastSynced] ?: 0L,
+            sundayPrepEnabled = prefs[keySundayPrepEnabled] ?: true,
+            themeModeRaw = prefs[keyThemeMode] ?: AppThemeMode.SYSTEM.raw,
+            accentPaletteRaw = prefs[keyAccentPalette] ?: AppAccentPalette.ROYAL_BLUE.raw
         )
     }
 
@@ -49,6 +61,19 @@ class LocalPreferencesStore(private val context: Context) {
             prefs[keyReminderEnabled] = enabled
             prefs[keyReminderHour] = hour
             prefs[keyReminderMinute] = minute
+        }
+    }
+
+    suspend fun saveSundayPrepEnabled(enabled: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keySundayPrepEnabled] = enabled
+        }
+    }
+
+    suspend fun saveAppearance(themeMode: AppThemeMode, accentPalette: AppAccentPalette) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyThemeMode] = themeMode.raw
+            prefs[keyAccentPalette] = accentPalette.raw
         }
     }
 

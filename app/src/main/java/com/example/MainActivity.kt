@@ -62,6 +62,7 @@ import com.example.data.AppConstants
 import com.example.data.AttendanceRepository
 import com.example.data.DateUtils
 import com.example.data.LocalPreferencesStore
+import com.example.data.LocalReminderPrefs
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.AttendanceWidgetStore
@@ -110,7 +111,17 @@ class MainActivity : ComponentActivity() {
             openCheckInTrigger = true
         }
         setContent {
-            EightyEndanceTheme {
+            val prefsStore = remember { LocalPreferencesStore(applicationContext) }
+            val localPrefs by prefsStore.prefsFlow.collectAsStateWithLifecycle(initialValue = LocalReminderPrefs())
+
+            LaunchedEffect(localPrefs.sundayPrepEnabled) {
+                ReminderScheduler.scheduleSundayPrep(applicationContext, localPrefs.sundayPrepEnabled)
+            }
+
+            EightyEndanceTheme(
+                themeMode = localPrefs.themeMode,
+                accentPalette = localPrefs.accentPalette
+            ) {
                 AppRoot(
                     openCheckInFromNotification = openCheckInTrigger,
                     onConsumeNotificationTrigger = { openCheckInTrigger = false }
@@ -459,6 +470,12 @@ private fun AuthenticatedAppShell(
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onOpenBaselineImport = { showBaselineImportDialog = true },
                             onClearBaseline = { attendanceViewModel.clearAttendancePercentageBaseline() },
+                            onToggleSundayPrep = { enabled -> attendanceViewModel.setSundayPrepEnabled(enabled) },
+                            onUpdateAppearance = { mode, palette -> attendanceViewModel.setAppearance(mode, palette) },
+                            onSubmitFeedback = { type, title, message, onDone ->
+                                attendanceViewModel.submitFeedback(type, title, message, onDone)
+                            },
+                            isSubmittingFeedback = isSaving,
                             isCheckingUpdates = isCheckingUpdates,
                             onCheckForUpdates = onCheckForUpdates,
                             bottomBarPadding = bottomScrollPadding

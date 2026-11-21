@@ -23,9 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -40,14 +44,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,13 +64,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.AppSettings
 import com.example.data.DateUtils
+import com.example.data.FeedbackStatus
+import com.example.data.FeedbackType
 import com.example.data.Notice
 import com.example.data.NoticeTargetType
 import com.example.data.UserProfile
+import com.example.ui.components.ProfileAvatar
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.AdminViewModel
 import java.util.Locale
@@ -94,6 +104,7 @@ fun AdminPanelScreen(
     var overrideStudent by remember { mutableStateOf<UserProfile?>(null) }
     var overrideDateKey by remember { mutableStateOf(DateUtils.todayKey()) }
     var editStudentProfile by remember { mutableStateOf<UserProfile?>(null) }
+    var previewAvatarStudent by remember { mutableStateOf<UserProfile?>(null) }
 
     // Settings editor state
     var thresholdText by remember(state.appSettings) { mutableStateOf(state.appSettings.defaultEligibilityPercent.toString()) }
@@ -145,10 +156,22 @@ fun AdminPanelScreen(
                 .padding(innerPadding),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            TabRow(selectedTabIndex = selectedTab) {
+            val openFeedbackCount = remember(state.feedbackItems) {
+                state.feedbackItems.count { it.statusEnum == FeedbackStatus.OPEN }
+            }
+            PrimaryScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Notices") })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Students (${state.students.size})") })
                 Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Calendar") })
+                Tab(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    text = {
+                        Text(
+                            if (openFeedbackCount > 0) "Feedback ($openFeedbackCount)" else "Feedback"
+                        )
+                    }
+                )
             }
 
             Box(
@@ -297,9 +320,17 @@ fun AdminPanelScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(14.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        ProfileAvatar(
+                                            customAvatarBase64 = student.customAvatarBase64,
+                                            googlePhotoUrl = student.photoUrl,
+                                            displayName = student.fullName,
+                                            size = 46.dp,
+                                            onClick = { previewAvatarStudent = student },
+                                            modifier = Modifier.testTag("admin_student_avatar_${student.userId}")
+                                        )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(student.fullName, style = MaterialTheme.typography.titleSmall)
                                             Text(
@@ -356,6 +387,17 @@ fun AdminPanelScreen(
                                             targetValue = targetValue,
                                             alsoPostNotice = alsoNotice
                                         )
+                                    }
+                                )
+                            }
+
+                            // Guided Term Rollover Wizard
+                            item {
+                                AdminTermRolloverCard(
+                                    terms = state.terms,
+                                    isBusy = state.isBusy,
+                                    onRolloverTerm = { targetTerm, alsoNotice ->
+                                        viewModel.rolloverTerm(targetTerm, alsoNotice)
                                     }
                                 )
                             }
@@ -478,6 +520,114 @@ fun AdminPanelScreen(
                             item { Spacer(modifier = Modifier.height(72.dp)) }
                         }
                     }
+
+                    3 -> {
+                        LazyColumn(
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            item {
+                                Text(
+                                    text = "Bug reports & feature suggestions submitted by students from Settings.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (state.feedbackItems.isEmpty()) {
+                                item {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "No bug reports or suggestions yet.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(18.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                items(state.feedbackItems, key = { it.id }) { fb ->
+                                    val isBug = fb.typeEnum == FeedbackType.BUG
+                                    val isResolved = fb.statusEnum == FeedbackStatus.RESOLVED
+                                    Card(
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (isBug) Icons.Rounded.BugReport else Icons.Rounded.Lightbulb,
+                                                        contentDescription = fb.typeEnum.label,
+                                                        tint = if (isBug) semantic.absent else MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Text(
+                                                        text = "${fb.typeEnum.label} • ${fb.statusEnum.label}",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = if (isResolved) semantic.present else MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                                Row {
+                                                    if (!isResolved) {
+                                                        IconButton(
+                                                            onClick = { viewModel.updateFeedbackStatus(fb.id, FeedbackStatus.RESOLVED) }
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Rounded.CheckCircle,
+                                                                contentDescription = "Mark resolved",
+                                                                tint = semantic.present
+                                                            )
+                                                        }
+                                                    }
+                                                    IconButton(onClick = { viewModel.deleteFeedback(fb.id) }) {
+                                                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete feedback")
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = fb.title,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = fb.message,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = listOfNotNull(
+                                                    fb.userName,
+                                                    fb.className?.takeIf { it.isNotBlank() },
+                                                    fb.userEmail,
+                                                    "v${fb.appVersion}"
+                                                ).joinToString(" • "),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            item { Spacer(modifier = Modifier.height(32.dp)) }
+                        }
+                    }
                 }
             }
         }
@@ -492,12 +642,38 @@ fun AdminPanelScreen(
                     .padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(student.fullName, style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "${student.className} • ${student.alStream} • ${student.email}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    ProfileAvatar(
+                        customAvatarBase64 = student.customAvatarBase64,
+                        googlePhotoUrl = student.photoUrl,
+                        displayName = student.fullName,
+                        size = 64.dp,
+                        onClick = { previewAvatarStudent = student },
+                        modifier = Modifier.testTag("admin_detail_student_avatar")
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(student.fullName, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "${student.className} • ${student.alStream} • ${student.email}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (!student.customAvatarBase64.isNullOrBlank()) {
+                                "Custom uploaded photo (tap to enlarge)"
+                            } else if (!student.photoUrl.isNullOrBlank()) {
+                                "Google account photo (tap to enlarge)"
+                            } else {
+                                "No profile photo uploaded"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = {
@@ -599,5 +775,74 @@ fun AdminPanelScreen(
                 }
             }
         )
+    }
+
+    // Full-size Student Profile Photo Viewer for Admin
+    previewAvatarStudent?.let { st ->
+        Dialog(onDismissRequest = { previewAvatarStudent = null }) {
+            Surface(
+                shape = RoundedCornerShape(26.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                tonalElevation = 4.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("admin_student_photo_dialog")
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = st.fullName,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "${st.className} • ${st.alStream}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = { previewAvatarStudent = null }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Close student photo")
+                        }
+                    }
+
+                    ProfileAvatar(
+                        customAvatarBase64 = st.customAvatarBase64,
+                        googlePhotoUrl = st.photoUrl,
+                        displayName = st.fullName,
+                        size = 180.dp
+                    )
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = when {
+                                !st.customAvatarBase64.isNullOrBlank() -> "Custom Uploaded Photo"
+                                !st.photoUrl.isNullOrBlank() -> "Google Account Photo"
+                                else -> "Default Initials"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    TextButton(onClick = { previewAvatarStudent = null }) {
+                        Text("Close")
+                    }
+                }
+            }
+        }
     }
 }

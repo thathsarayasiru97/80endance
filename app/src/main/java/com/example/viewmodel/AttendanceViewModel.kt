@@ -4,15 +4,20 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.AcademicTerm
+import com.example.data.AppAccentPalette
 import com.example.data.AppSettings
+import com.example.data.AppThemeMode
 import com.example.data.AttendanceCalculator
+import com.example.data.AttendanceMilestone
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStats
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
 import com.example.data.DateUtils
+import com.example.data.FeedbackType
 import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
 import com.example.data.Notice
@@ -74,7 +79,11 @@ data class StudentAppState(
     val todayNonSchoolEvent: CalendarEvent? = null,
     val todayIsSchoolDay: Boolean = true,
     val shouldAutoShowCheckIn: Boolean = false,
-    val missedSchoolDays: List<String> = emptyList()
+    val missedSchoolDays: List<String> = emptyList(),
+    val milestones: List<AttendanceMilestone> = emptyList(),
+    val sundayPrepEnabled: Boolean = true,
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE
 )
 
 private data class CoreFirestoreBundle(
@@ -284,6 +293,13 @@ class AttendanceViewModel(
             )
         }
 
+        val milestones = AttendanceCalculator.calculateMilestones(
+            records = bundle.records,
+            currentStreak = streak,
+            termStats = termStats,
+            overallStats = overallStats
+        )
+
         StudentAppState(
             isLoading = !bundle.profileLoaded,
             errorMessage = bundle.streamError,
@@ -310,7 +326,11 @@ class AttendanceViewModel(
             todayNonSchoolEvent = todayNonSchoolEvent,
             todayIsSchoolDay = todayIsSchoolDay,
             shouldAutoShowCheckIn = shouldAutoPrompt,
-            missedSchoolDays = missedSchoolDays
+            missedSchoolDays = missedSchoolDays,
+            milestones = milestones,
+            sundayPrepEnabled = prefs.sundayPrepEnabled,
+            themeMode = prefs.themeMode,
+            accentPalette = prefs.accentPalette
         )
     }.stateIn(
         scope = viewModelScope,
@@ -590,6 +610,57 @@ class AttendanceViewModel(
                 }
             }.onFailure {
                 _snackbarMessage.value = "Sync queued for when internet reconnects"
+            }
+        }
+    }
+
+    fun setSundayPrepEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            localPrefs.saveSundayPrepEnabled(enabled)
+            ReminderScheduler.scheduleSundayPrep(appContext, enabled)
+            _snackbarMessage.value = if (enabled) {
+                "Sunday 7:00 PM week-ahead prep enabled"
+            } else {
+                "Sunday evening prep turned off"
+            }
+        }
+    }
+
+    fun setAppearance(themeMode: AppThemeMode, accentPalette: AppAccentPalette) {
+        viewModelScope.launch {
+            localPrefs.saveAppearance(themeMode, accentPalette)
+        }
+    }
+
+    fun submitFeedback(
+        type: FeedbackType,
+        title: String,
+        message: String,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val profile = uiState.value.profile
+            val res = repository.submitFeedback(
+                userId = currentUserId,
+                userName = profile?.fullName ?: googleDisplayName ?: "Student",
+                userEmail = profile?.email?.ifBlank { userEmail } ?: userEmail,
+                className = profile?.className?.takeIf { it.isNotBlank() },
+                type = type,
+                title = title,
+                message = message,
+                appVersion = BuildConfig.VERSION_NAME
+            )
+            _isSaving.value = false
+            res.onSuccess {
+                _snackbarMessage.value = if (type == FeedbackType.BUG) {
+                    "Bug report sent — thank you for helping improve 80endance!"
+                } else {
+                    "Idea received — thanks for helping shape 80endance!"
+                }
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not send feedback"
             }
         }
     }

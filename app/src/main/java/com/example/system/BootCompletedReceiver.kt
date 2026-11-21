@@ -23,6 +23,9 @@ class BootCompletedReceiver : BroadcastReceiver() {
                         prefs.minute
                     )
                 }
+                if (prefs.sundayPrepEnabled) {
+                    ReminderScheduler.scheduleSundayPrep(context.applicationContext, true)
+                }
             } finally {
                 pendingResult.finish()
             }
