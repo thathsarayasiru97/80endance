@@ -1,5 +1,14 @@
 package com.example.ui.calendar
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,6 +71,8 @@ import com.example.data.AttendanceStatus
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -208,6 +219,7 @@ fun CalendarScreen(
 
             // Monthly Grid Card
             item {
+                StaggeredReveal(index = 1) {
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(
@@ -236,11 +248,23 @@ fun CalendarScreen(
                             ) {
                                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "Previous month")
                             }
-                            Text(
-                                text = DateUtils.formatMonthYear(displayYear, displayMonth),
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                            AnimatedContent(
+                                targetState = displayYear * 12 + displayMonth,
+                                transitionSpec = {
+                                    val forward = targetState >= initialState
+                                    (slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(220)))
+                                        .togetherWith(slideOutHorizontally(tween(180)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(150)))
+                                },
+                                label = "calendar_month_title"
+                            ) { ymIndex ->
+                                val yr = (ymIndex - 1) / 12
+                                val mo = ((ymIndex - 1) % 12) + 1
+                                Text(
+                                    text = DateUtils.formatMonthYear(yr, mo),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                             IconButton(
                                 onClick = {
                                     if (displayMonth == 12) {
@@ -274,8 +298,19 @@ fun CalendarScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        val firstDow = DateUtils.firstDayOfWeekMonZero(displayYear, displayMonth)
-                        val daysCount = DateUtils.daysInMonth(displayYear, displayMonth)
+                        AnimatedContent(
+                            targetState = displayYear * 12 + displayMonth,
+                            transitionSpec = {
+                                val forward = targetState >= initialState
+                                (slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { if (forward) it / 4 else -it / 4 } + fadeIn(tween(240)))
+                                    .togetherWith(slideOutHorizontally(tween(190)) { if (forward) -it / 4 else it / 4 } + fadeOut(tween(160)))
+                            },
+                            label = "calendar_grid_month_slide"
+                        ) { ymIndex ->
+                        val gridYear = (ymIndex - 1) / 12
+                        val gridMonth = ((ymIndex - 1) % 12) + 1
+                        val firstDow = DateUtils.firstDayOfWeekMonZero(gridYear, gridMonth)
+                        val daysCount = DateUtils.daysInMonth(gridYear, gridMonth)
                         val totalCells = ((firstDow + daysCount + 6) / 7) * 7
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -290,7 +325,7 @@ fun CalendarScreen(
                                         if (dayNum < 1 || dayNum > daysCount) {
                                             Box(modifier = Modifier.weight(1f).aspectRatio(1f))
                                         } else {
-                                            val dateKey = DateUtils.formatDateKey(displayYear, displayMonth, dayNum)
+                                            val dateKey = DateUtils.formatDateKey(gridYear, gridMonth, dayNum)
                                             val isWeekend = col >= 5 || DateUtils.isWeekend(dateKey)
                                             val isFuture = dateKey > todayKey
                                             val isLocked = !isWeekend && profile?.isDateInLockedBaseline(dateKey) == true
@@ -301,7 +336,7 @@ fun CalendarScreen(
                                             val isToday = dateKey == todayKey
                                             val isInteractive = !isWeekend && (!isFuture || dayEvents.isNotEmpty())
 
-                                            val cellBg = when {
+                                            val targetCellBg = when {
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
                                                 isPoya || isHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
                                                 isLocked -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
@@ -311,6 +346,11 @@ fun CalendarScreen(
                                                 rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEventContainer
                                                 else -> Color.Transparent
                                             }
+                                            val cellBg by animateColorAsState(
+                                                targetValue = targetCellBg,
+                                                animationSpec = tween(240),
+                                                label = "cal_bg_$dateKey"
+                                            )
                                             val textColor = when {
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
                                                 isPoya || isHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
@@ -343,7 +383,7 @@ fun CalendarScreen(
                                                     )
                                                     .then(
                                                         if (isInteractive) {
-                                                            Modifier.clickable { selectedDateKey = dateKey }
+                                                            Modifier.bouncyClickable(pressedScale = 0.88f) { selectedDateKey = dateKey }
                                                         } else {
                                                             Modifier
                                                         }
@@ -392,6 +432,7 @@ fun CalendarScreen(
                                 }
                             }
                         }
+                        }
 
                         Spacer(modifier = Modifier.height(14.dp))
 
@@ -411,6 +452,7 @@ fun CalendarScreen(
                             }
                         }
                     }
+                }
                 }
             }
 

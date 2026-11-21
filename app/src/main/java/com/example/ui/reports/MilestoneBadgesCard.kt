@@ -49,7 +49,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceMilestone
+import com.example.ui.components.RollingCounterText
 import com.example.ui.theme.LocalAttendanceColors
+import kotlinx.coroutines.delay
 
 @Composable
 fun MilestoneBadgesCard(
@@ -114,8 +116,9 @@ fun MilestoneBadgesCard(
                     color = if (unlockedCount > 0) semantic.presentContainer else MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(50)
                 ) {
-                    Text(
-                        text = "$unlockedCount / ${milestones.size}",
+                    RollingCounterText(
+                        count = unlockedCount,
+                        suffix = " / ${milestones.size}",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (unlockedCount > 0) semantic.onPresentContainer else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -126,14 +129,15 @@ fun MilestoneBadgesCard(
 
             // 2-column grid of milestone tiles
             val rows = remember(milestones) { milestones.chunked(2) }
-            rows.forEach { pair ->
+            rows.forEachIndexed { rowIndex, pair ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    pair.forEach { badge ->
+                    pair.forEachIndexed { colIndex, badge ->
                         MilestoneTile(
                             milestone = badge,
+                            tileIndex = rowIndex * 2 + colIndex,
                             appeared = appeared,
                             modifier = Modifier.weight(1f)
                         )
@@ -150,21 +154,37 @@ fun MilestoneBadgesCard(
 @Composable
 private fun MilestoneTile(
     milestone: AttendanceMilestone,
+    tileIndex: Int,
     appeared: Boolean,
     modifier: Modifier = Modifier
 ) {
     val semantic = LocalAttendanceColors.current
+    var tileVisible by remember(milestone.id) { mutableStateOf(false) }
+    LaunchedEffect(appeared, milestone.id) {
+        if (appeared) {
+            delay(tileIndex * 55L)
+            tileVisible = true
+        }
+    }
     val animatedScale by animateFloatAsState(
-        targetValue = if (appeared) 1f else 0.92f,
+        targetValue = if (tileVisible) 1f else 0.86f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
+            stiffness = Spring.StiffnessMediumLow
         ),
         label = "milestone_pop_${milestone.id}"
     )
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (tileVisible) 1f else 0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "milestone_alpha_${milestone.id}"
+    )
     val animatedProgress by animateFloatAsState(
-        targetValue = if (appeared) milestone.progressFraction else 0f,
-        animationSpec = spring(stiffness = Spring.StiffnessVeryLow),
+        targetValue = if (tileVisible) milestone.progressFraction else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioLowBouncy,
+            stiffness = Spring.StiffnessVeryLow
+        ),
         label = "milestone_progress_${milestone.id}"
     )
 
@@ -199,6 +219,7 @@ private fun MilestoneTile(
             .graphicsLayer {
                 scaleX = animatedScale
                 scaleY = animatedScale
+                alpha = animatedAlpha
             }
             .border(1.dp, borderColor, RoundedCornerShape(18.dp))
             .testTag("milestone_tile_${milestone.id}")

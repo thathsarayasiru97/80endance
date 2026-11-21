@@ -1,6 +1,11 @@
 package com.example.ui.reports
 
 import android.content.Intent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,8 +51,12 @@ import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.RollingCounterText
+import com.example.ui.components.StaggeredReveal
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.StrokeCap
 import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -157,6 +166,20 @@ fun ReportsScreen(
 
             // Summary Card
             item {
+                val animatedPct by animateFloatAsState(
+                    targetValue = stats.percentage.toFloat().coerceIn(0f, 100f),
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessLow
+                    ),
+                    label = "reports_summary_pct"
+                )
+                val summaryAccent by animateColorAsState(
+                    targetValue = if (stats.eligible) semantic.present else semantic.absent,
+                    animationSpec = tween(360),
+                    label = "reports_summary_accent"
+                )
+                StaggeredReveal(index = 1) {
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(
@@ -186,34 +209,36 @@ fun ReportsScreen(
                                 )
                             }
                             Text(
-                                text = String.format(Locale.US, "%.1f%%", stats.percentage),
+                                text = String.format(Locale.US, "%.1f%%", animatedPct),
                                 style = MaterialTheme.typography.headlineMedium,
-                                color = if (stats.eligible) semantic.present else semantic.absent
+                                color = summaryAccent
                             )
                         }
 
                         LinearProgressIndicator(
-                            progress = { (stats.percentage.toFloat() / 100f).coerceIn(0f, 1f) },
-                            color = if (stats.eligible) semantic.present else semantic.absent,
+                            progress = { (animatedPct / 100f).coerceIn(0f, 1f) },
+                            color = summaryAccent,
                             trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            strokeCap = StrokeCap.Round,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(10.dp)
+                                .clip(RoundedCornerShape(50))
                         )
 
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            StatTile("Present", stats.presentDays.toString(), semantic.presentContainer, semantic.onPresentContainer, Modifier.weight(1f))
-                            StatTile("Absent", stats.absentDays.toString(), semantic.absentContainer, semantic.onAbsentContainer, Modifier.weight(1f))
+                            StatTile("Present", stats.presentDays, semantic.presentContainer, semantic.onPresentContainer, Modifier.weight(1f))
+                            StatTile("Absent", stats.absentDays, semantic.absentContainer, semantic.onAbsentContainer, Modifier.weight(1f))
                         }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            StatTile("Medical", stats.medicalDays.toString(), semantic.medicalContainer, semantic.onMedicalContainer, Modifier.weight(1f))
-                            StatTile("Excused", stats.schoolEventDays.toString(), semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
+                            StatTile("Medical", stats.medicalDays, semantic.medicalContainer, semantic.onMedicalContainer, Modifier.weight(1f))
+                            StatTile("Excused", stats.schoolEventDays, semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
                         }
 
                         if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
@@ -231,6 +256,7 @@ fun ReportsScreen(
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -378,7 +404,7 @@ fun ReportsScreen(
 @Composable
 private fun StatTile(
     label: String,
-    value: String,
+    value: Int,
     bg: Color,
     fg: Color,
     modifier: Modifier = Modifier
@@ -389,8 +415,8 @@ private fun StatTile(
         modifier = modifier
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = value,
+            RollingCounterText(
+                count = value,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = fg

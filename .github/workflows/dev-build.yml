@@ -80,7 +80,19 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
         run: |
-          GRADLE_FLAGS="-PdevLabel=true"
+          BASE_VERSION=$(grep -oE '(defaultAppVersionName|versionName)\s*=\s*"[^"]+"' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)"/\1/')
+          BASE_VERSION="${BASE_VERSION:-1.5}"
+          DEV_VERSION_NAME="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
+          IFS='.' read -r VER_MAJOR VER_MINOR VER_PATCH _ <<< "$(printf '%s' "$BASE_VERSION" | grep -oE '[0-9]+(\.[0-9]+)*' | head -n1)"
+          VER_MAJOR=$((10#${VER_MAJOR:-1}))
+          VER_MINOR=$((10#${VER_MINOR:-0}))
+          VER_PATCH=$((10#${VER_PATCH:-0}))
+          DEV_VERSION_CODE=$((VER_MAJOR * 10000 + VER_MINOR * 100 + VER_PATCH + GITHUB_RUN_NUMBER))
+
+          echo "dev_version_name=${DEV_VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "dev_version_code=${DEV_VERSION_CODE}" >> "$GITHUB_OUTPUT"
+
+          GRADLE_FLAGS="-PdevLabel=true -PappVersionName=${DEV_VERSION_NAME} -PappVersionCode=${DEV_VERSION_CODE}"
           if [ "${{ steps.dev_check.outputs.side_by_side }}" = "true" ]; then
             GRADLE_FLAGS="${GRADLE_FLAGS} -PdevPackage=true"
           fi
@@ -144,6 +156,7 @@ jobs:
             echo "## 80endance-dev Build #${GITHUB_RUN_NUMBER}"
             echo ""
             echo "- **APK File:** \`${{ steps.artifact.outputs.apk_name }}\`"
+            echo "- **App Version:** \`${{ steps.build.outputs.dev_version_name }}\` (code \`${{ steps.build.outputs.dev_version_code }}\`)"
             echo "- **App Name:** \`80endance-dev\`"
             echo "- **Package ID:** \`${{ steps.dev_check.outputs.package_id }}\`"
             echo "- **Side-by-Side Install Enabled:** \`${{ steps.dev_check.outputs.side_by_side }}\`"

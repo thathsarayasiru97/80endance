@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
@@ -592,8 +593,10 @@ class ScreensRenderRobolectricTest {
                 }
             }
         }
-        composeTestRule.mainClock.advanceTimeBy(100L)
+        composeTestRule.mainClock.advanceTimeBy(400L)
         composeTestRule.onNodeWithTag("home_community_count_pill").assertIsDisplayed()
+        composeTestRule.onNodeWithText("128").assertIsDisplayed()
+        composeTestRule.onNodeWithText("128 students").assertDoesNotExist()
         composeTestRule.onNodeWithTag("admin_online_now_pill").assertIsDisplayed()
         composeTestRule.onNodeWithTag("home_broadcast_alert_card").assertIsDisplayed()
     }

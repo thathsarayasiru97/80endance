@@ -1,7 +1,16 @@
 package com.example.ui.reports
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -38,11 +47,14 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -150,17 +162,33 @@ fun WhatIfSkipSimulatorCard(
                 }
             }
 
-            // Projected result banner
-            val resultBg = if (projection.willStayEligible) {
-                semantic.presentContainer.copy(alpha = 0.72f)
-            } else {
-                semantic.absentContainer.copy(alpha = 0.85f)
-            }
-            val resultFg = if (projection.willStayEligible) {
-                semantic.onPresentContainer
-            } else {
-                semantic.onAbsentContainer
-            }
+            // Projected result banner with smooth emerald <-> crimson color morph & spring numbers
+            val resultBg by animateColorAsState(
+                targetValue = if (projection.willStayEligible) {
+                    semantic.presentContainer.copy(alpha = 0.72f)
+                } else {
+                    semantic.absentContainer.copy(alpha = 0.85f)
+                },
+                animationSpec = tween(320),
+                label = "sim_result_bg"
+            )
+            val resultFg by animateColorAsState(
+                targetValue = if (projection.willStayEligible) {
+                    semantic.onPresentContainer
+                } else {
+                    semantic.onAbsentContainer
+                },
+                animationSpec = tween(320),
+                label = "sim_result_fg"
+            )
+            val animatedProjectedPct by animateFloatAsState(
+                targetValue = projection.projectedPercent.toFloat(),
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioLowBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "sim_pct_anim"
+            )
 
             Surface(
                 color = resultBg,
@@ -189,7 +217,7 @@ fun WhatIfSkipSimulatorCard(
                                 color = resultFg.copy(alpha = 0.85f)
                             )
                             Text(
-                                text = String.format(Locale.US, "%.1f%%", projection.projectedPercent),
+                                text = String.format(Locale.US, "%.1f%%", animatedProjectedPct),
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = resultFg,
@@ -198,21 +226,30 @@ fun WhatIfSkipSimulatorCard(
                         }
 
                         Column(horizontalAlignment = Alignment.End) {
-                            Surface(
-                                color = resultFg.copy(alpha = 0.14f),
-                                shape = RoundedCornerShape(50)
-                            ) {
-                                Text(
-                                    text = if (projection.willStayEligible) {
-                                        "Eligible (>= ${stats.thresholdPercent}%)"
-                                    } else {
-                                        "Drops < ${stats.thresholdPercent}%"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = resultFg,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                )
+                            AnimatedContent(
+                                targetState = projection.willStayEligible,
+                                transitionSpec = {
+                                    (fadeIn(tween(220)) + scaleIn(initialScale = 0.88f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)))
+                                        .togetherWith(fadeOut(tween(150)))
+                                },
+                                label = "sim_eligibility_badge"
+                            ) { staysEligible ->
+                                Surface(
+                                    color = resultFg.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(50)
+                                ) {
+                                    Text(
+                                        text = if (staysEligible) {
+                                            "Eligible (>= ${stats.thresholdPercent}%)"
+                                        } else {
+                                            "Drops < ${stats.thresholdPercent}%"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = resultFg,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                             if (abs(projection.percentDelta) >= 0.05) {
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -415,8 +452,21 @@ fun AttendancePatternsAndChartCard(
                         )
                     }
 
-                    insights.weekdayStats.forEach { day ->
-                        val fraction = if (day.totalDays > 0) (day.percentage / 100.0).toFloat().coerceIn(0f, 1f) else 0f
+                    insights.weekdayStats.forEachIndexed { dayIdx, day ->
+                        val targetFraction = if (day.totalDays > 0) (day.percentage / 100.0).toFloat().coerceIn(0f, 1f) else 0f
+                        var barRevealed by remember(day.shortName, targetFraction) { mutableStateOf(false) }
+                        LaunchedEffect(day.shortName, targetFraction) {
+                            delay(dayIdx * 55L)
+                            barRevealed = true
+                        }
+                        val animatedFraction by animateFloatAsState(
+                            targetValue = if (barRevealed) targetFraction else 0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessLow
+                            ),
+                            label = "weekday_bar_${day.shortName}"
+                        )
                         val barColor = when {
                             day.totalDays == 0 -> MaterialTheme.colorScheme.outlineVariant
                             day.percentage >= thresholdPercent -> semantic.present
@@ -443,7 +493,7 @@ fun AttendancePatternsAndChartCard(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
-                                        .fillMaxWidth(fraction)
+                                        .fillMaxWidth(animatedFraction)
                                         .clip(RoundedCornerShape(50))
                                         .background(barColor)
                                 )
@@ -471,11 +521,22 @@ private fun MonthlyAttendanceBarChart(
     absentColor: Color,
     thresholdColor: Color
 ) {
-    val animProgress by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = tween(durationMillis = 550),
-        label = "monthly_chart_bars"
-    )
+    val barAnimatables = remember(points.size) { List(points.size) { Animatable(0f) } }
+    LaunchedEffect(points) {
+        barAnimatables.forEachIndexed { idx, anim ->
+            launch {
+                anim.snapTo(0f)
+                delay(idx * 65L)
+                anim.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    )
+                )
+            }
+        }
+    }
     val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     val goalFraction = (thresholdPercent.coerceIn(50, 99) / 100f)
 
@@ -514,7 +575,7 @@ private fun MonthlyAttendanceBarChart(
                 val barWidth = (slotWidth * 0.46f).coerceIn(20f, 76f)
                 val chartHeight = size.height
 
-                // Draw background tracks & animated bars
+                // Draw background tracks & staggered spring-rising bars
                 points.forEachIndexed { idx, pt ->
                     val centerX = slotWidth * idx + slotWidth / 2f
                     val left = centerX - barWidth / 2f
@@ -524,8 +585,9 @@ private fun MonthlyAttendanceBarChart(
                         size = Size(barWidth, chartHeight),
                         cornerRadius = CornerRadius(14f, 14f)
                     )
-                    val pctFraction = (pt.percentage.toFloat() / 100f).coerceIn(0.04f, 1f) * animProgress
-                    val barHeight = chartHeight * pctFraction
+                    val progress = barAnimatables.getOrNull(idx)?.value ?: 1f
+                    val pctFraction = (pt.percentage.toFloat() / 100f).coerceIn(0.04f, 1f) * progress
+                    val barHeight = (chartHeight * pctFraction).coerceAtLeast(0f)
                     val barColor = if (pt.percentage >= thresholdPercent) presentColor else absentColor
                     drawRoundRect(
                         color = barColor,

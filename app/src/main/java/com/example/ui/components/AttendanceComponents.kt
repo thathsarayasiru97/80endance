@@ -17,6 +17,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -192,7 +194,7 @@ fun AnimatedEligibilityGauge(
                 style = Stroke(width = strokePx, cap = StrokeCap.Round)
             )
 
-            // Animated progress sweep
+            // Animated progress sweep + luminous comet tip orb
             val progressSweep = (animatedPercent / 100f) * totalSweep
             if (progressSweep > 0.5f) {
                 drawArc(
@@ -205,6 +207,19 @@ fun AnimatedEligibilityGauge(
                     topLeft = topLeft,
                     size = arcSize,
                     style = Stroke(width = strokePx, cap = StrokeCap.Round)
+                )
+                val tipRad = (startAngle + progressSweep) * (PI / 180.0)
+                val tipCx = size.width / 2f + (arcSize.width / 2f * cos(tipRad)).toFloat()
+                val tipCy = size.height / 2f + (arcSize.height / 2f * sin(tipRad)).toFloat()
+                drawCircle(
+                    color = accentColor.copy(alpha = 0.35f),
+                    radius = strokePx * 0.72f,
+                    center = Offset(tipCx, tipCy)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.92f),
+                    radius = strokePx * 0.28f,
+                    center = Offset(tipCx, tipCy)
                 )
             }
 
@@ -525,17 +540,36 @@ fun SyncStatusPill(
     onClick: () -> Unit
 ) {
     val semantic = LocalAttendanceColors.current
-    val (icon, bg, fg) = when (syncStatus) {
+    val (icon, targetBg, targetFg) = when (syncStatus) {
         SyncStatus.SYNCED -> Triple(Icons.Rounded.CloudDone, semantic.presentContainer, semantic.onPresentContainer)
         SyncStatus.SYNCING -> Triple(Icons.Rounded.CloudSync, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
         SyncStatus.OFFLINE_CACHED -> Triple(Icons.Rounded.CloudOff, semantic.poyaContainer, semantic.onPoyaContainer)
     }
+    val bg by animateColorAsState(targetValue = targetBg, animationSpec = tween(300), label = "sync_bg")
+    val fg by animateColorAsState(targetValue = targetFg, animationSpec = tween(300), label = "sync_fg")
+
+    val spinAngle = if (syncStatus == SyncStatus.SYNCING) {
+        val spinTransition = rememberInfiniteTransition(label = "sync_icon_spin")
+        val angle by spinTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "sync_rotation"
+        )
+        angle
+    } else {
+        0f
+    }
+
     Surface(
         color = bg,
         shape = RoundedCornerShape(50),
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .clickable(onClick = onClick)
+            .bouncyClickable(pressedScale = 0.93f, onClick = onClick)
             .testTag("sync_status_pill")
     ) {
         Row(
@@ -546,14 +580,22 @@ fun SyncStatusPill(
                 imageVector = icon,
                 contentDescription = syncStatus.label,
                 tint = fg,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = spinAngle }
             )
             Spacer(modifier = Modifier.width(5.dp))
-            Text(
-                text = syncStatus.label,
-                style = MaterialTheme.typography.labelSmall,
-                color = fg
-            )
+            AnimatedContent(
+                targetState = syncStatus.label,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
+                label = "sync_label_anim"
+            ) { label ->
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg
+                )
+            }
         }
     }
 }
@@ -623,8 +665,9 @@ fun StreakAndWeeklyCard(
                                 }
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${streak}d",
+                        RollingCounterText(
+                            count = streak,
+                            suffix = "d",
                             style = MaterialTheme.typography.titleMedium,
                             color = if (streak > 0) semantic.onPoyaContainer else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -638,8 +681,8 @@ fun StreakAndWeeklyCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                weeklySummary.forEach { day ->
-                    val (bg, fg, symbol) = when {
+                weeklySummary.forEachIndexed { idx, day ->
+                    val (targetBg, targetFg, symbol) = when {
                         day.holidayLabel != null -> Triple(semantic.poyaContainer, semantic.onPoyaContainer, "P")
                         day.isLocked -> Triple(
                             MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
@@ -658,15 +701,35 @@ fun StreakAndWeeklyCard(
                         day.status == AttendanceStatus.HOLIDAY -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, "H")
                         else -> Triple(MaterialTheme.colorScheme.surfaceContainer, MaterialTheme.colorScheme.onSurfaceVariant, "·")
                     }
+                    val bg by animateColorAsState(targetValue = targetBg, animationSpec = tween(280), label = "week_bg_$idx")
+                    val fg by animateColorAsState(targetValue = targetFg, animationSpec = tween(280), label = "week_fg_$idx")
                     val canTapDay = !day.isFuture && !day.isLocked
+
+                    var popped by remember(day.dateKey) { mutableStateOf(false) }
+                    LaunchedEffect(day.dateKey) {
+                        delay(idx * 45L)
+                        popped = true
+                    }
+                    val popScale by animateFloatAsState(
+                        targetValue = if (popped) 1f else 0.75f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        ),
+                        label = "week_pop_$idx"
+                    )
 
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
+                            .graphicsLayer {
+                                scaleX = popScale
+                                scaleY = popScale
+                            }
                             .clip(RoundedCornerShape(12.dp))
                             .then(
                                 if (canTapDay) {
-                                    Modifier.clickable { onDayClick(day.dateKey) }
+                                    Modifier.bouncyClickable(pressedScale = 0.90f) { onDayClick(day.dateKey) }
                                 } else {
                                     Modifier
                                 }
@@ -706,12 +769,24 @@ fun StreakAndWeeklyCard(
                                     modifier = Modifier.size(16.dp)
                                 )
                             } else {
-                                Text(
-                                    text = symbol,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = fg,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                AnimatedContent(
+                                    targetState = symbol,
+                                    transitionSpec = {
+                                        (scaleIn(
+                                            initialScale = 0.6f,
+                                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                                        ) + fadeIn(tween(180)))
+                                            .togetherWith(fadeOut(tween(120)))
+                                    },
+                                    label = "week_symbol_$idx"
+                                ) { sym ->
+                                    Text(
+                                        text = sym,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = fg,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -815,7 +890,16 @@ fun DailyCheckInDialog(
                 AnimatedContent(
                     targetState = step,
                     transitionSpec = {
-                        (fadeIn(tween(220)) + scaleIn(initialScale = 0.96f)) togetherWith fadeOut(tween(150))
+                        val forward = targetState != CheckInStep.ASK_YES_NO
+                        val enterSlide = slideInHorizontally(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        ) { w -> if (forward) w / 4 else -w / 4 }
+                        val exitSlide = slideOutHorizontally(tween(160)) { w -> if (forward) -w / 5 else w / 5 }
+                        (enterSlide + fadeIn(tween(220)) + scaleIn(initialScale = 0.96f))
+                            .togetherWith(exitSlide + fadeOut(tween(150)))
                     },
                     label = "checkin_step_anim"
                 ) { currentStep ->

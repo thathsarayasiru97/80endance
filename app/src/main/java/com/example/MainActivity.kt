@@ -6,8 +6,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -525,10 +532,20 @@ private fun AuthenticatedAppShell(
                             .statusBarsPadding()
                             .padding(start = if (useRail) 104.dp else 0.dp)
                     ) {
-                        Crossfade(
+                        AnimatedContent(
                             targetState = currentTab,
-                            animationSpec = tween(220),
-                            label = "tab_crossfade"
+                            transitionSpec = {
+                                val movingForward = targetState.ordinal >= initialState.ordinal
+                                val slideIn = slideInHorizontally(
+                                    animationSpec = tween(260, easing = FastOutSlowInEasing)
+                                ) { width -> if (movingForward) width / 8 else -width / 8 }
+                                val slideOut = slideOutHorizontally(
+                                    animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                ) { width -> if (movingForward) -width / 10 else width / 10 }
+                                (slideIn + fadeIn(tween(240)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
+                                    .togetherWith(slideOut + fadeOut(tween(170)))
+                            },
+                            label = "tab_directional_transition"
                         ) { tab ->
                     when (tab) {
                         AppTab.HOME -> HomeScreen(

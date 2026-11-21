@@ -24,10 +24,31 @@ android {
     manifestPlaceholders["appName"] = if (isDevLabel) "80endance-dev" else "@string/app_name"
     manifestPlaceholders["appIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev" else "@mipmap/ic_launcher"
     manifestPlaceholders["appRoundIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev_round" else "@mipmap/ic_launcher_round"
+    val defaultAppVersionName = "1.5"
+    val resolvedVersionName = providers.gradleProperty("appVersionName").orNull
+      ?.trim()
+      ?.removePrefix("v")
+      ?.removePrefix("V")
+      ?.takeIf { it.isNotEmpty() }
+      ?: defaultAppVersionName
+
+    val resolvedVersionCode = run {
+      val explicit = providers.gradleProperty("appVersionCode").orNull?.trim()?.toIntOrNull()
+      if (explicit != null && explicit > 0) {
+        explicit
+      } else {
+        val semverMatch = Regex("(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?").find(resolvedVersionName)
+        val major = semverMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val minor = semverMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+        val patch = semverMatch?.groupValues?.getOrNull(3)?.toIntOrNull() ?: 0
+        (major * 10_000 + minor * 100 + patch).coerceAtLeast(1)
+      }
+    }
+
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = resolvedVersionCode
+    versionName = resolvedVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

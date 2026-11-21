@@ -8,8 +8,13 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -77,6 +82,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -685,12 +691,14 @@ fun SettingsScreen(
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column {
+                                        val ctx = LocalContext.current
+                                        val installedVersion = remember(ctx) { AppUpdateChecker.getInstalledVersionName(ctx) }
                                         Text(
                                             text = stringResource(R.string.update_check_title),
                                             style = MaterialTheme.typography.titleSmall
                                         )
                                         Text(
-                                            text = "Installed ${AppUpdateChecker.formatVersionLabel(BuildConfig.VERSION_NAME)} • GitHub Releases",
+                                            text = "Installed ${AppUpdateChecker.formatVersionLabel(installedVersion)} • GitHub Releases",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -712,7 +720,11 @@ fun SettingsScreen(
                                 }
                             }
 
-                            if (isCheckingUpdates || updateStatusSummary != null) {
+                            AnimatedVisibility(
+                                visible = isCheckingUpdates || updateStatusSummary != null,
+                                enter = expandVertically(spring(dampingRatio = Spring.DampingRatioLowBouncy)) + fadeIn(tween(240)),
+                                exit = shrinkVertically(tween(200)) + fadeOut(tween(150))
+                            ) {
                                 Surface(
                                     color = when {
                                         updateStatusSummary?.hasUpdate == true -> MaterialTheme.colorScheme.primaryContainer
@@ -744,9 +756,10 @@ fun SettingsScreen(
                                                     else -> MaterialTheme.colorScheme.onSurface
                                                 }
                                             )
-                                            if (!isCheckingUpdates && !updateStatusSummary?.detailLine.isNullOrBlank()) {
+                                            val detailText = updateStatusSummary?.detailLine
+                                            if (!isCheckingUpdates && !detailText.isNullOrBlank()) {
                                                 Text(
-                                                    text = updateStatusSummary!!.detailLine!!,
+                                                    text = detailText,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )

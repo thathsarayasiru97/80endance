@@ -64,7 +64,23 @@ object AppUpdateChecker {
 
     private const val CONNECT_TIMEOUT_MS = 8_000
     private const val READ_TIMEOUT_MS = 8_000
-    private val VERSION_REGEX = Regex("(\\d+(?:\\.\\d+)*)")
+    private val DOTTED_VERSION_REGEX = Regex("(?:^|[^0-9])v?(\\d+\\.\\d+(?:\\.\\d+)*)", RegexOption.IGNORE_CASE)
+    private val SIMPLE_V_VERSION_REGEX = Regex("(?:^|[^0-9])v(\\d+)", RegexOption.IGNORE_CASE)
+    private val BARE_NUMBER_REGEX = Regex("^(\\d+)$")
+
+    fun getInstalledVersionName(context: Context): String {
+        val pkgVersion = runCatching {
+            val pm = context.applicationContext.packageManager
+            val pkgName = context.applicationContext.packageName
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(pkgName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkgName, 0).versionName
+            }
+        }.getOrNull()?.trim()
+        return pkgVersion?.takeIf { it.isNotEmpty() } ?: BuildConfig.VERSION_NAME
+    }
 
     fun isInternetAvailable(context: Context): Boolean {
         val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
@@ -122,7 +138,7 @@ object AppUpdateChecker {
 
     suspend fun checkForUpdate(
         context: Context,
-        currentVersion: String = BuildConfig.VERSION_NAME
+        currentVersion: String = getInstalledVersionName(context)
     ): UpdateCheckResult = withContext(Dispatchers.IO) {
         if (!isInternetAvailable(context)) {
             return@withContext UpdateCheckResult.Offline
@@ -340,7 +356,11 @@ object AppUpdateChecker {
     }
 
     private fun parseNumericSegments(raw: String): List<Int>? {
-        val match = VERSION_REGEX.find(raw.trim()) ?: return null
+        val trimmed = raw.trim()
+        val match = DOTTED_VERSION_REGEX.find(trimmed)
+            ?: SIMPLE_V_VERSION_REGEX.find(trimmed)
+            ?: BARE_NUMBER_REGEX.find(trimmed)
+            ?: return null
         val tokens = match.groupValues[1].split('.')
         val numbers = ArrayList<Int>(tokens.size)
         for (token in tokens) {

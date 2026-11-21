@@ -112,6 +112,10 @@ class AppUpdateCheckerTest {
     fun isNewerVersion_handlesPrefixedTagsAndPrereleaseOrdering() {
         assertTrue(AppUpdateChecker.isNewerVersion("Release 1.2", "1.0"))
         assertTrue(AppUpdateChecker.isNewerVersion("80endance-v1.3.0", "1.2.9"))
+        assertFalse(AppUpdateChecker.isNewerVersion("80endance-v1.5", "1.5"))
+        assertFalse(AppUpdateChecker.isNewerVersion("v1.5", "1.5"))
+        assertTrue(AppUpdateChecker.isNewerVersion("v1.6", "1.5"))
+        assertTrue(AppUpdateChecker.isNewerVersion("v1.5", "1.5-dev.12"))
         assertTrue(AppUpdateChecker.isNewerVersion("v1.2.0", "1.2.0-beta"))
         assertFalse(AppUpdateChecker.isNewerVersion("v1.2.0-beta", "1.2.0"))
     }

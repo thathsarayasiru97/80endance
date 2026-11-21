@@ -82,8 +82,10 @@ import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.AdminOnlineNowPill
 import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
+import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SyncStatusPill
+import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.DashboardScopeMode
 import com.example.viewmodel.StudentAppState
@@ -231,7 +233,7 @@ fun HomeScreen(
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
                                 shape = RoundedCornerShape(50),
-                                modifier = Modifier.clickable { showNoticeSheet = true }
+                                modifier = Modifier.bouncyClickable(pressedScale = 0.93f) { showNoticeSheet = true }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -413,6 +415,7 @@ fun HomeScreen(
                 val todayRec = state.todayRecord
                 val nonSchoolEv = state.todayNonSchoolEvent
 
+                StaggeredReveal(index = 2) {
                 when {
                     state.todayIsWeekend -> {
                         Card(
@@ -664,11 +667,13 @@ fun HomeScreen(
                         }
                     }
                 }
+                }
             }
 
             // 4b. Missed-Day Catch-Up Banner (1-tap catch-up for unlogged recent school weekdays)
             if (state.missedSchoolDays.isNotEmpty()) {
                 item {
+                    StaggeredReveal(index = 3) {
                     Card(
                         shape = RoundedCornerShape(22.dp),
                         colors = CardDefaults.cardColors(
@@ -775,22 +780,26 @@ fun HomeScreen(
                             }
                         }
                     }
+                    }
                 }
             }
 
             // 5. Personal Attendance Streak & Weekly Summary Card
             item {
-                StreakAndWeeklyCard(
-                    streak = state.currentStreak,
-                    weeklySummary = state.weeklySummary,
-                    onDayClick = { dateKey -> onOpenCheckIn(dateKey) }
-                )
+                StaggeredReveal(index = 4) {
+                    StreakAndWeeklyCard(
+                        streak = state.currentStreak,
+                        weeklySummary = state.weeklySummary,
+                        onDayClick = { dateKey -> onOpenCheckIn(dateKey) }
+                    )
+                }
             }
 
             // 6. Next Sri Lankan Poya Day / Holiday Card
             state.nextPoyaOrHoliday?.let { nextHoliday ->
                 item {
                     val daysAway = DateUtils.daysBetween(DateUtils.todayKey(), nextHoliday.dateKey)
+                    StaggeredReveal(index = 5) {
                     Card(
                         shape = RoundedCornerShape(20.dp),
                         colors = CardDefaults.cardColors(
@@ -844,6 +853,7 @@ fun HomeScreen(
                                 )
                             }
                         }
+                    }
                     }
                 }
             }
