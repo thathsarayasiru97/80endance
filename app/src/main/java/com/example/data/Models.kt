@@ -200,6 +200,8 @@ data class UserProfile(
     val baselineStartDate: String? = null,
     val baselineEndDate: String? = null,
     val baselinePercent: Double? = null,
+    val appVersionName: String? = null,
+    val appVersionCode: Int? = null,
     val onlineNow: Boolean = false,
     @ServerTimestamp val lastSeenAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -500,4 +502,72 @@ data class AcademicCatalogDoc(
         gradeStreamClassesJson = gradeStreamClassesJson
     )
 }
+
+enum class AttendancePeriodEntryMode(val raw: String, val label: String) {
+    MISSED_DAYS("missed_days", "Days Missed"),
+    ATTENDED_DAYS("attended_days", "Days Attended"),
+    PERCENTAGE("percentage", "Percentage %");
+
+    companion object {
+        fun fromRaw(raw: String?): AttendancePeriodEntryMode =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: MISSED_DAYS
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class AttendancePeriodBlock(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val startDate: String = "",
+    val endDate: String = "",
+    val totalSchoolDays: Int = 0,
+    val presentDays: Int = 0,
+    val absentDays: Int = 0,
+    val percentage: Double = 100.0,
+    val entryMode: String = AttendancePeriodEntryMode.MISSED_DAYS.raw,
+    val label: String? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val entryModeEnum: AttendancePeriodEntryMode
+        get() = AttendancePeriodEntryMode.fromRaw(entryMode)
+
+    fun containsDate(dateKey: String): Boolean =
+        dateKey.length == 10 &&
+            startDate.length == 10 &&
+            endDate.length == 10 &&
+            dateKey >= startDate &&
+            dateKey <= endDate
+
+    fun overlapsRange(otherStart: String, otherEnd: String): Boolean =
+        startDate.length == 10 &&
+            endDate.length == 10 &&
+            otherStart.length == 10 &&
+            otherEnd.length == 10 &&
+            startDate <= otherEnd &&
+            otherStart <= endDate
+}
+
+/**
+ * Privacy-safe, PII-free numeric attendance trend summary for a single student.
+ * Read by signed-in students solely to compute accurate school-wide Monthly & All-Time
+ * Trends & Patterns across all accounts without exposing names, emails, or individual day notes.
+ */
+@Keep
+@IgnoreExtraProperties
+data class StudentTrendSummary(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val monthlyTotalsJson: String = "{}",
+    val monthlyWeekdayJson: String = "{}",
+    val allTimeWeekdayAttended: List<Int> = listOf(0, 0, 0, 0, 0),
+    val allTimeWeekdayAbsent: List<Int> = listOf(0, 0, 0, 0, 0),
+    val totalAttended: Int = 0,
+    val totalAbsent: Int = 0,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val totalCounted: Int get() = totalAttended + totalAbsent
+}
+
 

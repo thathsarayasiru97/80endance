@@ -574,6 +574,75 @@ class AttendanceCalculatorTest {
         assertTrue(profile.isDateInLockedBaseline("2026-05-15")) // On end date ("Up Until This Day") -> locked
         assertFalse(profile.isDateInLockedBaseline("2026-05-16")) // Day after -> editable
     }
+
+    @Test
+    fun customPeriodBlockCalculatesMissedDaysPreventsDoubleCountAndLocksCalendar() {
+        // October 2026 has 22 weekdays; suppose 1 Poya day -> 21 school days, missed 1 -> 20 present, 1 absent
+        val events = listOf(
+            CalendarEvent(
+                id = "oct_poya",
+                title = "Vap Poya",
+                dateKey = "2026-10-26",
+                eventType = CalendarEventType.POYA.raw
+            )
+        )
+        val est = AttendanceCalculator.estimatePeriodFromMissedDays(
+            startDateKey = "2026-10-01",
+            endDateKey = "2026-10-31",
+            missedDays = 1,
+            calendarEvents = events
+        )
+        assertEquals(21, est.totalSchoolDays)
+        assertEquals(20, est.presentDays)
+        assertEquals(1, est.absentDays)
+        assertEquals(95.23, est.effectivePercent, 0.05)
+
+        val block = com.example.data.AttendancePeriodBlock(
+            id = "oct_block",
+            userId = "u1",
+            startDate = "2026-10-01",
+            endDate = "2026-10-31",
+            totalSchoolDays = 21,
+            presentDays = 20,
+            absentDays = 1,
+            percentage = est.effectivePercent,
+            entryMode = com.example.data.AttendancePeriodEntryMode.MISSED_DAYS.raw,
+            label = "October"
+        )
+        val records = listOf(
+            // Overlapping inside Oct block -> MUST be excluded to avoid double-counting
+            AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.ABSENT.raw),
+            // Outside block in November -> MUST be counted
+            AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw)
+        )
+
+        val stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = false,
+            priorPresent = 0,
+            priorAbsent = 0,
+            periodBlocks = listOf(block)
+        )
+        assertEquals(20, stats.periodPresentDays)
+        assertEquals(1, stats.periodAbsentDays)
+        assertEquals(21, stats.effectiveAttended)
+        assertEquals(22, stats.totalCountedDays)
+
+        // Catch-up for Tue 2026-11-03 should skip locked Oct dates (Oct 30, Oct 29...) and already-logged Nov 2
+        val unlogged = AttendanceCalculator.findUnloggedRecentSchoolDays(
+            records = records,
+            calendarEvents = events,
+            activeTermStartDate = "2026-09-01",
+            todayKey = "2026-11-03",
+            lookbackCalendarDays = 7,
+            maxItems = 5,
+            periodBlocks = listOf(block)
+        )
+        assertTrue(unlogged.isEmpty())
+    }
 }
+
+
 
 

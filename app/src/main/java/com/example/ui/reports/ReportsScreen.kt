@@ -72,7 +72,7 @@ fun ReportsScreen(
 
     var selectedTerm by remember(state.terms) { mutableStateOf<AcademicTerm?>(null) } // null = Overall (G12 & 13)
 
-    val stats = remember(state.attendanceRecords, selectedTerm, profile) {
+    val stats = remember(state.attendanceRecords, state.periodBlocks, selectedTerm, profile) {
         val threshold = selectedTerm?.minEligibilityPercent ?: state.appSettings.defaultEligibilityPercent
         AttendanceCalculator.calculateStats(
             records = state.attendanceRecords,
@@ -82,7 +82,8 @@ fun ReportsScreen(
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = selectedTerm,
-            lockedRange = profile?.lockedBaselineRange
+            lockedRange = profile?.lockedBaselineRange,
+            periodBlocks = state.periodBlocks
         )
     }
 
@@ -241,14 +242,22 @@ fun ReportsScreen(
                             StatTile("Excused", stats.schoolEventDays, semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
                         }
 
-                        if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
+                        if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0 || stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
+                                val parts = buildList {
+                                    if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
+                                        add("imported baseline: +${stats.priorPresentDays}P / +${stats.priorAbsentDays}A")
+                                    }
+                                    if (stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
+                                        add("locked periods: +${stats.periodPresentDays}P / +${stats.periodAbsentDays}A")
+                                    }
+                                }
                                 Text(
-                                    text = "Includes prior balance: +${stats.priorPresentDays} present, +${stats.priorAbsentDays} absent",
+                                    text = "Includes ${parts.joinToString(" • ")}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(10.dp)
@@ -320,11 +329,13 @@ fun ReportsScreen(
                 )
             }
 
-            // Monthly Attendance Chart & Weekday Habit Insights
+            // Slidable School-Wide & Personal Trends & Patterns Card (All-Time + Monthly)
             item {
                 AttendancePatternsAndChartCard(
                     records = state.attendanceRecords,
-                    thresholdPercent = stats.thresholdPercent
+                    thresholdPercent = stats.thresholdPercent,
+                    periodBlocks = state.periodBlocks,
+                    communitySummaries = state.communityTrendSummaries
                 )
             }
 

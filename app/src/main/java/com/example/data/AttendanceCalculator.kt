@@ -14,6 +14,8 @@ data class AttendanceStats(
     val holidayDays: Int,
     val priorPresentDays: Int,
     val priorAbsentDays: Int,
+    val periodPresentDays: Int = 0,
+    val periodAbsentDays: Int = 0,
     val effectiveAttended: Int,
     val totalCountedDays: Int,
     val safeSkipsRemaining: Int,
@@ -71,12 +73,23 @@ data class WeekdayStat(
     val percentage: Double
 )
 
+enum class TrendsTimeframe(val label: String) {
+    ALL_TIME("All Time"),
+    MONTHLY("Monthly")
+}
+
 data class AttendancePatternInsights(
     val monthlyPoints: List<MonthlyAttendancePoint>,
     val weekdayStats: List<WeekdayStat>,
     val mostSkippedWeekday: WeekdayStat?,
     val bestWeekday: WeekdayStat?,
-    val bestMonth: MonthlyAttendancePoint?
+    val bestMonth: MonthlyAttendancePoint?,
+    val overallPercent: Double? = null,
+    val totalAttendedDays: Int = 0,
+    val totalCountedDays: Int = 0,
+    val activeMonthLabel: String? = null,
+    val monthOverMonthDelta: Double? = null,
+    val contributorCount: Int = 0
 )
 
 data class AttendanceMilestone(
@@ -124,7 +137,8 @@ object AttendanceCalculator {
         priorAbsent: Int,
         termFilter: AcademicTerm? = null,
         monthPrefixFilter: String? = null,
-        lockedRange: Pair<String, String>? = null
+        lockedRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList()
     ): AttendanceStats {
         val filtered = when {
             !monthPrefixFilter.isNullOrBlank() -> {
@@ -137,6 +151,18 @@ object AttendanceCalculator {
                 }
             }
             else -> records
+        }
+
+        val scopedPeriodBlocks = when {
+            !monthPrefixFilter.isNullOrBlank() -> {
+                periodBlocks.filter {
+                    it.startDate.startsWith(monthPrefixFilter) && it.endDate.startsWith(monthPrefixFilter)
+                }
+            }
+            termFilter != null -> {
+                periodBlocks.filter { it.overlapsRange(termFilter.startDate, termFilter.endDate) }
+            }
+            else -> periodBlocks
         }
 
         var present = 0
@@ -152,6 +178,9 @@ object AttendanceCalculator {
             ) {
                 continue
             }
+            if (periodBlocks.any { it.containsDate(record.dateKey) }) {
+                continue
+            }
             when (record.statusEnum) {
                 AttendanceStatus.PRESENT -> present++
                 AttendanceStatus.ABSENT -> absent++
@@ -163,10 +192,12 @@ object AttendanceCalculator {
 
         val addedPriorPresent = if (includePriorBalance) max(0, priorPresent) else 0
         val addedPriorAbsent = if (includePriorBalance) max(0, priorAbsent) else 0
+        val addedPeriodPresent = scopedPeriodBlocks.sumOf { max(0, it.presentDays) }
+        val addedPeriodAbsent = scopedPeriodBlocks.sumOf { max(0, it.absentDays) }
 
         // Per college policy, both Excused (sports/clubs/events) and Medical count as Present
-        val effectiveAttended = present + addedPriorPresent + medical + schoolEvent
-        val effectiveMissed = absent + addedPriorAbsent
+        val effectiveAttended = present + addedPriorPresent + addedPeriodPresent + medical + schoolEvent
+        val effectiveMissed = absent + addedPriorAbsent + addedPeriodAbsent
 
         val totalCounted = effectiveAttended + effectiveMissed
         val threshold = thresholdPercent.coerceIn(50, 99)
@@ -204,6 +235,8 @@ object AttendanceCalculator {
             holidayDays = holiday,
             priorPresentDays = addedPriorPresent,
             priorAbsentDays = addedPriorAbsent,
+            periodPresentDays = addedPeriodPresent,
+            periodAbsentDays = addedPeriodAbsent,
             effectiveAttended = effectiveAttended,
             totalCountedDays = totalCounted,
             safeSkipsRemaining = safeSkips,
@@ -262,13 +295,15 @@ object AttendanceCalculator {
         records: List<AttendanceRecord>,
         calendarEvents: List<CalendarEvent>,
         todayKey: String = DateUtils.todayKey(),
-        lockedRange: Pair<String, String>? = null
+        lockedRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList()
     ): List<WeekDaySummary> {
         val recordMap = records.associateBy { it.dateKey }
         val eventsByDate = calendarEvents.groupBy { it.dateKey }
         return DateUtils.currentWeekMonToFri().map { (label, dateKey) ->
             val nonSchoolEv = eventsByDate[dateKey]?.firstOrNull { it.nonSchoolDay }
-            val locked = lockedRange != null && dateKey <= lockedRange.second
+            val locked = (lockedRange != null && dateKey <= lockedRange.second) ||
+                periodBlocks.any { it.containsDate(dateKey) }
             WeekDaySummary(
                 dayLabel = label,
                 dateKey = dateKey,
@@ -405,9 +440,62 @@ object AttendanceCalculator {
     }
 
     /**
+     * Computes a custom time-period block from [missedDays] inside [startDateKey..endDateKey]
+     * (e.g., "Attended all of October except 1 missed day").
+     */
+    fun estimatePeriodFromMissedDays(
+        startDateKey: String,
+        endDateKey: String,
+        missedDays: Int,
+        calendarEvents: List<CalendarEvent>,
+        customSchoolDaysOverride: Int? = null
+    ): PercentageBaselineEstimate {
+        val detected = countSchoolDaysInRange(startDateKey, endDateKey, calendarEvents)
+        val totalDays = (customSchoolDaysOverride ?: detected).coerceIn(0, 600)
+        val absent = missedDays.coerceIn(0, totalDays)
+        val present = (totalDays - absent).coerceIn(0, totalDays)
+        val pct = if (totalDays <= 0) 0.0 else (present.toDouble() / totalDays.toDouble()) * 100.0
+        return PercentageBaselineEstimate(
+            startDateKey = startDateKey,
+            endDateKey = endDateKey,
+            totalSchoolDays = totalDays,
+            presentDays = present,
+            absentDays = absent,
+            enteredPercent = pct,
+            effectivePercent = pct
+        )
+    }
+
+    /**
+     * Computes a custom time-period block from [attendedDays] inside [startDateKey..endDateKey].
+     */
+    fun estimatePeriodFromAttendedDays(
+        startDateKey: String,
+        endDateKey: String,
+        attendedDays: Int,
+        calendarEvents: List<CalendarEvent>,
+        customSchoolDaysOverride: Int? = null
+    ): PercentageBaselineEstimate {
+        val detected = countSchoolDaysInRange(startDateKey, endDateKey, calendarEvents)
+        val totalDays = (customSchoolDaysOverride ?: detected).coerceIn(0, 600)
+        val present = attendedDays.coerceIn(0, totalDays)
+        val absent = (totalDays - present).coerceIn(0, totalDays)
+        val pct = if (totalDays <= 0) 0.0 else (present.toDouble() / totalDays.toDouble()) * 100.0
+        return PercentageBaselineEstimate(
+            startDateKey = startDateKey,
+            endDateKey = endDateKey,
+            totalSchoolDays = totalDays,
+            presentDays = present,
+            absentDays = absent,
+            enteredPercent = pct,
+            effectivePercent = pct
+        )
+    }
+
+    /**
      * Finds recent past weekdays (before [todayKey]) that are school days for this student
-     * and do not yet have an attendance record (and are not locked inside an imported baseline),
-     * so HomeScreen can offer 1-tap catch-up.
+     * and do not yet have an attendance record (and are not locked inside an imported baseline
+     * or custom locked time period), so HomeScreen can offer 1-tap catch-up.
      */
     fun findUnloggedRecentSchoolDays(
         records: List<AttendanceRecord>,
@@ -416,7 +504,8 @@ object AttendanceCalculator {
         todayKey: String = DateUtils.todayKey(),
         lookbackCalendarDays: Int = 10,
         maxItems: Int = 5,
-        lockedRange: Pair<String, String>? = null
+        lockedRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList()
     ): List<String> {
         val loggedDates = records.map { it.dateKey }.toSet()
         val nonSchoolDates = calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
@@ -425,6 +514,7 @@ object AttendanceCalculator {
             val candidate = DateUtils.addDays(todayKey, -offset)
             if (activeTermStartDate.length == 10 && candidate < activeTermStartDate) break
             if (lockedRange != null && candidate <= lockedRange.second) continue
+            if (periodBlocks.any { it.containsDate(candidate) }) continue
             if (DateUtils.isWeekend(candidate)) continue
             if (candidate in nonSchoolDates) continue
             if (candidate !in loggedDates) {
@@ -771,5 +861,399 @@ object AttendanceCalculator {
             safeSkipsRemaining = termStats.safeSkipsRemaining,
             daysNeededToRecover = termStats.daysNeededToRecover
         )
+    }
+
+    /**
+     * Computes personal Trends & Patterns for either [TrendsTimeframe.ALL_TIME] or [TrendsTimeframe.MONTHLY],
+     * factoring in both day-by-day attendance records and locked custom period blocks.
+     */
+    fun calculatePersonalInsightsForScope(
+        records: List<AttendanceRecord>,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        timeframe: TrendsTimeframe = TrendsTimeframe.ALL_TIME,
+        currentYearMonth: String = DateUtils.currentMonthPrefix().removeSuffix("-"),
+        maxMonths: Int = 6
+    ): AttendancePatternInsights {
+        val validRecords = records.filter { rec ->
+            rec.dateKey.length == 10 &&
+                !DateUtils.isWeekend(rec.dateKey) &&
+                rec.statusEnum != AttendanceStatus.HOLIDAY &&
+                periodBlocks.none { it.containsDate(rec.dateKey) }
+        }
+
+        val monthlyMap = sortedMapOf<String, Pair<Int, Int>>() // ym -> (attended, absent)
+        validRecords.forEach { rec ->
+            val ym = rec.dateKey.substring(0, 7)
+            val prev = monthlyMap[ym] ?: (0 to 0)
+            when (rec.statusEnum) {
+                AttendanceStatus.PRESENT,
+                AttendanceStatus.MEDICAL,
+                AttendanceStatus.SCHOOL_EVENT -> monthlyMap[ym] = (prev.first + 1) to prev.second
+                AttendanceStatus.ABSENT -> monthlyMap[ym] = prev.first to (prev.second + 1)
+                AttendanceStatus.HOLIDAY -> Unit
+            }
+        }
+        periodBlocks.forEach { block ->
+            if (block.endDate.length == 10 && (block.presentDays > 0 || block.absentDays > 0)) {
+                val ym = block.endDate.substring(0, 7)
+                val prev = monthlyMap[ym] ?: (0 to 0)
+                monthlyMap[ym] = (prev.first + max(0, block.presentDays)) to (prev.second + max(0, block.absentDays))
+            }
+        }
+
+        val allMonthlyPoints = monthlyMap.entries.mapNotNull { (ym, counts) ->
+            val total = counts.first + counts.second
+            if (total <= 0) null else {
+                MonthlyAttendancePoint(
+                    yearMonthKey = ym,
+                    shortLabel = DateUtils.formatShortMonth(ym),
+                    fullLabel = DateUtils.currentMonthYearLabel("$ym-01"),
+                    percentage = (counts.first.toDouble() / total.toDouble()) * 100.0,
+                    attendedDays = counts.first,
+                    totalDays = total
+                )
+            }
+        }
+
+        val targetMonthKey = when {
+            timeframe == TrendsTimeframe.ALL_TIME -> null
+            monthlyMap.containsKey(currentYearMonth) -> currentYearMonth
+            else -> allMonthlyPoints.lastOrNull()?.yearMonthKey ?: currentYearMonth
+        }
+
+        val scopedRecords = if (targetMonthKey != null) {
+            validRecords.filter { it.dateKey.startsWith("$targetMonthKey-") }
+        } else {
+            validRecords
+        }
+
+        val weekdayStats = buildWeekdayStatsFromRecords(scopedRecords)
+        val activeWeekdays = weekdayStats.filter { it.totalDays > 0 }
+        val mostSkipped = activeWeekdays
+            .filter { it.absentDays > 0 }
+            .maxWithOrNull(compareBy<WeekdayStat> { it.absentDays }.thenBy { -it.percentage })
+        val bestWeekday = activeWeekdays
+            .maxWithOrNull(compareBy<WeekdayStat> { it.percentage }.thenBy { it.totalDays })
+
+        val displayPoints = if (timeframe == TrendsTimeframe.MONTHLY && targetMonthKey != null) {
+            val idx = allMonthlyPoints.indexOfLast { it.yearMonthKey == targetMonthKey }
+            if (idx >= 0) allMonthlyPoints.subList(max(0, idx - 2), idx + 1) else emptyList()
+        } else {
+            allMonthlyPoints.takeLast(maxMonths)
+        }
+
+        val bestMonth = displayPoints
+            .maxWithOrNull(compareBy<MonthlyAttendancePoint> { it.percentage }.thenBy { it.totalDays })
+
+        val totalAttended: Int
+        val totalCounted: Int
+        var monthDelta: Double? = null
+        val activeMonthLabel: String?
+
+        if (timeframe == TrendsTimeframe.MONTHLY && targetMonthKey != null) {
+            val pt = allMonthlyPoints.firstOrNull { it.yearMonthKey == targetMonthKey }
+            totalAttended = pt?.attendedDays ?: 0
+            totalCounted = pt?.totalDays ?: 0
+            activeMonthLabel = pt?.fullLabel ?: DateUtils.currentMonthYearLabel("$targetMonthKey-01")
+            val idx = allMonthlyPoints.indexOfLast { it.yearMonthKey == targetMonthKey }
+            if (idx > 0 && pt != null) {
+                monthDelta = pt.percentage - allMonthlyPoints[idx - 1].percentage
+            }
+        } else {
+            totalAttended = allMonthlyPoints.sumOf { it.attendedDays }
+            totalCounted = allMonthlyPoints.sumOf { it.totalDays }
+            activeMonthLabel = null
+        }
+
+        val overallPct = if (totalCounted > 0) (totalAttended.toDouble() / totalCounted.toDouble()) * 100.0 else null
+
+        return AttendancePatternInsights(
+            monthlyPoints = displayPoints,
+            weekdayStats = weekdayStats,
+            mostSkippedWeekday = mostSkipped,
+            bestWeekday = bestWeekday,
+            bestMonth = bestMonth,
+            overallPercent = overallPct,
+            totalAttendedDays = totalAttended,
+            totalCountedDays = totalCounted,
+            activeMonthLabel = activeMonthLabel,
+            monthOverMonthDelta = monthDelta,
+            contributorCount = if (totalCounted > 0) 1 else 0
+        )
+    }
+
+    /**
+     * Produces a PII-free numeric summary of one student's attendance for school-wide community analytics.
+     */
+    fun buildStudentTrendSummary(
+        userId: String,
+        records: List<AttendanceRecord>,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        priorPresent: Int = 0,
+        priorAbsent: Int = 0
+    ): StudentTrendSummary {
+        val validRecords = records.filter { rec ->
+            rec.dateKey.length == 10 &&
+                !DateUtils.isWeekend(rec.dateKey) &&
+                rec.statusEnum != AttendanceStatus.HOLIDAY &&
+                periodBlocks.none { it.containsDate(rec.dateKey) }
+        }
+
+        val monthlyTotals = sortedMapOf<String, IntArray>() // ym -> [attended, absent]
+        val monthlyWeekdays = sortedMapOf<String, Pair<IntArray, IntArray>>() // ym -> (att[5], abs[5])
+        val allWeekdayAtt = IntArray(5)
+        val allWeekdayAbs = IntArray(5)
+
+        validRecords.forEach { rec ->
+            val ym = rec.dateKey.substring(0, 7)
+            val tot = monthlyTotals.getOrPut(ym) { IntArray(2) }
+            val wk = monthlyWeekdays.getOrPut(ym) { IntArray(5) to IntArray(5) }
+            val dow = DateUtils.weekdayIndexMonToFri(rec.dateKey)
+            when (rec.statusEnum) {
+                AttendanceStatus.PRESENT,
+                AttendanceStatus.MEDICAL,
+                AttendanceStatus.SCHOOL_EVENT -> {
+                    tot[0]++
+                    if (dow in 0..4) {
+                        allWeekdayAtt[dow]++
+                        wk.first[dow]++
+                    }
+                }
+                AttendanceStatus.ABSENT -> {
+                    tot[1]++
+                    if (dow in 0..4) {
+                        allWeekdayAbs[dow]++
+                        wk.second[dow]++
+                    }
+                }
+                AttendanceStatus.HOLIDAY -> Unit
+            }
+        }
+
+        periodBlocks.forEach { block ->
+            if (block.endDate.length == 10 && (block.presentDays > 0 || block.absentDays > 0)) {
+                val ym = block.endDate.substring(0, 7)
+                val tot = monthlyTotals.getOrPut(ym) { IntArray(2) }
+                tot[0] += max(0, block.presentDays)
+                tot[1] += max(0, block.absentDays)
+            }
+        }
+
+        val totalsObj = org.json.JSONObject()
+        monthlyTotals.entries.toList().takeLast(24).forEach { (ym, arr) ->
+            totalsObj.put(ym, org.json.JSONArray().put(arr[0]).put(arr[1]))
+        }
+
+        val weekdaysObj = org.json.JSONObject()
+        monthlyWeekdays.entries.toList().takeLast(12).forEach { (ym, pair) ->
+            val aArr = org.json.JSONArray().apply { pair.first.forEach { put(it) } }
+            val mArr = org.json.JSONArray().apply { pair.second.forEach { put(it) } }
+            weekdaysObj.put(ym, org.json.JSONObject().put("a", aArr).put("m", mArr))
+        }
+
+        val recAndPeriodAtt = monthlyTotals.values.sumOf { it[0] }
+        val recAndPeriodAbs = monthlyTotals.values.sumOf { it[1] }
+        val totalAtt = (recAndPeriodAtt + max(0, priorPresent)).coerceIn(0, 3000)
+        val totalAbs = (recAndPeriodAbs + max(0, priorAbsent)).coerceIn(0, 3000)
+
+        return StudentTrendSummary(
+            id = userId,
+            userId = userId,
+            monthlyTotalsJson = totalsObj.toString(),
+            monthlyWeekdayJson = weekdaysObj.toString(),
+            allTimeWeekdayAttended = allWeekdayAtt.map { it.coerceIn(0, 1000) },
+            allTimeWeekdayAbsent = allWeekdayAbs.map { it.coerceIn(0, 1000) },
+            totalAttended = totalAtt,
+            totalAbsent = totalAbs
+        )
+    }
+
+    /**
+     * Aggregates every single student's [StudentTrendSummary] into accurate school-wide
+     * All-Time or Monthly Trends & Patterns.
+     */
+    fun calculateCommunityInsights(
+        summaries: List<StudentTrendSummary>,
+        timeframe: TrendsTimeframe = TrendsTimeframe.ALL_TIME,
+        currentYearMonth: String = DateUtils.currentMonthPrefix().removeSuffix("-"),
+        maxMonths: Int = 6
+    ): AttendancePatternInsights {
+        val monthlyTotals = sortedMapOf<String, IntArray>() // ym -> [attended, absent]
+        val monthlyWeekdays = sortedMapOf<String, Pair<IntArray, IntArray>>()
+        val allWeekdayAtt = IntArray(5)
+        val allWeekdayAbs = IntArray(5)
+        var allTimeContributors = 0
+        var grandTotalAtt = 0
+        var grandTotalAbs = 0
+        val contributorsByMonth = mutableMapOf<String, MutableSet<String>>()
+
+        summaries.forEach { summary ->
+            val hasData = summary.totalAttended > 0 || summary.totalAbsent > 0 ||
+                summary.monthlyTotalsJson.length > 2 ||
+                summary.allTimeWeekdayAttended.any { it > 0 } ||
+                summary.allTimeWeekdayAbsent.any { it > 0 }
+            if (hasData) allTimeContributors++
+
+            grandTotalAtt += max(0, summary.totalAttended)
+            grandTotalAbs += max(0, summary.totalAbsent)
+
+            for (i in 0..4) {
+                allWeekdayAtt[i] += max(0, summary.allTimeWeekdayAttended.getOrElse(i) { 0 })
+                allWeekdayAbs[i] += max(0, summary.allTimeWeekdayAbsent.getOrElse(i) { 0 })
+            }
+
+            // Parse monthly totals JSON
+            runCatching {
+                val obj = org.json.JSONObject(summary.monthlyTotalsJson.ifBlank { "{}" })
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val ym = keys.next()
+                    val arr = obj.optJSONArray(ym) ?: continue
+                    val att = max(0, arr.optInt(0, 0))
+                    val abs = max(0, arr.optInt(1, 0))
+                    if (att + abs > 0) {
+                        val acc = monthlyTotals.getOrPut(ym) { IntArray(2) }
+                        acc[0] += att
+                        acc[1] += abs
+                        contributorsByMonth.getOrPut(ym) { mutableSetOf() }.add(summary.userId.ifBlank { summary.id })
+                    }
+                }
+            }
+
+            // Parse per-month weekday JSON
+            runCatching {
+                val obj = org.json.JSONObject(summary.monthlyWeekdayJson.ifBlank { "{}" })
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val ym = keys.next()
+                    val mObj = obj.optJSONObject(ym) ?: continue
+                    val aArr = mObj.optJSONArray("a")
+                    val mArr = mObj.optJSONArray("m")
+                    val pair = monthlyWeekdays.getOrPut(ym) { IntArray(5) to IntArray(5) }
+                    for (i in 0..4) {
+                        pair.first[i] += max(0, aArr?.optInt(i, 0) ?: 0)
+                        pair.second[i] += max(0, mArr?.optInt(i, 0) ?: 0)
+                    }
+                }
+            }
+        }
+
+        val allMonthlyPoints = monthlyTotals.entries.mapNotNull { (ym, arr) ->
+            val total = arr[0] + arr[1]
+            if (total <= 0) null else {
+                MonthlyAttendancePoint(
+                    yearMonthKey = ym,
+                    shortLabel = DateUtils.formatShortMonth(ym),
+                    fullLabel = DateUtils.currentMonthYearLabel("$ym-01"),
+                    percentage = (arr[0].toDouble() / total.toDouble()) * 100.0,
+                    attendedDays = arr[0],
+                    totalDays = total
+                )
+            }
+        }
+
+        val targetMonthKey = when {
+            timeframe == TrendsTimeframe.ALL_TIME -> null
+            monthlyTotals.containsKey(currentYearMonth) -> currentYearMonth
+            else -> allMonthlyPoints.lastOrNull()?.yearMonthKey ?: currentYearMonth
+        }
+
+        val weekdayAttArr: IntArray
+        val weekdayAbsArr: IntArray
+        val displayPoints: List<MonthlyAttendancePoint>
+        val totalAttended: Int
+        val totalCounted: Int
+        var monthDelta: Double? = null
+        val activeMonthLabel: String?
+        val contributors: Int
+
+        if (timeframe == TrendsTimeframe.MONTHLY && targetMonthKey != null) {
+            val wk = monthlyWeekdays[targetMonthKey]
+            weekdayAttArr = wk?.first ?: IntArray(5)
+            weekdayAbsArr = wk?.second ?: IntArray(5)
+            val idx = allMonthlyPoints.indexOfLast { it.yearMonthKey == targetMonthKey }
+            displayPoints = if (idx >= 0) allMonthlyPoints.subList(max(0, idx - 2), idx + 1) else emptyList()
+            val pt = allMonthlyPoints.firstOrNull { it.yearMonthKey == targetMonthKey }
+            totalAttended = pt?.attendedDays ?: 0
+            totalCounted = pt?.totalDays ?: 0
+            activeMonthLabel = pt?.fullLabel ?: DateUtils.currentMonthYearLabel("$targetMonthKey-01")
+            if (idx > 0 && pt != null) {
+                monthDelta = pt.percentage - allMonthlyPoints[idx - 1].percentage
+            }
+            contributors = contributorsByMonth[targetMonthKey]?.size ?: 0
+        } else {
+            weekdayAttArr = allWeekdayAtt
+            weekdayAbsArr = allWeekdayAbs
+            displayPoints = allMonthlyPoints.takeLast(maxMonths)
+            val sumFromMonthsAtt = allMonthlyPoints.sumOf { it.attendedDays }
+            val sumFromMonthsTot = allMonthlyPoints.sumOf { it.totalDays }
+            totalAttended = max(sumFromMonthsAtt, grandTotalAtt)
+            totalCounted = max(sumFromMonthsTot, grandTotalAtt + grandTotalAbs)
+            activeMonthLabel = null
+            contributors = allTimeContributors
+        }
+
+        val weekdayStats = buildWeekdayStatsFromArrays(weekdayAttArr, weekdayAbsArr)
+        val activeWeekdays = weekdayStats.filter { it.totalDays > 0 }
+        val mostSkipped = activeWeekdays
+            .filter { it.absentDays > 0 }
+            .maxWithOrNull(compareBy<WeekdayStat> { it.absentDays }.thenBy { -it.percentage })
+        val bestWeekday = activeWeekdays
+            .maxWithOrNull(compareBy<WeekdayStat> { it.percentage }.thenBy { it.totalDays })
+        val bestMonth = displayPoints
+            .maxWithOrNull(compareBy<MonthlyAttendancePoint> { it.percentage }.thenBy { it.totalDays })
+        val overallPct = if (totalCounted > 0) (totalAttended.toDouble() / totalCounted.toDouble()) * 100.0 else null
+
+        return AttendancePatternInsights(
+            monthlyPoints = displayPoints,
+            weekdayStats = weekdayStats,
+            mostSkippedWeekday = mostSkipped,
+            bestWeekday = bestWeekday,
+            bestMonth = bestMonth,
+            overallPercent = overallPct,
+            totalAttendedDays = totalAttended,
+            totalCountedDays = totalCounted,
+            activeMonthLabel = activeMonthLabel,
+            monthOverMonthDelta = monthDelta,
+            contributorCount = contributors
+        )
+    }
+
+    private fun buildWeekdayStatsFromRecords(records: List<AttendanceRecord>): List<WeekdayStat> {
+        val attendedByDay = IntArray(5)
+        val absentByDay = IntArray(5)
+        records.forEach { rec ->
+            val dow = DateUtils.weekdayIndexMonToFri(rec.dateKey)
+            if (dow in 0..4) {
+                when (rec.statusEnum) {
+                    AttendanceStatus.PRESENT,
+                    AttendanceStatus.MEDICAL,
+                    AttendanceStatus.SCHOOL_EVENT -> attendedByDay[dow]++
+                    AttendanceStatus.ABSENT -> absentByDay[dow]++
+                    AttendanceStatus.HOLIDAY -> Unit
+                }
+            }
+        }
+        return buildWeekdayStatsFromArrays(attendedByDay, absentByDay)
+    }
+
+    private fun buildWeekdayStatsFromArrays(attendedByDay: IntArray, absentByDay: IntArray): List<WeekdayStat> {
+        val shortNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri")
+        val fullNames = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+        return (0..4).map { idx ->
+            val att = attendedByDay[idx]
+            val abs = absentByDay[idx]
+            val tot = att + abs
+            val pct = if (tot <= 0) 0.0 else (att.toDouble() / tot.toDouble()) * 100.0
+            WeekdayStat(
+                dayIndex = idx,
+                shortName = shortNames[idx],
+                fullName = fullNames[idx],
+                attendedDays = att,
+                absentDays = abs,
+                totalDays = tot,
+                percentage = pct
+            )
+        }
     }
 }

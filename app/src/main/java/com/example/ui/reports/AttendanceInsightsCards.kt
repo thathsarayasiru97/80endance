@@ -27,12 +27,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoGraph
 import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.TrendingDown
 import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material3.Card
@@ -52,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -67,11 +74,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.AttendanceCalculator
+import com.example.data.AttendancePatternInsights
+import com.example.data.AttendancePeriodBlock
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStats
 import com.example.data.MonthlyAttendancePoint
+import com.example.data.StudentTrendSummary
+import com.example.data.TrendsTimeframe
 import com.example.ui.theme.LocalAttendanceColors
 import java.util.Locale
 import kotlin.math.abs
@@ -330,11 +342,32 @@ fun WhatIfSkipSimulatorCard(
 fun AttendancePatternsAndChartCard(
     records: List<AttendanceRecord>,
     thresholdPercent: Int,
+    periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+    communitySummaries: List<StudentTrendSummary> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val semantic = LocalAttendanceColors.current
-    val insights = remember(records) {
-        AttendanceCalculator.calculateAttendanceInsights(records, maxMonths = 6)
+    // Page 0 = Everyone's Trends & Patterns (DEFAULT tile, defaulting to All Time)
+    // Page 1 = My Personal Trends & Patterns
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
+    val coroutineScope = rememberCoroutineScope()
+
+    var everyoneTimeframe by remember { mutableStateOf(TrendsTimeframe.ALL_TIME) }
+    var personalTimeframe by remember { mutableStateOf(TrendsTimeframe.ALL_TIME) }
+
+    val everyoneInsights = remember(communitySummaries, everyoneTimeframe) {
+        AttendanceCalculator.calculateCommunityInsights(
+            summaries = communitySummaries,
+            timeframe = everyoneTimeframe,
+            maxMonths = 6
+        )
+    }
+    val personalInsights = remember(records, periodBlocks, personalTimeframe) {
+        AttendanceCalculator.calculatePersonalInsightsForScope(
+            records = records,
+            periodBlocks = periodBlocks,
+            timeframe = personalTimeframe,
+            maxMonths = 6
+        )
     }
 
     Card(
@@ -349,55 +382,318 @@ fun AttendancePatternsAndChartCard(
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // Card Header + Swipe Indicator
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.size(38.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoGraph,
-                            contentDescription = "Monthly trends and patterns",
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(20.dp)
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (pagerState.currentPage == 0) Icons.Rounded.Groups else Icons.Rounded.AutoGraph,
+                                contentDescription = "Trends and patterns",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = "Trends & Patterns",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (pagerState.currentPage == 0) {
+                                "Everyone's school-wide attendance insights"
+                            } else {
+                                "Your personal attendance & weekday habits"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-                Column {
-                    Text(
-                        text = "Monthly Trends & Patterns",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Swipe,
+                            contentDescription = "Swipe between Everyone and My Stats",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (pagerState.currentPage == 0) "Swipe" else "Swipe",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Synchronized Scope Selector (Everyone [default] | My Stats)
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("trends_scope_switcher")
+            ) {
+                SegmentedButton(
+                    selected = pagerState.currentPage == 0,
+                    onClick = {
+                        coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Groups,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("trends_tab_everyone")
+                ) {
+                    Text("Everyone", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                SegmentedButton(
+                    selected = pagerState.currentPage == 1,
+                    onClick = {
+                        coroutineScope.launch { pagerState.animateScrollToPage(1) }
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("trends_tab_personal")
+                ) {
+                    Text("My Stats", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
+            // Slidable 2-Page Content (Page 0 = Everyone, Page 1 = Personal)
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("trends_horizontal_pager")
+            ) { page ->
+                if (page == 0) {
+                    TrendsInsightSlideContent(
+                        isCommunity = true,
+                        timeframe = everyoneTimeframe,
+                        onTimeframeChange = { everyoneTimeframe = it },
+                        insights = everyoneInsights,
+                        thresholdPercent = thresholdPercent,
+                        pageTag = "trends_page_everyone",
+                        allTimeTag = "trends_everyone_all_time",
+                        monthlyTag = "trends_everyone_monthly"
                     )
-                    Text(
-                        text = "Track monthly consistency & weekday habits",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    TrendsInsightSlideContent(
+                        isCommunity = false,
+                        timeframe = personalTimeframe,
+                        onTimeframeChange = { personalTimeframe = it },
+                        insights = personalInsights,
+                        thresholdPercent = thresholdPercent,
+                        pageTag = "trends_page_personal",
+                        allTimeTag = "trends_personal_all_time",
+                        monthlyTag = "trends_personal_monthly"
                     )
                 }
             }
 
-            // 1. Monthly Bar Chart
-            if (insights.monthlyPoints.isEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Log a few school days to unlock your monthly attendance bar chart and weekday insights.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(14.dp)
+            // Pager Dot Indicators
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(2) { idx ->
+                    val active = pagerState.currentPage == idx
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .height(7.dp)
+                            .width(if (active) 22.dp else 7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (active) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant
+                            )
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendsInsightSlideContent(
+    isCommunity: Boolean,
+    timeframe: TrendsTimeframe,
+    onTimeframeChange: (TrendsTimeframe) -> Unit,
+    insights: AttendancePatternInsights,
+    thresholdPercent: Int,
+    pageTag: String,
+    allTimeTag: String,
+    monthlyTag: String
+) {
+    val semantic = LocalAttendanceColors.current
+    val hasAnyData = insights.totalCountedDays > 0 || insights.monthlyPoints.isNotEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(pageTag),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Timeframe Toggle inside each card: All Time | Monthly
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(
+                selected = timeframe == TrendsTimeframe.ALL_TIME,
+                onClick = { onTimeframeChange(TrendsTimeframe.ALL_TIME) },
+                label = { Text("All Time") },
+                modifier = Modifier.testTag(allTimeTag)
+            )
+            FilterChip(
+                selected = timeframe == TrendsTimeframe.MONTHLY,
+                onClick = { onTimeframeChange(TrendsTimeframe.MONTHLY) },
+                label = { Text("Monthly") },
+                modifier = Modifier.testTag(monthlyTag)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (isCommunity && insights.contributorCount > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Text(
+                        text = "${insights.contributorCount} student${if (insights.contributorCount == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        if (!hasAnyData) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = if (isCommunity) {
+                        if (timeframe == TrendsTimeframe.MONTHLY) {
+                            "No school-wide attendance logs recorded for this month yet. Check All Time or log today's attendance."
+                        } else {
+                            "School-wide trends will appear automatically as students log attendance."
+                        }
+                    } else {
+                        if (timeframe == TrendsTimeframe.MONTHLY) {
+                            "No attendance logged for this month yet. Switch to All Time or check in on school days."
+                        } else {
+                            "Log a few school days or lock a period to unlock your personal trends and weekday patterns."
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(14.dp)
+                )
+            }
+        } else {
+            // Headline Summary Banner
+            val headlinePct = insights.overallPercent ?: 0.0
+            val headlineOk = headlinePct >= thresholdPercent
+            val headlineBg = if (headlineOk) {
+                semantic.presentContainer.copy(alpha = 0.58f)
             } else {
+                semantic.absentContainer.copy(alpha = 0.68f)
+            }
+            val headlineFg = if (headlineOk) semantic.onPresentContainer else semantic.onAbsentContainer
+            Surface(
+                color = headlineBg,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        val scopeHeadline = when {
+                            isCommunity && timeframe == TrendsTimeframe.ALL_TIME -> "Everyone • All-Time Average"
+                            isCommunity && timeframe == TrendsTimeframe.MONTHLY -> "Everyone • ${insights.activeMonthLabel ?: "This Month"}"
+                            !isCommunity && timeframe == TrendsTimeframe.ALL_TIME -> "My All-Time Average"
+                            else -> "My ${insights.activeMonthLabel ?: "Monthly"} Average"
+                        }
+                        Text(
+                            text = scopeHeadline,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = headlineFg.copy(alpha = 0.88f)
+                        )
+                        Text(
+                            text = "${insights.totalAttendedDays} / ${insights.totalCountedDays} counted school days",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = headlineFg.copy(alpha = 0.8f)
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = String.format(Locale.US, "%.1f%%", headlinePct),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = headlineFg
+                        )
+                        insights.monthOverMonthDelta?.takeIf { abs(it) >= 0.05 }?.let { delta ->
+                            val sign = if (delta >= 0) "+" else ""
+                            Text(
+                                text = "$sign${String.format(Locale.US, "%.1f%%", delta)} vs prev mo",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = headlineFg
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 1. Monthly Bar Chart
+            if (insights.monthlyPoints.isNotEmpty()) {
                 MonthlyAttendanceBarChart(
                     points = insights.monthlyPoints,
                     thresholdPercent = thresholdPercent,
@@ -405,36 +701,58 @@ fun AttendancePatternsAndChartCard(
                     absentColor = semantic.absent,
                     thresholdColor = MaterialTheme.colorScheme.primary
                 )
+            }
 
-                // 2. Smart Insight Callout Pills
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 2. Smart Insight Callout Pills
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (timeframe == TrendsTimeframe.ALL_TIME) {
                     insights.bestMonth?.let { bestM ->
+                        val prefix = if (isCommunity) "Strongest school month" else "Best month"
                         InsightRow(
                             icon = Icons.Rounded.EmojiEvents,
                             bg = semantic.presentContainer.copy(alpha = 0.65f),
                             fg = semantic.onPresentContainer,
-                            text = "Best month: ${bestM.fullLabel} (${String.format(Locale.US, "%.0f%%", bestM.percentage)} • ${bestM.attendedDays}/${bestM.totalDays} days)"
+                            text = "$prefix: ${bestM.fullLabel} (${String.format(Locale.US, "%.0f%%", bestM.percentage)} • ${bestM.attendedDays}/${bestM.totalDays} days)"
                         )
                     }
-                    insights.mostSkippedWeekday?.let { skipped ->
+                } else {
+                    insights.monthOverMonthDelta?.let { delta ->
+                        val rising = delta >= 0
+                        val subjectLabel = if (isCommunity) "School-wide attendance" else "Your attendance"
+                        val dirWord = if (rising) "up" else "down"
                         InsightRow(
-                            icon = Icons.Rounded.TrendingDown,
-                            bg = semantic.absentContainer.copy(alpha = 0.72f),
-                            fg = semantic.onAbsentContainer,
-                            text = "${skipped.fullName}s are your most skipped day (${skipped.absentDays} missed • ${String.format(Locale.US, "%.0f%%", skipped.percentage)} attended)"
-                        )
-                    }
-                    insights.bestWeekday?.takeIf { it.dayIndex != insights.mostSkippedWeekday?.dayIndex }?.let { bestDay ->
-                        InsightRow(
-                            icon = Icons.Rounded.TrendingUp,
-                            bg = semantic.schoolEventContainer.copy(alpha = 0.65f),
-                            fg = semantic.onSchoolEventContainer,
-                            text = "Most consistent weekday: ${bestDay.fullName} (${String.format(Locale.US, "%.0f%%", bestDay.percentage)} attended)"
+                            icon = if (rising) Icons.Rounded.TrendingUp else Icons.Rounded.TrendingDown,
+                            bg = if (rising) semantic.presentContainer.copy(alpha = 0.65f) else semantic.absentContainer.copy(alpha = 0.72f),
+                            fg = if (rising) semantic.onPresentContainer else semantic.onAbsentContainer,
+                            text = "$subjectLabel is $dirWord ${String.format(Locale.US, "%.1f%%", abs(delta))} compared to last month"
                         )
                     }
                 }
 
-                // 3. Mon–Fri Weekday Breakdown Bars
+                insights.mostSkippedWeekday?.let { skipped ->
+                    val subjectPhrase = if (isCommunity) "are the most skipped day across students" else "are your most skipped day"
+                    InsightRow(
+                        icon = Icons.Rounded.TrendingDown,
+                        bg = semantic.absentContainer.copy(alpha = 0.72f),
+                        fg = semantic.onAbsentContainer,
+                        text = "${skipped.fullName}s $subjectPhrase (${skipped.absentDays} missed • ${String.format(Locale.US, "%.0f%%", skipped.percentage)} attended)"
+                    )
+                }
+
+                insights.bestWeekday?.takeIf { it.dayIndex != insights.mostSkippedWeekday?.dayIndex }?.let { bestDay ->
+                    val prefix = if (isCommunity) "Most attended weekday" else "Most consistent weekday"
+                    InsightRow(
+                        icon = Icons.Rounded.TrendingUp,
+                        bg = semantic.schoolEventContainer.copy(alpha = 0.65f),
+                        fg = semantic.onSchoolEventContainer,
+                        text = "$prefix: ${bestDay.fullName} (${String.format(Locale.US, "%.0f%%", bestDay.percentage)} attended)"
+                    )
+                }
+            }
+
+            // 3. Mon–Fri Weekday Breakdown Bars
+            val hasWeekdayData = insights.weekdayStats.any { it.totalDays > 0 }
+            if (hasWeekdayData) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -447,16 +765,21 @@ fun AttendancePatternsAndChartCard(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Weekday Attendance Rate (Mon – Fri)",
+                            text = when {
+                                isCommunity && timeframe == TrendsTimeframe.ALL_TIME -> "School Weekday Rate (All Time)"
+                                isCommunity && timeframe == TrendsTimeframe.MONTHLY -> "School Weekday Rate (${insights.activeMonthLabel ?: "Monthly"})"
+                                !isCommunity && timeframe == TrendsTimeframe.ALL_TIME -> "My Weekday Rate (All Time)"
+                                else -> "My Weekday Rate (${insights.activeMonthLabel ?: "Monthly"})"
+                            },
                             style = MaterialTheme.typography.titleSmall
                         )
                     }
 
                     insights.weekdayStats.forEachIndexed { dayIdx, day ->
                         val targetFraction = if (day.totalDays > 0) (day.percentage / 100.0).toFloat().coerceIn(0f, 1f) else 0f
-                        var barRevealed by remember(day.shortName, targetFraction) { mutableStateOf(false) }
-                        LaunchedEffect(day.shortName, targetFraction) {
-                            delay(dayIdx * 55L)
+                        var barRevealed by remember(pageTag, timeframe, day.shortName, targetFraction) { mutableStateOf(false) }
+                        LaunchedEffect(pageTag, timeframe, day.shortName, targetFraction) {
+                            delay(dayIdx * 45L)
                             barRevealed = true
                         }
                         val animatedFraction by animateFloatAsState(
@@ -465,7 +788,7 @@ fun AttendancePatternsAndChartCard(
                                 dampingRatio = Spring.DampingRatioLowBouncy,
                                 stiffness = Spring.StiffnessLow
                             ),
-                            label = "weekday_bar_${day.shortName}"
+                            label = "weekday_bar_${pageTag}_${day.shortName}"
                         )
                         val barColor = when {
                             day.totalDays == 0 -> MaterialTheme.colorScheme.outlineVariant

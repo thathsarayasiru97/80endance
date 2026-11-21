@@ -95,6 +95,7 @@ import com.example.ui.calendar.CalendarScreen
 import com.example.ui.components.AttendanceBaselineDialog
 import com.example.ui.components.DailyCheckInDialog
 import com.example.ui.components.FeedbackWelcomeDialog
+import com.example.ui.components.PeriodAttendanceDialog
 import com.example.ui.components.UpdateAvailableDialog
 import com.example.ui.components.WhatsNewDialog
 import com.example.ui.home.HomeScreen
@@ -465,6 +466,7 @@ private fun AuthenticatedAppShell(
     var editingProfileInSettings by rememberSaveable { mutableStateOf(false) }
     var showAdminPanel by rememberSaveable { mutableStateOf(false) }
     var showBaselineImportDialog by rememberSaveable { mutableStateOf(false) }
+    var showPeriodAttendanceDialog by rememberSaveable { mutableStateOf(false) }
     var feedbackPromptIsAfterUpdate by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -631,6 +633,8 @@ private fun AuthenticatedAppShell(
                             onEditDate = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onDeleteDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
                             onOpenBaselineImport = { showBaselineImportDialog = true },
+                            onOpenPeriodEntry = { showPeriodAttendanceDialog = true },
+                            onDeletePeriodBlock = { periodId -> attendanceViewModel.deletePeriodBlock(periodId) },
                             isVerifiedAdmin = isAdmin,
                             isSaving = isSaving,
                             onAdminSaveCalendarEvent = { eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify ->
@@ -686,6 +690,7 @@ private fun AuthenticatedAppShell(
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onOpenBaselineImport = { showBaselineImportDialog = true },
                             onClearBaseline = { attendanceViewModel.clearAttendancePercentageBaseline() },
+                            onOpenPeriodEntry = { showPeriodAttendanceDialog = true },
                             onToggleSundayPrep = { enabled -> attendanceViewModel.setSundayPrepEnabled(enabled) },
                             onToggleInstantBackgroundAlerts = { enabled ->
                                 attendanceViewModel.setInstantBackgroundAlertsEnabled(enabled)
@@ -786,6 +791,30 @@ private fun AuthenticatedAppShell(
             },
             onClearBaseline = {
                 attendanceViewModel.clearAttendancePercentageBaseline()
+            }
+        )
+    }
+
+    if (showPeriodAttendanceDialog) {
+        PeriodAttendanceDialog(
+            profile = state.profile,
+            calendarEvents = state.calendarEvents,
+            existingRecords = state.attendanceRecords,
+            existingPeriodBlocks = state.periodBlocks,
+            isSaving = isSaving,
+            onDismiss = { showPeriodAttendanceDialog = false },
+            onSave = { startKey, endKey, totalDays, presentDays, absentDays, pct, mode, label ->
+                attendanceViewModel.savePeriodBlock(
+                    startDateKey = startKey,
+                    endDateKey = endKey,
+                    totalSchoolDays = totalDays,
+                    presentDays = presentDays,
+                    absentDays = absentDays,
+                    percentage = pct,
+                    entryMode = mode,
+                    label = label,
+                    onComplete = { showPeriodAttendanceDialog = false }
+                )
             }
         )
     }

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
@@ -135,6 +136,7 @@ fun SettingsScreen(
     onSaveCustomAvatar: (String?) -> Unit = {},
     onOpenBaselineImport: () -> Unit = {},
     onClearBaseline: () -> Unit = {},
+    onOpenPeriodEntry: (() -> Unit)? = null,
     onToggleSundayPrep: (Boolean) -> Unit = {},
     onToggleInstantBackgroundAlerts: (Boolean) -> Unit = {},
     onCheckBackgroundNotificationsNow: () -> Unit = {},
@@ -390,6 +392,27 @@ fun SettingsScreen(
                                 Icon(Icons.Rounded.Percent, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(if (hasLocked) "Update %" else "Enter Attendance %")
+                            }
+                        }
+
+                        if (onOpenPeriodEntry != null) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            OutlinedButton(
+                                onClick = onOpenPeriodEntry,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_lock_period_button")
+                            ) {
+                                Icon(Icons.Rounded.DateRange, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    if (state.periodBlocks.isEmpty()) {
+                                        "Lock a Custom Time Period (Days Missed / %)"
+                                    } else {
+                                        "Add Locked Time Period (${state.periodBlocks.size} active)"
+                                    }
+                                )
                             }
                         }
                     }

@@ -72,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.data.AppSettings
 import com.example.data.CalendarEvent
 import com.example.data.DateUtils
@@ -431,7 +432,7 @@ fun AdminPanelScreen(
                                             )
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 if (studentOnline) {
                                                     Box(
@@ -448,6 +449,30 @@ fun AdminPanelScreen(
                                                     color = if (studentOnline) semantic.present else MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.testTag("admin_student_last_seen_${student.userId}")
                                                 )
+                                                val rawVersion = student.appVersionName?.trim()?.takeIf { it.isNotBlank() }
+                                                val versionLabel = rawVersion?.let { if (it.startsWith("v", ignoreCase = true)) it else "v$it" } ?: "v—"
+                                                val isLatestVersion = rawVersion != null && rawVersion == BuildConfig.VERSION_NAME
+                                                Surface(
+                                                    color = when {
+                                                        isLatestVersion -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                                                        rawVersion != null -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.8f)
+                                                        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                                    },
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    modifier = Modifier.testTag("admin_student_version_${student.userId}")
+                                                ) {
+                                                    Text(
+                                                        text = versionLabel,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = when {
+                                                            isLatestVersion -> MaterialTheme.colorScheme.onPrimaryContainer
+                                                            rawVersion != null -> MaterialTheme.colorScheme.onTertiaryContainer
+                                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                        },
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                         Surface(

@@ -80,6 +80,8 @@ service cloud.firestore {
              (!('lastCheckInDate' in data) || data.lastCheckInDate == null || data.lastCheckInDate == '' || isValidDateKey(data.lastCheckInDate)) &&
              (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
              (!('customAvatarBase64' in data) || data.customAvatarBase64 == null || (data.customAvatarBase64 is string && data.customAvatarBase64.size() <= 120000)) &&
+             (!('appVersionName' in data) || data.appVersionName == null || (data.appVersionName is string && data.appVersionName.size() <= 40)) &&
+             (!('appVersionCode' in data) || data.appVersionCode == null || (data.appVersionCode is int && data.appVersionCode >= 1 && data.appVersionCode <= 1000000)) &&
              (!('onlineNow' in data) || data.onlineNow == null || data.onlineNow is bool) &&
              (!('lastSeenAt' in data) || data.lastSeenAt == null || isValidTimestamp(data.lastSeenAt));
     }
@@ -180,6 +182,40 @@ service cloud.firestore {
              data.sentByEmail is string && data.sentByEmail.size() >= 3 && data.sentByEmail.size() <= 120;
     }
 
+    function isValidAttendancePeriodBlock(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             isValidDateKey(data.startDate) &&
+             isValidDateKey(data.endDate) &&
+             data.startDate <= data.endDate &&
+             data.totalSchoolDays is int && data.totalSchoolDays >= 1 && data.totalSchoolDays <= 600 &&
+             data.presentDays is int && data.presentDays >= 0 && data.presentDays <= data.totalSchoolDays &&
+             data.absentDays is int && data.absentDays >= 0 && data.absentDays <= data.totalSchoolDays &&
+             data.presentDays + data.absentDays == data.totalSchoolDays &&
+             data.percentage is number && data.percentage >= 0 && data.percentage <= 100 &&
+             data.entryMode in ['missed_days', 'attended_days', 'percentage'] &&
+             (!('label' in data) || data.label == null || (data.label is string && data.label.size() <= 80));
+    }
+
+    function isValidWeekdayCounts(arr) {
+      return arr is list &&
+             arr.size() == 5 &&
+             arr[0] is int && arr[0] >= 0 && arr[0] <= 1000 &&
+             arr[1] is int && arr[1] >= 0 && arr[1] <= 1000 &&
+             arr[2] is int && arr[2] >= 0 && arr[2] <= 1000 &&
+             arr[3] is int && arr[3] >= 0 && arr[3] <= 1000 &&
+             arr[4] is int && arr[4] >= 0 && arr[4] <= 1000;
+    }
+
+    function isValidStudentTrendSummary(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.monthlyTotalsJson is string && data.monthlyTotalsJson.size() >= 2 && data.monthlyTotalsJson.size() <= 8000 &&
+             data.monthlyWeekdayJson is string && data.monthlyWeekdayJson.size() >= 2 && data.monthlyWeekdayJson.size() <= 16000 &&
+             isValidWeekdayCounts(data.allTimeWeekdayAttended) &&
+             isValidWeekdayCounts(data.allTimeWeekdayAbsent) &&
+             data.totalAttended is int && data.totalAttended >= 0 && data.totalAttended <= 3000 &&
+             data.totalAbsent is int && data.totalAbsent >= 0 && data.totalAbsent <= 3000;
+    }
+
     // --- COLLECTION 1: USER PROFILES (PII STRICTLY ISOLATED) ---
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
@@ -205,7 +241,7 @@ service cloud.firestore {
                          'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                          'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'appVersionName', 'appVersionCode', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -223,7 +259,7 @@ service cloud.firestore {
                          'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                          'setupCompleted',
                          'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
+                         'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'appVersionName', 'appVersionCode', 'onlineNow', 'lastSeenAt', 'createdAt', 'updatedAt'
                        ]) &&
                        (
                          isAdmin() ||
@@ -236,7 +272,7 @@ service cloud.firestore {
                              'priorPresentCount', 'priorAbsentCount', 'baselineStartDate', 'baselineEndDate', 'baselinePercent',
                              'setupCompleted',
                              'presentCount', 'absentCount', 'medicalCount', 'schoolEventCount',
-                             'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'onlineNow', 'lastSeenAt', 'updatedAt'
+                             'lastCheckInDate', 'photoUrl', 'customAvatarBase64', 'appVersionName', 'appVersionCode', 'onlineNow', 'lastSeenAt', 'updatedAt'
                            ])
                          )
                        );
@@ -288,6 +324,48 @@ service cloud.firestore {
                          );
 
         allow delete: if isSignedIn() && isValidId(userId) && isValidDateKey(dateKey) && (isOwner(userId) || isAdmin());
+      }
+
+      // --- COLLECTION 2b: CUSTOM LOCKED TIME-PERIOD ATTENDANCE BLOCKS ---
+      match /attendance_periods/{periodId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(periodId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+
+        allow create: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidId(periodId) &&
+                         isValidAttendancePeriodBlock(incoming()) &&
+                         incoming().userId == userId &&
+                         (isOwner(userId) || isAdmin()) &&
+                         incoming().keys().hasAll([
+                           'userId', 'startDate', 'endDate', 'totalSchoolDays', 'presentDays',
+                           'absentDays', 'percentage', 'entryMode', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'startDate', 'endDate', 'totalSchoolDays', 'presentDays',
+                           'absentDays', 'percentage', 'entryMode', 'label', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt);
+
+        allow update: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidId(periodId) &&
+                         isValidAttendancePeriodBlock(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         (isOwner(userId) || isAdmin()) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'startDate', 'endDate', 'totalSchoolDays', 'presentDays',
+                           'absentDays', 'percentage', 'entryMode', 'label', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'startDate', 'endDate', 'totalSchoolDays', 'presentDays',
+                           'absentDays', 'percentage', 'entryMode', 'label', 'updatedAt'
+                         ]);
+
+        allow delete: if isSignedIn() && isValidId(userId) && isValidId(periodId) && (isOwner(userId) || isAdmin());
       }
     }
 
@@ -515,6 +593,43 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly(['streamSubjectBucketsJson', 'gradeStreamClassesJson', 'updatedAt']);
 
       allow delete: if false;
+    }
+
+    // --- COLLECTION 11: ANONYMIZED STUDENT TREND SUMMARIES (ZERO PII — SCHOOL-WIDE ANALYTICS) ---
+    match /student_trend_summaries/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       (isOwner(userId) || isAdmin()) &&
+                       isValidStudentTrendSummary(incoming()) &&
+                       incoming().userId == userId &&
+                       incoming().keys().hasAll([
+                         'userId', 'monthlyTotalsJson', 'monthlyWeekdayJson',
+                         'allTimeWeekdayAttended', 'allTimeWeekdayAbsent',
+                         'totalAttended', 'totalAbsent', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'monthlyTotalsJson', 'monthlyWeekdayJson',
+                         'allTimeWeekdayAttended', 'allTimeWeekdayAbsent',
+                         'totalAttended', 'totalAbsent', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       (isOwner(userId) || isAdmin()) &&
+                       isValidStudentTrendSummary(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().keys().hasOnly([
+                         'userId', 'monthlyTotalsJson', 'monthlyWeekdayJson',
+                         'allTimeWeekdayAttended', 'allTimeWeekdayAbsent',
+                         'totalAttended', 'totalAbsent', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
     }
   }
 }

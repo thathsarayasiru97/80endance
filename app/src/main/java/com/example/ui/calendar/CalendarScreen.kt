@@ -34,11 +34,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Percent
@@ -91,6 +93,8 @@ fun CalendarScreen(
     onEditDate: (String) -> Unit,
     onDeleteDate: (String) -> Unit,
     onOpenBaselineImport: (() -> Unit)? = null,
+    onOpenPeriodEntry: (() -> Unit)? = null,
+    onDeletePeriodBlock: ((String) -> Unit)? = null,
     isVerifiedAdmin: Boolean = false,
     isSaving: Boolean = false,
     onAdminSaveCalendarEvent: ((
@@ -253,6 +257,121 @@ fun CalendarScreen(
                 }
             }
 
+            if (onOpenPeriodEntry != null) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenPeriodEntry() }
+                            .testTag("calendar_add_period_button")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DateRange,
+                                        contentDescription = "Lock attendance for a custom time period",
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Lock Attendance for a Time Period",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Pick any start & end date and enter days missed, days attended, or %",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.periodBlocks.isNotEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("calendar_period_blocks_list"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Locked Time Periods (${state.periodBlocks.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        state.periodBlocks.forEach { block ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("calendar_period_block_${block.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Lock,
+                                        contentDescription = "Locked period",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        val titleText = block.label?.takeIf { it.isNotBlank() }
+                                            ?: "${DateUtils.formatReadableShort(block.startDate)} → ${DateUtils.formatReadableShort(block.endDate)}"
+                                        Text(
+                                            text = "$titleText • ${String.format(java.util.Locale.US, "%.1f%%", block.percentage)}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = "${DateUtils.formatReadableShort(block.startDate)} → ${DateUtils.formatReadableShort(block.endDate)} • ${block.presentDays}P / ${block.absentDays}A (${block.totalSchoolDays}d)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                    if (onDeletePeriodBlock != null) {
+                                        IconButton(
+                                            onClick = { onDeletePeriodBlock(block.id) },
+                                            modifier = Modifier.testTag("calendar_unlock_period_${block.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.LockOpen,
+                                                contentDescription = "Unlock period",
+                                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Monthly Grid Card
             item {
                 StaggeredReveal(index = 1) {
@@ -364,7 +483,7 @@ fun CalendarScreen(
                                             val dateKey = DateUtils.formatDateKey(gridYear, gridMonth, dayNum)
                                             val isWeekend = col >= 5 || DateUtils.isWeekend(dateKey)
                                             val isFuture = dateKey > todayKey
-                                            val isLocked = !isWeekend && profile?.isDateInLockedBaseline(dateKey) == true
+                                            val isLocked = !isWeekend && state.isDateLocked(dateKey)
                                             val rec = if (isWeekend || isFuture || isLocked) null else recordMap[dateKey]
                                             val dayEvents = eventMap[dateKey].orEmpty()
                                             val isSlHoliday = dayEvents.any { it.isSriLankanHoliday }
@@ -511,7 +630,7 @@ fun CalendarScreen(
                             LegendItem("Absent", semantic.absent)
                             LegendItem("Excused", semantic.schoolEvent)
                             LegendItem("Medical", semantic.medical)
-                            if (profile?.hasLockedBaseline == true) {
+                            if (profile?.hasLockedBaseline == true || state.periodBlocks.isNotEmpty()) {
                                 LegendItem("Locked", MaterialTheme.colorScheme.secondary)
                             } else {
                                 LegendItem("No School", semantic.poya)
@@ -904,7 +1023,8 @@ fun CalendarScreen(
 
                 val isSelectedWeekend = DateUtils.isWeekend(dateKey)
                 val isSelectedFuture = dateKey > todayKey
-                val isSelectedLocked = !isSelectedWeekend && profile?.isDateInLockedBaseline(dateKey) == true
+                val lockingPeriod = state.lockingPeriodFor(dateKey)
+                val isSelectedLocked = !isSelectedWeekend && state.isDateLocked(dateKey)
 
                 when {
                     isSelectedWeekend -> {
@@ -943,9 +1063,22 @@ fun CalendarScreen(
                         }
                     }
                     isSelectedLocked -> {
-                        val pctLabel = profile?.baselinePercent?.let {
-                            String.format(java.util.Locale.US, "%.1f%%", it)
-                        } ?: "imported attendance"
+                        val headerText = if (lockingPeriod != null) {
+                            val labelPrefix = lockingPeriod.label?.takeIf { it.isNotBlank() }?.let { "$it • " }.orEmpty()
+                            "Locked • ${labelPrefix}${String.format(java.util.Locale.US, "%.1f%%", lockingPeriod.percentage)}"
+                        } else {
+                            val pctLabel = profile?.baselinePercent?.let {
+                                String.format(java.util.Locale.US, "%.1f%%", it)
+                            } ?: "imported attendance"
+                            "Locked • Included in Imported $pctLabel"
+                        }
+                        val detailText = if (lockingPeriod != null) {
+                            "Covered by ${DateUtils.formatReadableShort(lockingPeriod.startDate)} → ${DateUtils.formatReadableShort(lockingPeriod.endDate)} (${lockingPeriod.presentDays} Present, ${lockingPeriod.absentDays} Missed out of ${lockingPeriod.totalSchoolDays} school days). Individual days in this period cannot be edited."
+                        } else {
+                            val startLbl = profile?.baselineStartDate?.let { DateUtils.formatReadableShort(it) } ?: "start"
+                            val endLbl = profile?.baselineEndDate?.let { DateUtils.formatReadableShort(it) } ?: "end"
+                            "Covered by $startLbl → $endLbl (${profile?.priorPresentCount ?: 0} Present, ${profile?.priorAbsentCount ?: 0} Absent). Individual days in this period cannot be edited."
+                        }
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
                             shape = RoundedCornerShape(16.dp),
@@ -966,19 +1099,34 @@ fun CalendarScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Locked • Included in Imported $pctLabel",
+                                        text = headerText,
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
                                 }
                                 Text(
-                                    text = "Covered by ${DateUtils.formatReadableShort(profile!!.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} (${profile.priorPresentCount} Present, ${profile.priorAbsentCount} Absent). Individual days in this period cannot be edited.",
+                                    text = detailText,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.88f)
                                 )
                             }
                         }
-                        if (onOpenBaselineImport != null) {
+                        if (lockingPeriod != null && onDeletePeriodBlock != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    onDeletePeriodBlock(lockingPeriod.id)
+                                    selectedDateKey = null
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 24.dp)
+                            ) {
+                                Icon(Icons.Rounded.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Unlock This Period")
+                            }
+                        } else if (lockingPeriod == null && onOpenBaselineImport != null) {
                             OutlinedButton(
                                 onClick = {
                                     selectedDateKey = null

@@ -3,6 +3,7 @@ package com.example
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -14,6 +15,8 @@ import androidx.compose.ui.test.performTextInput
 import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
+import com.example.data.AttendancePeriodBlock
+import com.example.data.AttendancePeriodEntryMode
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStatus
 import com.example.data.BroadcastNotification
@@ -1047,6 +1050,237 @@ class ScreensRenderRobolectricTest {
         composeTestRule.onNodeWithTag("baseline_preview_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("90.0%", substring = true).assertIsDisplayed()
     }
+
+    @Test
+    fun homeScreenRendersPinnedUpdatesAboveNewAnnouncements() {
+        val stateWithPinnedAndBroadcast = sampleState.copy(
+            daysUntilAlExam = 0,
+            pinnedNotices = listOf(
+                Notice(
+                    id = "pin_1",
+                    title = "Pinned Exam Schedule",
+                    message = "Term tests start next Monday.",
+                    category = NoticeCategory.EXAM.raw,
+                    pinned = true,
+                    published = true
+                )
+            ),
+            visibleNotices = listOf(
+                Notice(
+                    id = "pin_1",
+                    title = "Pinned Exam Schedule",
+                    message = "Term tests start next Monday.",
+                    category = NoticeCategory.EXAM.raw,
+                    pinned = true,
+                    published = true
+                )
+            ),
+            unreadBroadcasts = listOf(
+                BroadcastNotification(
+                    id = "bc_order_test",
+                    title = "New Assembly Update",
+                    message = "Report at 7:20 AM.",
+                    targetAll = true,
+                    audienceSummary = "Everyone"
+                )
+            )
+        )
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = stateWithPinnedAndBroadcast,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(400L)
+        val pinnedBounds = composeTestRule.onNodeWithText("Pinned Exam Schedule").getBoundsInRoot()
+        val broadcastBounds = composeTestRule.onNodeWithTag("home_broadcast_alert_card").getBoundsInRoot()
+        org.junit.Assert.assertTrue(
+            "Expected Pinned Updates (top=${pinnedBounds.top}) to appear above New Announcements (top=${broadcastBounds.top})",
+            pinnedBounds.top < broadcastBounds.top
+        )
+    }
+
+    @Test
+    fun periodAttendanceDialogCalculatesMissedDaysAndShowsLockPreview() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    com.example.ui.components.PeriodAttendanceDialog(
+                        profile = sampleState.profile,
+                        calendarEvents = emptyList(),
+                        existingRecords = emptyList(),
+                        existingPeriodBlocks = emptyList(),
+                        isSaving = false,
+                        onDismiss = {},
+                        onSave = { _, _, _, _, _, _, _, _ -> }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("period_mode_missed").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("period_value_input").performScrollTo().performTextInput("1")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("period_preview_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("1 Missed", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("period_save_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun trendsCardDefaultsToEveryoneAllTimeAndSwitchesToMonthlyAndPersonal() {
+        val personalRecords = listOf(
+            AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-11-06", status = AttendanceStatus.ABSENT.raw)
+        )
+        val summary1 = AttendanceCalculator.buildStudentTrendSummary("u1", personalRecords)
+        val summary2 = AttendanceCalculator.buildStudentTrendSummary(
+            "u2",
+            listOf(
+                AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.PRESENT.raw),
+                AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw),
+                AttendanceRecord(dateKey = "2026-11-06", status = AttendanceStatus.PRESENT.raw)
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    com.example.ui.reports.AttendancePatternsAndChartCard(
+                        records = personalRecords,
+                        thresholdPercent = 80,
+                        periodBlocks = emptyList(),
+                        communitySummaries = listOf(summary1, summary2)
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        // Default page is Everyone -> All Time
+        composeTestRule.onNodeWithTag("trends_page_everyone").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Everyone • All-Time Average").assertIsDisplayed()
+        composeTestRule.onNodeWithText("2 students").assertIsDisplayed()
+
+        // Switch Everyone to Monthly
+        composeTestRule.onNodeWithTag("trends_everyone_monthly").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Everyone • November 2026").assertIsDisplayed()
+
+        // Slide/switch to My Stats tab
+        composeTestRule.onNodeWithTag("trends_tab_personal").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("trends_page_personal").assertIsDisplayed()
+        composeTestRule.onNodeWithText("My All-Time Average").assertIsDisplayed()
+
+        // Switch My Stats to Monthly
+        composeTestRule.onNodeWithTag("trends_personal_monthly").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("My November 2026 Average").assertIsDisplayed()
+    }
+
+    @Test
+    fun dynamicAttendanceWidgetBuildsCompactStandardAndExpandedViewsCleanly() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val snapshot = com.example.system.WidgetSnapshot(
+            percentage = 87.5,
+            eligible = true,
+            thresholdPercent = 80,
+            effectiveAttended = 35,
+            totalCountedDays = 40,
+            safeSkipsRemaining = 3,
+            daysNeededToRecover = 0,
+            streak = 6,
+            termName = "Term 3 — 2026",
+            todayDateKey = "2026-11-19",
+            todayStatusLabel = "Present",
+            todayNoSchoolTitle = null,
+            signedIn = true,
+            weekDays = listOf(
+                com.example.system.WidgetWeekDay("Mon", "present", false),
+                com.example.system.WidgetWeekDay("Tue", "present", false),
+                com.example.system.WidgetWeekDay("Wed", "absent", false),
+                com.example.system.WidgetWeekDay("Thu", "present", true),
+                com.example.system.WidgetWeekDay("Fri", "unlogged", false)
+            ),
+            daysUntilAlExam = 120,
+            alExamYear = 2026,
+            nextHolidayTitle = "Il Full Moon Poya",
+            nextHolidayDateShort = "Nov 24"
+        )
+        val compact = com.example.system.AttendanceWidgetProvider.buildCompactViews(context, snapshot)
+        val standard = com.example.system.AttendanceWidgetProvider.buildStandardViews(context, snapshot)
+        val expanded = com.example.system.AttendanceWidgetProvider.buildExpandedViews(context, snapshot)
+        org.junit.Assert.assertNotNull(compact)
+        org.junit.Assert.assertNotNull(standard)
+        org.junit.Assert.assertNotNull(expanded)
+    }
+
+    @Test
+    fun communityAndPersonalTrendsAggregateAccuratelyAcrossAllTimeAndMonthly() {
+        val student1Records = listOf(
+            AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-10-09", status = AttendanceStatus.ABSENT.raw),  // Fri
+            AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-11-06", status = AttendanceStatus.PRESENT.raw)  // Fri
+        )
+        val student2Records = listOf(
+            AttendanceRecord(dateKey = "2026-10-05", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-10-09", status = AttendanceStatus.ABSENT.raw),  // Fri
+            AttendanceRecord(dateKey = "2026-11-02", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-11-06", status = AttendanceStatus.ABSENT.raw)   // Fri
+        )
+
+        val sum1 = AttendanceCalculator.buildStudentTrendSummary("u1", student1Records)
+        val sum2 = AttendanceCalculator.buildStudentTrendSummary("u2", student2Records)
+
+        val communityAllTime = AttendanceCalculator.calculateCommunityInsights(
+            summaries = listOf(sum1, sum2),
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME,
+            currentYearMonth = "2026-11"
+        )
+        org.junit.Assert.assertEquals(2, communityAllTime.contributorCount)
+        org.junit.Assert.assertEquals(5, communityAllTime.totalAttendedDays)
+        org.junit.Assert.assertEquals(8, communityAllTime.totalCountedDays)
+        org.junit.Assert.assertEquals(62.5, communityAllTime.overallPercent ?: 0.0, 0.05)
+        org.junit.Assert.assertEquals("Friday", communityAllTime.mostSkippedWeekday?.fullName)
+        org.junit.Assert.assertEquals(3, communityAllTime.mostSkippedWeekday?.absentDays)
+        org.junit.Assert.assertEquals("Monday", communityAllTime.bestWeekday?.fullName)
+
+        val communityMonthly = AttendanceCalculator.calculateCommunityInsights(
+            summaries = listOf(sum1, sum2),
+            timeframe = com.example.data.TrendsTimeframe.MONTHLY,
+            currentYearMonth = "2026-11"
+        )
+        org.junit.Assert.assertEquals(3, communityMonthly.totalAttendedDays)
+        org.junit.Assert.assertEquals(4, communityMonthly.totalCountedDays)
+        org.junit.Assert.assertEquals(75.0, communityMonthly.overallPercent ?: 0.0, 0.05)
+        org.junit.Assert.assertEquals(25.0, communityMonthly.monthOverMonthDelta ?: 0.0, 0.05)
+        org.junit.Assert.assertEquals("November 2026", communityMonthly.activeMonthLabel)
+    }
+
+    @Test
+    fun widgetWeekDayJsonSerializationRoundTripsCleanly() {
+        val sampleDays = listOf(
+            com.example.system.WidgetWeekDay("Mon", "present", false),
+            com.example.system.WidgetWeekDay("Tue", "absent", false),
+            com.example.system.WidgetWeekDay("Wed", "locked", false),
+            com.example.system.WidgetWeekDay("Thu", "unlogged", true),
+            com.example.system.WidgetWeekDay("Fri", "off", false)
+        )
+        val json = com.example.system.AttendanceWidgetStore.serializeWeekDays(sampleDays)
+        val restored = com.example.system.AttendanceWidgetStore.deserializeWeekDays(json)
+        org.junit.Assert.assertEquals(5, restored.size)
+        org.junit.Assert.assertEquals(sampleDays, restored)
+    }
 }
+
+
 
 

@@ -384,33 +384,9 @@ fun HomeScreen(
                 }
             }
 
-            // 1b. Unread Admin Custom Broadcast Notification Banner
-            val activeBroadcast = state.unreadBroadcasts.firstOrNull()
-            if (activeBroadcast != null) {
-                item(key = "broadcast_${activeBroadcast.id}") {
-                    BroadcastAlertBanner(
-                        broadcast = activeBroadcast,
-                        remainingCount = state.unreadBroadcasts.size,
-                        onDismiss = { onDismissBroadcast(activeBroadcast.id) }
-                    )
-                }
-            }
-
-            // 1c. In-App-Only Resolved Bug/Suggestion Alert Banner
-            val activeResolved = state.resolvedFeedbackAlerts.firstOrNull()
-            if (activeResolved != null) {
-                item(key = "resolved_feedback_${activeResolved.id}") {
-                    ResolvedFeedbackBanner(
-                        report = activeResolved,
-                        remainingCount = state.resolvedFeedbackAlerts.size,
-                        onDismiss = { onDismissResolvedFeedback(activeResolved.id) }
-                    )
-                }
-            }
-
-            // 2. Pinned Notice 5-Second Auto-Advancing Slideshow
+            // 1b. Pinned Updates Slideshow (always on top above new announcements)
             if (state.pinnedNotices.isNotEmpty()) {
-                item {
+                item(key = "pinned_notices_slideshow") {
                     AnimatedVisibility(
                         visible = visible,
                         enter = fadeIn() + slideInVertically(spring(stiffness = Spring.StiffnessMediumLow)) { -20 }
@@ -422,6 +398,30 @@ fun HomeScreen(
                             onViewAllClick = { showNoticeSheet = true }
                         )
                     }
+                }
+            }
+
+            // 1c. Unread Admin Custom Broadcast Notification Banner (below Pinned Updates)
+            val activeBroadcast = state.unreadBroadcasts.firstOrNull()
+            if (activeBroadcast != null) {
+                item(key = "broadcast_${activeBroadcast.id}") {
+                    BroadcastAlertBanner(
+                        broadcast = activeBroadcast,
+                        remainingCount = state.unreadBroadcasts.size,
+                        onDismiss = { onDismissBroadcast(activeBroadcast.id) }
+                    )
+                }
+            }
+
+            // 1d. In-App-Only Resolved Bug/Suggestion Alert Banner
+            val activeResolved = state.resolvedFeedbackAlerts.firstOrNull()
+            if (activeResolved != null) {
+                item(key = "resolved_feedback_${activeResolved.id}") {
+                    ResolvedFeedbackBanner(
+                        report = activeResolved,
+                        remainingCount = state.resolvedFeedbackAlerts.size,
+                        onDismiss = { onDismissResolvedFeedback(activeResolved.id) }
+                    )
                 }
             }
 
@@ -665,7 +665,21 @@ fun HomeScreen(
                         }
                     }
 
-                    profile?.isDateInLockedBaseline(todayKey) == true -> {
+                    state.isDateLocked(todayKey) -> {
+                        val lockingPeriod = state.lockingPeriodFor(todayKey)
+                        val lockRangeLabel = when {
+                            lockingPeriod != null ->
+                                "${DateUtils.formatReadableShort(lockingPeriod.startDate)} → ${DateUtils.formatReadableShort(lockingPeriod.endDate)}"
+                            profile?.baselineStartDate != null && profile.baselineEndDate != null ->
+                                "${DateUtils.formatReadableShort(profile.baselineStartDate)} → ${DateUtils.formatReadableShort(profile.baselineEndDate)}"
+                            else -> "Locked Period"
+                        }
+                        val lockSubtitle = if (lockingPeriod != null) {
+                            val labelPrefix = lockingPeriod.label?.takeIf { it.isNotBlank() }?.let { "$it: " }.orEmpty()
+                            "${labelPrefix}Today is covered by your locked period ($lockRangeLabel • ${lockingPeriod.presentDays}P / ${lockingPeriod.absentDays}A). Manage or unlock in Calendar."
+                        } else {
+                            "Today is covered by your imported percentage ($lockRangeLabel). Manage or unlock in Settings."
+                        }
                         Card(
                             shape = RoundedCornerShape(22.dp),
                             colors = CardDefaults.cardColors(
@@ -690,7 +704,7 @@ fun HomeScreen(
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = Icons.Rounded.Lock,
-                                            contentDescription = "Locked imported attendance period",
+                                            contentDescription = "Locked attendance period",
                                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -705,13 +719,17 @@ fun HomeScreen(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "Included in Imported Attendance",
+                                        text = if (lockingPeriod != null) {
+                                            "Included in Locked Time Period"
+                                        } else {
+                                            "Included in Imported Attendance"
+                                        },
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
                                     Text(
-                                        text = "Today is covered by your imported percentage (${DateUtils.formatReadableShort(profile.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)}). Manage or unlock in Settings.",
+                                        text = lockSubtitle,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                                     )

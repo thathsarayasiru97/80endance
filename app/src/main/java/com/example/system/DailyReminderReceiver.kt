@@ -175,40 +175,65 @@ class DailyReminderReceiver : BroadcastReceiver() {
             LocalPreferencesStore(appCtx).markPromptDismissedForDate(todayKey)
             SyncScheduler.scheduleBackgroundSync(appCtx)
 
-            // Refresh home screen widget immediately with newly logged attendance
+            // Refresh home screen widget immediately with newly logged attendance & 5-day week strip
             val (profile, records, events) = repository.getQuickWidgetMetrics(uid, todayKey)
+            val periodBlocks = repository.getQuickWidgetPeriodBlocks(uid)
+            val (settings, fetchedTerms) = repository.getQuickWidgetSettingsAndTerms()
+            val effectiveTerms = fetchedTerms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
+            val resolvedTerm = AttendanceCalculator.resolveActiveTerm(effectiveTerms, todayKey)
+            val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(events, profile, uid)
             val mergedRecords = records.filterNot { it.dateKey == todayKey } +
                 AttendanceRecord(userId = uid, dateKey = todayKey, termId = termId, status = status.raw)
+            val lockedRange = profile?.lockedBaselineRange
             val stats = AttendanceCalculator.calculateStats(
                 records = mergedRecords,
-                thresholdPercent = activeTerm.minEligibilityPercent,
+                thresholdPercent = resolvedTerm.minEligibilityPercent,
                 countExcusedAsPresent = true,
                 includePriorBalance = true,
                 priorPresent = profile?.priorPresentCount ?: 0,
                 priorAbsent = profile?.priorAbsentCount ?: 0,
-                termFilter = activeTerm
+                termFilter = resolvedTerm,
+                lockedRange = lockedRange,
+                periodBlocks = periodBlocks
             )
             val streak = AttendanceCalculator.calculateCurrentStreak(
                 records = mergedRecords,
-                calendarEvents = events,
+                calendarEvents = effectiveEvents,
                 countExcusedAsPresent = true,
                 todayKey = todayKey
             )
+            val weekly = AttendanceCalculator.calculateWeeklySummary(
+                records = mergedRecords,
+                calendarEvents = effectiveEvents,
+                todayKey = todayKey,
+                lockedRange = lockedRange,
+                periodBlocks = periodBlocks
+            )
+            val examYear = profile?.alExamYear ?: settings.currentAcademicYear
+            val daysToExam = AttendanceCalculator.daysUntilAlExam(examYear, settings, todayKey)
+            val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(effectiveEvents, todayKey)
+
             AttendanceWidgetStore.saveAndRefresh(
                 appCtx,
                 WidgetSnapshot(
                     percentage = stats.percentage,
                     eligible = stats.eligible,
                     thresholdPercent = stats.thresholdPercent,
+                    effectiveAttended = stats.effectiveAttended,
                     totalCountedDays = stats.totalCountedDays,
                     safeSkipsRemaining = stats.safeSkipsRemaining,
                     daysNeededToRecover = stats.daysNeededToRecover,
                     streak = streak,
-                    termName = activeTerm.name,
+                    termName = resolvedTerm.name,
                     todayDateKey = todayKey,
                     todayStatusLabel = status.label,
                     todayNoSchoolTitle = null,
-                    signedIn = true
+                    signedIn = true,
+                    weekDays = AttendanceWidgetStore.toWidgetWeekDays(weekly),
+                    daysUntilAlExam = daysToExam,
+                    alExamYear = examYear,
+                    nextHolidayTitle = nextHoliday?.title,
+                    nextHolidayDateShort = nextHoliday?.dateKey?.let { DateUtils.formatReadableShort(it) }
                 )
             )
 

@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.util.Log
+import com.example.BuildConfig
 import com.example.R
 import com.example.system.SyncScheduler
 import com.google.firebase.Firebase
@@ -121,6 +122,44 @@ class AttendanceRepository(
                 }
                 .catch { error ->
                     logStreamErrorIfActive(error, OperationType.LIST, path, userId)
+                    throw error
+                }
+        )
+    }
+
+    fun observePeriodBlocks(userId: String): Flow<List<AttendancePeriodBlock>> = flow {
+        require(userId.isNotBlank()) { "userId must not be blank" }
+        val path = "users/$userId/attendance_periods"
+        emitAll(
+            db.collection("users").document(userId).collection("attendance_periods")
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        AttendancePeriodBlock::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.endDate }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, userId)
+                    throw error
+                }
+        )
+    }
+
+    fun observeAllStudentTrendSummaries(): Flow<List<StudentTrendSummary>> = flow {
+        val uid = requireUserId()
+        val path = "student_trend_summaries"
+        emitAll(
+            db.collection("student_trend_summaries")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        StudentTrendSummary::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
                     throw error
                 }
         )
@@ -549,6 +588,8 @@ class AttendanceRepository(
                     }
                     put("setupCompleted", setupCompleted)
                     if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
+                    put("appVersionName", BuildConfig.VERSION_NAME.take(40))
+                    put("appVersionCode", BuildConfig.VERSION_CODE)
                     put("updatedAt", FieldValue.serverTimestamp())
                 }
                 docRef.update(updates).awaitOfflineAware()
@@ -580,6 +621,8 @@ class AttendanceRepository(
                     "medicalCount" to 0,
                     "schoolEventCount" to 0,
                     "photoUrl" to cleanPhotoUrl,
+                    "appVersionName" to BuildConfig.VERSION_NAME.take(40),
+                    "appVersionCode" to BuildConfig.VERSION_CODE,
                     "onlineNow" to true,
                     "lastSeenAt" to FieldValue.serverTimestamp(),
                     "createdAt" to FieldValue.serverTimestamp(),
@@ -809,6 +852,193 @@ class AttendanceRepository(
             }
         }.getOrNull()?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
         return Triple(profile, records, AttendanceCalculator.filterCalendarEventsForStudent(events, profile))
+    }
+
+    suspend fun getQuickWidgetPeriodBlocks(userId: String): List<AttendancePeriodBlock> {
+        return runCatching {
+            withTimeoutOrNull(2_000L) {
+                db.collection("users").document(userId).collection("attendance_periods")
+                    .get().await().toObjects(AttendancePeriodBlock::class.java)
+            }
+        }.getOrNull().orEmpty()
+    }
+
+    suspend fun getQuickWidgetSettingsAndTerms(): Pair<AppSettings, List<AcademicTerm>> {
+        val settings = runCatching {
+            withTimeoutOrNull(2_000L) {
+                db.collection("app_settings").document("global")
+                    .get().await().toObject(AppSettings::class.java)
+            }
+        }.getOrNull() ?: AppSettings()
+        val terms = runCatching {
+            withTimeoutOrNull(2_000L) {
+                db.collection("academic_terms").whereEqualTo("published", true)
+                    .get().await().toObjects(AcademicTerm::class.java)
+            }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultTerms
+        return settings to terms
+    }
+
+    suspend fun savePeriodBlock(
+        userId: String,
+        startDateKey: String,
+        endDateKey: String,
+        totalSchoolDays: Int,
+        presentDays: Int,
+        absentDays: Int,
+        percentage: Double,
+        entryMode: AttendancePeriodEntryMode,
+        label: String?,
+        existingRecords: List<AttendanceRecord>,
+        existingBlockId: String? = null
+    ): Result<Int> {
+        val path = "users/$userId/attendance_periods"
+        return try {
+            requireUserId()
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            require(startDateKey.matches(dateRegex) && endDateKey.matches(dateRegex)) {
+                "Choose valid start and end dates (YYYY-MM-DD)"
+            }
+            require(startDateKey <= endDateKey) { "End date must be on or after start date" }
+            require(endDateKey <= DateUtils.todayKey()) { "End date cannot be in the future" }
+
+            val cleanTotal = totalSchoolDays.coerceIn(1, 600)
+            val cleanPresent = presentDays.coerceIn(0, cleanTotal)
+            val cleanAbsent = (cleanTotal - cleanPresent).coerceIn(0, cleanTotal)
+            val cleanPct = percentage.coerceIn(0.0, 100.0)
+            val cleanLabel = label?.trim()?.take(80)?.ifEmpty { null }
+
+            val periodsCol = db.collection("users").document(userId).collection("attendance_periods")
+            val docRef = if (!existingBlockId.isNullOrBlank()) {
+                periodsCol.document(existingBlockId)
+            } else {
+                periodsCol.document("period_${startDateKey.replace("-", "")}_${endDateKey.replace("-", "")}")
+            }
+            val alreadyExists = if (!existingBlockId.isNullOrBlank()) {
+                true
+            } else {
+                runCatching { withTimeoutOrNull(2_000L) { docRef.get().await().exists() } ?: false }.getOrDefault(false)
+            }
+
+            val overlapping = existingRecords.filter { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
+            val batch = db.batch()
+            if (alreadyExists) {
+                val updates = mutableMapOf<String, Any>(
+                    "startDate" to startDateKey,
+                    "endDate" to endDateKey,
+                    "totalSchoolDays" to cleanTotal,
+                    "presentDays" to cleanPresent,
+                    "absentDays" to cleanAbsent,
+                    "percentage" to cleanPct,
+                    "entryMode" to entryMode.raw,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (cleanLabel != null) {
+                    updates["label"] = cleanLabel
+                } else {
+                    updates["label"] = FieldValue.delete()
+                }
+                batch.update(docRef, updates)
+            } else {
+                val payload = mapOf(
+                    "userId" to userId,
+                    "startDate" to startDateKey,
+                    "endDate" to endDateKey,
+                    "totalSchoolDays" to cleanTotal,
+                    "presentDays" to cleanPresent,
+                    "absentDays" to cleanAbsent,
+                    "percentage" to cleanPct,
+                    "entryMode" to entryMode.raw,
+                    "label" to cleanLabel,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+                batch.set(docRef, payload)
+            }
+
+            val userDocRef = db.collection("users").document(userId)
+            val attendanceCol = userDocRef.collection("attendance")
+            overlapping.forEach { rec ->
+                if (rec.dateKey.length == 10) {
+                    batch.delete(attendanceCol.document(rec.dateKey))
+                }
+            }
+            if (overlapping.isNotEmpty()) {
+                val remaining = existingRecords.filterNot { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
+                val present = remaining.count { it.statusEnum == AttendanceStatus.PRESENT }
+                val absent = remaining.count { it.statusEnum == AttendanceStatus.ABSENT }
+                val medical = remaining.count { it.statusEnum == AttendanceStatus.MEDICAL }
+                val schoolEvent = remaining.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
+                val lastDate = remaining.maxOfOrNull { it.dateKey } ?: ""
+                batch.update(
+                    userDocRef,
+                    mapOf(
+                        "presentCount" to present,
+                        "absentCount" to absent,
+                        "medicalCount" to medical,
+                        "schoolEventCount" to schoolEvent,
+                        "lastCheckInDate" to lastDate,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(overlapping.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deletePeriodBlock(userId: String, periodId: String): Result<Unit> {
+        val path = "users/$userId/attendance_periods/$periodId"
+        return try {
+            requireUserId()
+            db.collection("users").document(userId)
+                .collection("attendance_periods").document(periodId)
+                .delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun upsertStudentTrendSummary(summary: StudentTrendSummary): Result<Unit> {
+        val uid = summary.userId.ifBlank { auth.currentUser?.uid.orEmpty() }
+        if (uid.isBlank() || auth.currentUser?.uid != uid) return Result.success(Unit)
+        val path = "student_trend_summaries/$uid"
+        return try {
+            val cleanTotalsJson = summary.monthlyTotalsJson.ifBlank { "{}" }.take(8000)
+            val cleanWeekdayJson = summary.monthlyWeekdayJson.ifBlank { "{}" }.take(16000)
+            val cleanAtt = List(5) { idx -> summary.allTimeWeekdayAttended.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
+            val cleanAbs = List(5) { idx -> summary.allTimeWeekdayAbsent.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
+            val payload = mapOf(
+                "userId" to uid,
+                "monthlyTotalsJson" to cleanTotalsJson,
+                "monthlyWeekdayJson" to cleanWeekdayJson,
+                "allTimeWeekdayAttended" to cleanAtt,
+                "allTimeWeekdayAbsent" to cleanAbs,
+                "totalAttended" to summary.totalAttended.coerceIn(0, 3000),
+                "totalAbsent" to summary.totalAbsent.coerceIn(0, 3000),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            db.collection("student_trend_summaries").document(uid)
+                .set(payload)
+                .awaitOfflineAware()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("AttendanceRepo", "Trend summary sync skipped: ${e.message}")
+            Result.failure(e)
+        }
     }
 
     // --- ATTENDANCE MUTATIONS ---
@@ -1663,6 +1893,8 @@ class AttendanceRepository(
             ref.update(
                 mapOf(
                     "onlineNow" to onlineNow,
+                    "appVersionName" to BuildConfig.VERSION_NAME.take(40),
+                    "appVersionCode" to BuildConfig.VERSION_CODE,
                     "lastSeenAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )

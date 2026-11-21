@@ -12,6 +12,8 @@ import com.example.data.AppSettings
 import com.example.data.AppThemeMode
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceMilestone
+import com.example.data.AttendancePeriodBlock
+import com.example.data.AttendancePeriodEntryMode
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStats
@@ -29,6 +31,7 @@ import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
 import com.example.data.Notice
 import com.example.data.SriLankaCalendarDefaults
+import com.example.data.StudentTrendSummary
 import com.example.data.SyncStatus
 import com.example.data.UserProfile
 import com.example.data.WeekDaySummary
@@ -104,8 +107,16 @@ data class StudentAppState(
     val lastFeedbackPromptVersion: String = "",
     val localPrefsLoaded: Boolean = false,
     val instantBackgroundAlertsEnabled: Boolean = true,
-    val lastBackgroundCheckMillis: Long = 0L
-)
+    val lastBackgroundCheckMillis: Long = 0L,
+    val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
+) {
+    fun lockingPeriodFor(dateKey: String): AttendancePeriodBlock? =
+        periodBlocks.firstOrNull { it.containsDate(dateKey) }
+
+    fun isDateLocked(dateKey: String): Boolean =
+        profile?.isDateInLockedBaseline(dateKey) == true || lockingPeriodFor(dateKey) != null
+}
 
 private data class CoreFirestoreBundle(
     val profile: UserProfile? = null,
@@ -122,13 +133,22 @@ private data class AdminStreamBundle(
     val onlineNowCount: Int? = null
 )
 
+private data class StudentExtraData(
+    val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
+    val userFeedback: List<FeedbackReport> = emptyList(),
+    val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
+)
+
 private data class CommunityExtrasBundle(
     val settings: AppSettings = AppSettings(),
     val communityStats: CommunityStats = CommunityStats(),
     val broadcasts: List<BroadcastNotification> = emptyList(),
     val adminBundle: AdminStreamBundle = AdminStreamBundle(),
     val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
-    val userFeedback: List<FeedbackReport> = emptyList()
+    val userFeedback: List<FeedbackReport> = emptyList(),
+    val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
 )
 
 private data class LocalSessionState(
@@ -171,6 +191,7 @@ class AttendanceViewModel(
     val isCheckingBackgroundAlerts: StateFlow<Boolean> = _isCheckingBackgroundAlerts.asStateFlow()
 
     private var lastCachedAudienceSignature: String = ""
+    private var lastSyncedTrendSignature: String = ""
 
     private fun <T> Flow<T>.safeFirestoreFlow(fallback: T, tag: String): Flow<Pair<T, String?>> =
         this.combine(MutableStateFlow(Unit)) { value, _ -> value to (null as String?) }
@@ -231,11 +252,18 @@ class AttendanceViewModel(
         kotlinx.coroutines.flow.flowOf(AdminStreamBundle())
     }
 
-    private val catalogAndFeedbackFlow: Flow<Pair<AcademicCatalog, List<FeedbackReport>>> = combine(
+    private val studentExtraDataFlow: Flow<StudentExtraData> = combine(
         repository.observeAcademicCatalog().safeFirestoreFlow(AcademicCatalog.defaultCatalog(), "catalog"),
-        repository.observeUserFeedbackReports(currentUserId).safeFirestoreFlow(emptyList(), "userFeedback")
-    ) { catalogPair, feedbackPair ->
-        catalogPair.first to feedbackPair.first
+        repository.observeUserFeedbackReports(currentUserId).safeFirestoreFlow(emptyList(), "userFeedback"),
+        repository.observePeriodBlocks(currentUserId).safeFirestoreFlow(emptyList(), "periodBlocks"),
+        repository.observeAllStudentTrendSummaries().safeFirestoreFlow(emptyList(), "communityTrends")
+    ) { catalogPair, feedbackPair, periodsPair, trendsPair ->
+        StudentExtraData(
+            academicCatalog = catalogPair.first,
+            userFeedback = feedbackPair.first,
+            periodBlocks = periodsPair.first,
+            communityTrendSummaries = trendsPair.first
+        )
     }
 
     private val extrasBundleFlow: Flow<CommunityExtrasBundle> = combine(
@@ -243,15 +271,17 @@ class AttendanceViewModel(
         repository.observeCommunityStats().safeFirestoreFlow(CommunityStats(), "communityStats"),
         repository.observeBroadcastNotifications().safeFirestoreFlow(emptyList(), "broadcasts"),
         adminStreamFlow,
-        catalogAndFeedbackFlow
-    ) { settingsPair, statsPair, broadcastsPair, adminBundle, catalogAndFeedback ->
+        studentExtraDataFlow
+    ) { settingsPair, statsPair, broadcastsPair, adminBundle, studentExtras ->
         CommunityExtrasBundle(
             settings = settingsPair.first,
             communityStats = statsPair.first,
             broadcasts = broadcastsPair.first,
             adminBundle = adminBundle,
-            academicCatalog = catalogAndFeedback.first,
-            userFeedback = catalogAndFeedback.second
+            academicCatalog = studentExtras.academicCatalog,
+            userFeedback = studentExtras.userFeedback,
+            periodBlocks = studentExtras.periodBlocks,
+            communityTrendSummaries = studentExtras.communityTrendSummaries
         )
     }
 
@@ -295,6 +325,7 @@ class AttendanceViewModel(
             ?: settings.defaultEligibilityPercent
 
         val lockedRange = profile?.lockedBaselineRange
+        val periodBlocks = extras.periodBlocks
         val monthPrefix = DateUtils.currentMonthPrefix(todayKey)
         val monthLabel = DateUtils.currentMonthYearLabel(todayKey)
         val baselineWithinMonth = lockedRange != null &&
@@ -308,7 +339,8 @@ class AttendanceViewModel(
             priorPresent = if (baselineWithinMonth) (profile?.priorPresentCount ?: 0) else 0,
             priorAbsent = if (baselineWithinMonth) (profile?.priorAbsentCount ?: 0) else 0,
             monthPrefixFilter = monthPrefix,
-            lockedRange = lockedRange
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks
         )
         val termStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -318,7 +350,8 @@ class AttendanceViewModel(
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = activeTerm,
-            lockedRange = lockedRange
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks
         )
         val overallStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -328,7 +361,8 @@ class AttendanceViewModel(
             priorPresent = profile?.priorPresentCount ?: 0,
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = null,
-            lockedRange = lockedRange
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks
         )
 
         val streak = AttendanceCalculator.calculateCurrentStreak(
@@ -341,7 +375,8 @@ class AttendanceViewModel(
             records = bundle.records,
             calendarEvents = effectiveEvents,
             todayKey = todayKey,
-            lockedRange = lockedRange
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks
         )
         val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(effectiveEvents, todayKey)
         val examYear = profile?.alExamYear ?: settings.currentAcademicYear
@@ -351,7 +386,8 @@ class AttendanceViewModel(
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
         val todayIsWeekend = DateUtils.isWeekend(todayKey)
         val todayNonSchoolEvent = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
-        val todayIsLocked = profile?.isDateInLockedBaseline(todayKey) == true
+        val todayIsLocked = profile?.isDateInLockedBaseline(todayKey) == true ||
+            periodBlocks.any { it.containsDate(todayKey) }
         val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null && !todayIsLocked
 
         val (nowHour, nowMinute) = DateUtils.currentHourMinute()
@@ -374,7 +410,8 @@ class AttendanceViewModel(
                 todayKey = todayKey,
                 lookbackCalendarDays = 10,
                 maxItems = 5,
-                lockedRange = lockedRange
+                lockedRange = lockedRange,
+                periodBlocks = periodBlocks
             )
         } else {
             emptyList()
@@ -393,17 +430,51 @@ class AttendanceViewModel(
                     percentage = termStats.percentage,
                     eligible = termStats.eligible,
                     thresholdPercent = termStats.thresholdPercent,
+                    effectiveAttended = termStats.effectiveAttended,
                     totalCountedDays = termStats.totalCountedDays,
                     safeSkipsRemaining = termStats.safeSkipsRemaining,
                     daysNeededToRecover = termStats.daysNeededToRecover,
                     streak = streak,
                     termName = activeTerm.name,
                     todayDateKey = todayKey,
-                    todayStatusLabel = todayRecord?.statusEnum?.label,
+                    todayStatusLabel = todayRecord?.statusEnum?.label
+                        ?: if (todayIsLocked) "Locked" else null,
                     todayNoSchoolTitle = todayNonSchoolEvent?.title,
-                    signedIn = true
+                    signedIn = true,
+                    weekDays = AttendanceWidgetStore.toWidgetWeekDays(weekly),
+                    daysUntilAlExam = daysToExam,
+                    alExamYear = examYear,
+                    nextHolidayTitle = nextHoliday?.title,
+                    nextHolidayDateShort = nextHoliday?.dateKey?.let { DateUtils.formatReadableShort(it) }
                 )
             )
+        }
+
+        // Compute & deduplicate-sync anonymous numeric trend summary for school-wide analytics
+        val localTrendSummary = if (bundle.profileLoaded && profile?.setupCompleted == true) {
+            AttendanceCalculator.buildStudentTrendSummary(
+                userId = currentUserId,
+                records = bundle.records,
+                periodBlocks = periodBlocks,
+                priorPresent = profile.priorPresentCount,
+                priorAbsent = profile.priorAbsentCount
+            )
+        } else {
+            null
+        }
+        if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
+            val trendSig = "${localTrendSummary.totalAttended}|${localTrendSummary.totalAbsent}|${localTrendSummary.monthlyTotalsJson}|${localTrendSummary.monthlyWeekdayJson}|${localTrendSummary.allTimeWeekdayAttended.joinToString(",")}|${localTrendSummary.allTimeWeekdayAbsent.joinToString(",")}"
+            if (trendSig != lastSyncedTrendSignature) {
+                lastSyncedTrendSignature = trendSig
+                viewModelScope.launch {
+                    repository.upsertStudentTrendSummary(localTrendSummary)
+                }
+            }
+        }
+        val mergedCommunitySummaries = if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
+            extras.communityTrendSummaries.filterNot { it.userId == currentUserId } + localTrendSummary
+        } else {
+            extras.communityTrendSummaries
         }
 
         val milestones = AttendanceCalculator.calculateMilestones(
@@ -525,7 +596,9 @@ class AttendanceViewModel(
             lastFeedbackPromptVersion = prefs.lastFeedbackPromptVersion,
             localPrefsLoaded = localState.prefsLoaded,
             instantBackgroundAlertsEnabled = prefs.instantBackgroundAlertsEnabled,
-            lastBackgroundCheckMillis = prefs.lastBackgroundCheckMillis
+            lastBackgroundCheckMillis = prefs.lastBackgroundCheckMillis,
+            periodBlocks = periodBlocks,
+            communityTrendSummaries = mergedCommunitySummaries
         )
     }.stateIn(
         scope = viewModelScope,
@@ -587,8 +660,8 @@ class AttendanceViewModel(
             _snackbarMessage.value = "You can't mark attendance for future dates"
             return
         }
-        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
-            _snackbarMessage.value = "This day is locked inside your imported attendance period"
+        if (uiState.value.isDateLocked(dateKey)) {
+            _snackbarMessage.value = "This day is locked inside a saved attendance period"
             return
         }
         _manualCheckInDate.value = dateKey
@@ -788,6 +861,59 @@ class AttendanceViewModel(
         }
     }
 
+    fun savePeriodBlock(
+        startDateKey: String,
+        endDateKey: String,
+        totalSchoolDays: Int,
+        presentDays: Int,
+        absentDays: Int,
+        percentage: Double,
+        entryMode: AttendancePeriodEntryMode,
+        label: String? = null,
+        existingBlockId: String? = null,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val current = uiState.value
+            val result = repository.savePeriodBlock(
+                userId = currentUserId,
+                startDateKey = startDateKey,
+                endDateKey = endDateKey,
+                totalSchoolDays = totalSchoolDays,
+                presentDays = presentDays,
+                absentDays = absentDays,
+                percentage = percentage,
+                entryMode = entryMode,
+                label = label,
+                existingRecords = current.attendanceRecords,
+                existingBlockId = existingBlockId
+            )
+            _isSaving.value = false
+            result.onSuccess { consolidatedCount ->
+                val rangeLabel = "${DateUtils.formatReadableShort(startDateKey)} – ${DateUtils.formatReadableShort(endDateKey)}"
+                val suffix = if (consolidatedCount > 0) " ($consolidatedCount individual entries consolidated)" else ""
+                _snackbarMessage.value = "Locked $rangeLabel • ${presentDays}P / ${absentDays}A (${String.format(java.util.Locale.US, "%.1f%%", percentage)})$suffix"
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not lock attendance period"
+            }
+        }
+    }
+
+    fun deletePeriodBlock(periodId: String) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val result = repository.deletePeriodBlock(currentUserId, periodId)
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = "Time period unlocked — dates are editable in Calendar again"
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not unlock period"
+            }
+        }
+    }
+
     fun updateCustomAvatar(customAvatarBase64: String?) {
         viewModelScope.launch {
             _isSaving.value = true
@@ -829,8 +955,8 @@ class AttendanceViewModel(
             _snackbarMessage.value = "You can't mark attendance for future dates"
             return
         }
-        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
-            _snackbarMessage.value = "Cannot edit days inside your imported attendance period"
+        if (uiState.value.isDateLocked(dateKey)) {
+            _snackbarMessage.value = "Cannot edit days inside a locked attendance period"
             return
         }
         viewModelScope.launch {
@@ -872,8 +998,8 @@ class AttendanceViewModel(
     }
 
     fun deleteAttendance(dateKey: String) {
-        if (uiState.value.profile?.isDateInLockedBaseline(dateKey) == true) {
-            _snackbarMessage.value = "Cannot modify days inside your imported attendance period"
+        if (uiState.value.isDateLocked(dateKey)) {
+            _snackbarMessage.value = "Cannot modify days inside a locked attendance period"
             return
         }
         viewModelScope.launch {
