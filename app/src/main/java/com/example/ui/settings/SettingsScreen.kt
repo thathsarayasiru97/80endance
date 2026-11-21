@@ -1,9 +1,18 @@
 package com.example.ui.settings
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -49,9 +58,13 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.BatteryChargingFull
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Percent
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -96,6 +109,7 @@ import com.example.data.AppThemeMode
 import com.example.data.DateUtils
 import com.example.data.FeedbackType
 import com.example.system.AppUpdateChecker
+import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckStatusSummary
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
@@ -121,6 +135,9 @@ fun SettingsScreen(
     onOpenBaselineImport: () -> Unit = {},
     onClearBaseline: () -> Unit = {},
     onToggleSundayPrep: (Boolean) -> Unit = {},
+    onToggleInstantBackgroundAlerts: (Boolean) -> Unit = {},
+    onCheckBackgroundNotificationsNow: () -> Unit = {},
+    isCheckingBackgroundAlerts: Boolean = false,
     onUpdateAppearance: (AppThemeMode, AppAccentPalette) -> Unit = { _, _ -> },
     onSubmitFeedback: (type: FeedbackType, title: String, message: String, onDone: () -> Unit) -> Unit = { _, _, _, _ -> },
     isSubmittingFeedback: Boolean = false,
@@ -130,6 +147,8 @@ fun SettingsScreen(
     onOpenGitHubReleases: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val profile = state.profile
     val reminderEnabled = profile?.reminderEnabled ?: true
     val reminderHour = profile?.reminderHour ?: 14
@@ -142,9 +161,29 @@ fun SettingsScreen(
     var showPhotoDialog by remember { mutableStateOf(false) }
     var feedbackDialogInitialType by remember { mutableStateOf<FeedbackType?>(null) }
 
+    var notificationsPermitted by remember {
+        mutableStateOf(ReminderScheduler.hasNotificationPermission(context))
+    }
+    var batteryUnrestricted by remember {
+        mutableStateOf(isBatteryOptimizationIgnored(context))
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsPermitted = ReminderScheduler.hasNotificationPermission(context)
+                batteryUnrestricted = isBatteryOptimizationIgnored(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val notifLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { _ ->
+        notificationsPermitted = ReminderScheduler.hasNotificationPermission(context)
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -456,6 +495,267 @@ fun SettingsScreen(
                                 },
                                 modifier = Modifier.testTag("settings_sunday_prep_switch")
                             )
+                        }
+                    }
+                }
+            }
+
+            // Background Notifications Control & Reliability Card
+            item {
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_background_notifications_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Surface(
+                                    color = if (notificationsPermitted) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.errorContainer
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (notificationsPermitted) {
+                                                Icons.Rounded.Bolt
+                                            } else {
+                                                Icons.Rounded.NotificationsOff
+                                            },
+                                            contentDescription = "Background notifications",
+                                            tint = if (notificationsPermitted) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Background Notifications",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        text = when {
+                                            !notificationsPermitted -> "Notifications are blocked on this device"
+                                            state.instantBackgroundAlertsEnabled -> "Live listener + periodic wakeup active"
+                                            else -> "Periodic background checks active"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (!notificationsPermitted) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+                            Surface(
+                                color = when {
+                                    !notificationsPermitted -> MaterialTheme.colorScheme.errorContainer
+                                    state.instantBackgroundAlertsEnabled -> Color(0xFF1B8A4B).copy(alpha = 0.16f)
+                                    else -> MaterialTheme.colorScheme.secondaryContainer
+                                },
+                                shape = RoundedCornerShape(999.dp)
+                            ) {
+                                Text(
+                                    text = when {
+                                        !notificationsPermitted -> "Blocked"
+                                        state.instantBackgroundAlertsEnabled -> "Instant"
+                                        else -> "Periodic"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = when {
+                                        !notificationsPermitted -> MaterialTheme.colorScheme.onErrorContainer
+                                        state.instantBackgroundAlertsEnabled -> Color(0xFF15733E)
+                                        else -> MaterialTheme.colorScheme.onSecondaryContainer
+                                    },
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        if (!notificationsPermitted) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Allow notifications so announcements pop up when the app is closed.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            }
+                                            openAppNotificationSettings(context)
+                                        },
+                                        modifier = Modifier.testTag("settings_allow_notifications_button")
+                                    ) {
+                                        Text("Allow")
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Instant Background Alerts",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Keeps a silent listener running so school & class announcements arrive within seconds even after closing 80endance from Recent Apps.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = state.instantBackgroundAlertsEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    onToggleInstantBackgroundAlerts(enabled)
+                                },
+                                modifier = Modifier.testTag("settings_instant_bg_alerts_switch")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        // Battery optimization status & OEM guidance
+                        Surface(
+                            color = if (batteryUnrestricted) {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            } else {
+                                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.BatteryChargingFull,
+                                    contentDescription = "Battery optimization",
+                                    tint = if (batteryUnrestricted) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.tertiary
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (batteryUnrestricted) {
+                                            "Battery: Unrestricted (Best)"
+                                        } else {
+                                            "Battery: Restricted / Optimized"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (batteryUnrestricted) {
+                                            "Android won't kill background alerts when you swipe the app away."
+                                        } else {
+                                            "On Xiaomi, Samsung, Oppo & Vivo, open Battery Settings and choose \"Unrestricted\" so swiped apps keep receiving alerts."
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = { openAppBatterySettings(context) },
+                                    modifier = Modifier.testTag("settings_battery_settings_button")
+                                ) {
+                                    Text("Battery")
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val lastCheckLabel = if (state.lastBackgroundCheckMillis > 0L) {
+                                "Last checked: ${DateUtils.formatClockTime(state.lastBackgroundCheckMillis)}"
+                            } else {
+                                "Ready for background checks"
+                            }
+                            Text(
+                                text = lastCheckLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = onCheckBackgroundNotificationsNow,
+                                enabled = !isCheckingBackgroundAlerts,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.testTag("settings_check_bg_now_button")
+                            ) {
+                                if (isCheckingBackgroundAlerts) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (isCheckingBackgroundAlerts) "Checking…" else "Check Now")
+                            }
                         }
                     }
                 }
@@ -993,5 +1293,52 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+private fun isBatteryOptimizationIgnored(context: Context): Boolean {
+    return runCatching {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+    }.getOrDefault(false)
+}
+
+private fun openAppNotificationSettings(context: Context) {
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    } else {
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+    runCatching { context.startActivity(intent) }.onFailure {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }
+    }
+}
+
+private fun openAppBatterySettings(context: Context) {
+    val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.fromParts("package", context.packageName, null)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(detailsIntent) }.onFailure {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }
     }
 }

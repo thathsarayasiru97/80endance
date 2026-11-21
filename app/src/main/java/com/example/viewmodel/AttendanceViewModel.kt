@@ -33,6 +33,7 @@ import com.example.data.SyncStatus
 import com.example.data.UserProfile
 import com.example.data.WeekDaySummary
 import com.example.system.AttendanceWidgetStore
+import com.example.system.BackgroundBroadcastChecker
 import com.example.system.ReminderScheduler
 import com.example.system.SyncScheduler
 import com.example.system.WidgetSnapshot
@@ -101,7 +102,9 @@ data class StudentAppState(
     val resolvedFeedbackAlerts: List<FeedbackReport> = emptyList(),
     val lastSeenAppVersion: String = "",
     val lastFeedbackPromptVersion: String = "",
-    val localPrefsLoaded: Boolean = false
+    val localPrefsLoaded: Boolean = false,
+    val instantBackgroundAlertsEnabled: Boolean = true,
+    val lastBackgroundCheckMillis: Long = 0L
 )
 
 private data class CoreFirestoreBundle(
@@ -164,6 +167,11 @@ class AttendanceViewModel(
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
 
+    private val _isCheckingBackgroundAlerts = MutableStateFlow(false)
+    val isCheckingBackgroundAlerts: StateFlow<Boolean> = _isCheckingBackgroundAlerts.asStateFlow()
+
+    private var lastCachedAudienceSignature: String = ""
+
     private fun <T> Flow<T>.safeFirestoreFlow(fallback: T, tag: String): Flow<Pair<T, String?>> =
         this.combine(MutableStateFlow(Unit)) { value, _ -> value to (null as String?) }
             .catch { error ->
@@ -203,7 +211,6 @@ class AttendanceViewModel(
 
     private val _sessionDismissedBroadcastIds = MutableStateFlow<Set<String>>(emptySet())
     private val _sessionAckResolvedFeedbackIds = MutableStateFlow<Set<String>>(emptySet())
-    private val inMemoryNotifiedBroadcastIds = mutableSetOf<String>()
 
     private val adminStreamFlow: Flow<AdminStreamBundle> = if (isVerifiedAdmin) {
         combine(
@@ -422,26 +429,39 @@ class AttendanceViewModel(
             emptyList()
         }
 
-        // Fire real Android system notification STRICTLY ONCE per device (persisted in DataStore notifiedBroadcastIds)
-        if (localState.prefsLoaded && recentMatchingBroadcasts.isNotEmpty()) {
-            val newlyNotifiedIds = mutableListOf<String>()
-            recentMatchingBroadcasts.forEach { bc ->
-                val createdMs = bc.createdAt?.toDate()?.time
-                val freshEnough = createdMs == null || (nowMs - createdMs) <= 48L * 3_600_000L
-                val alreadyNotified = bc.id in prefs.notifiedBroadcastIds || bc.id in prefs.seenBroadcastIds
-                if (freshEnough && !alreadyNotified && inMemoryNotifiedBroadcastIds.add(bc.id)) {
-                    newlyNotifiedIds.add(bc.id)
-                    ReminderScheduler.showBroadcastNotification(
-                        context = appContext,
-                        broadcastId = bc.id,
-                        title = bc.title,
-                        message = bc.message
+        // Keep local DataStore audience cache synced so cold-process background checks never drop broadcasts
+        if (profile != null && profile.setupCompleted) {
+            val sig = "$currentUserId|${profile.grade.trim()}|${profile.alStream.trim()}|${profile.className.trim()}"
+            if (sig != lastCachedAudienceSignature) {
+                lastCachedAudienceSignature = sig
+                viewModelScope.launch {
+                    localPrefs.saveCachedStudentAudience(
+                        userId = currentUserId,
+                        grade = profile.grade,
+                        stream = profile.alStream,
+                        className = profile.className,
+                        setupCompleted = true
                     )
                 }
             }
-            if (newlyNotifiedIds.isNotEmpty()) {
+        }
+
+        // Fire real Android system notification STRICTLY ONCE per device via shared Mutex-protected engine
+        if (localState.prefsLoaded && profile?.setupCompleted == true && recentMatchingBroadcasts.isNotEmpty()) {
+            val hasUnnotified = recentMatchingBroadcasts.any { bc ->
+                bc.id !in prefs.notifiedBroadcastIds && bc.id !in prefs.seenBroadcastIds
+            }
+            if (hasUnnotified && ReminderScheduler.hasNotificationPermission(appContext)) {
+                val snapshotList = recentMatchingBroadcasts.toList()
                 viewModelScope.launch {
-                    localPrefs.markBroadcastsNotified(newlyNotifiedIds)
+                    BackgroundBroadcastChecker.deliverMatchingBroadcasts(
+                        context = appContext,
+                        prefsStore = localPrefs,
+                        userId = currentUserId,
+                        profile = profile,
+                        broadcasts = snapshotList,
+                        maxAgeMillis = 48L * 3_600_000L
+                    )
                 }
             }
         }
@@ -503,7 +523,9 @@ class AttendanceViewModel(
             resolvedFeedbackAlerts = resolvedFeedbackAlerts,
             lastSeenAppVersion = prefs.lastSeenAppVersion,
             lastFeedbackPromptVersion = prefs.lastFeedbackPromptVersion,
-            localPrefsLoaded = localState.prefsLoaded
+            localPrefsLoaded = localState.prefsLoaded,
+            instantBackgroundAlertsEnabled = prefs.instantBackgroundAlertsEnabled,
+            lastBackgroundCheckMillis = prefs.lastBackgroundCheckMillis
         )
     }.stateIn(
         scope = viewModelScope,
@@ -643,7 +665,19 @@ class AttendanceViewModel(
             _isSaving.value = false
             result.onSuccess {
                 localPrefs.saveReminder(reminderEnabled, reminderHour, reminderMinute)
+                localPrefs.saveCachedStudentAudience(
+                    userId = currentUserId,
+                    grade = grade,
+                    stream = alStream,
+                    className = className,
+                    setupCompleted = true
+                )
                 ReminderScheduler.scheduleDailyReminder(appContext, reminderEnabled, reminderHour, reminderMinute)
+                SyncScheduler.ensureAllBackgroundChecksScheduled(
+                    context = appContext,
+                    instantListenerEnabled = uiState.value.instantBackgroundAlertsEnabled,
+                    allowStartForegroundService = true
+                )
                 if (!isExisting) {
                     // Record current version so first-time users see Feedback Welcome (not What's New)
                     localPrefs.markAppVersionSeen(BuildConfig.VERSION_NAME)
@@ -952,6 +986,44 @@ class AttendanceViewModel(
     fun setAppearance(themeMode: AppThemeMode, accentPalette: AppAccentPalette) {
         viewModelScope.launch {
             localPrefs.saveAppearance(themeMode, accentPalette)
+        }
+    }
+
+    fun setInstantBackgroundAlertsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            localPrefs.saveInstantBackgroundAlertsEnabled(enabled)
+            SyncScheduler.ensureAllBackgroundChecksScheduled(
+                context = appContext,
+                instantListenerEnabled = enabled,
+                allowStartForegroundService = true
+            )
+            _snackbarMessage.value = if (enabled) {
+                "Instant background alerts enabled — announcements will arrive even when app is closed"
+            } else {
+                "Instant listener paused — periodic background checks remain active"
+            }
+        }
+    }
+
+    fun checkBackgroundNotificationsNow() {
+        if (_isCheckingBackgroundAlerts.value) return
+        viewModelScope.launch {
+            _isCheckingBackgroundAlerts.value = true
+            try {
+                val result = BackgroundBroadcastChecker.checkAndDeliver(appContext)
+                _snackbarMessage.value = when {
+                    result.permissionMissing ->
+                        "Notifications are blocked — tap Allow Notifications first"
+                    result.error != null ->
+                        "Background check couldn't complete: ${result.error}"
+                    result.deliveredCount > 0 ->
+                        "Delivered ${result.deliveredCount} new announcement notification${if (result.deliveredCount == 1) "" else "s"}!"
+                    else ->
+                        "Background check OK — you're all caught up!"
+                }
+            } finally {
+                _isCheckingBackgroundAlerts.value = false
+            }
         }
     }
 

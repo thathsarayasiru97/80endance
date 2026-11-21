@@ -810,5 +810,82 @@ class ScreensRenderRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("calendar_admin_add_event_button").assertIsDisplayed()
     }
+
+    @Test
+    fun settingsScreenRendersBackgroundNotificationsCardAndControls() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    SettingsScreen(
+                        state = sampleState.copy(
+                            instantBackgroundAlertsEnabled = true,
+                            lastBackgroundCheckMillis = 1_750_000_000_000L
+                        ),
+                        isVerifiedAdmin = false,
+                        onEditProfile = {},
+                        onUpdatePreferences = { _, _, _, _ -> },
+                        onPreviewCheckInPopup = {},
+                        onManualSync = {},
+                        onOpenAdminPanel = {},
+                        onSignOut = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_background_notifications_card"))
+        composeTestRule.onNodeWithTag("settings_background_notifications_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_instant_bg_alerts_switch").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_check_bg_now_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun cachedStudentAudienceProfileMatchesTargetedBroadcastInColdProcess() {
+        val prefs = com.example.data.LocalReminderPrefs(
+            cachedUserId = "student_42",
+            cachedGrade = "Grade 12",
+            cachedStream = "Bio Science",
+            cachedClassName = "12S2",
+            cachedSetupCompleted = true
+        )
+        val cachedProfile = prefs.toCachedUserProfile()
+        org.junit.Assert.assertNotNull(cachedProfile)
+
+        val classBroadcast = BroadcastNotification(
+            id = "bc_class",
+            title = "Lab Cancelled",
+            message = "No Biology practical today for 12S2.",
+            targetAll = false,
+            targetClasses = listOf("12S2")
+        )
+        val otherClassBroadcast = BroadcastNotification(
+            id = "bc_other",
+            title = "Commerce Seminar",
+            message = "Only for 13C1.",
+            targetAll = false,
+            targetClasses = listOf("13C1")
+        )
+
+        org.junit.Assert.assertTrue(classBroadcast.matchesStudent(cachedProfile, "student_42"))
+        org.junit.Assert.assertFalse(otherClassBroadcast.matchesStudent(cachedProfile, "student_42"))
+
+        val incompletePrefs = prefs.copy(cachedSetupCompleted = false)
+        org.junit.Assert.assertNull(incompletePrefs.toCachedUserProfile())
+    }
+
+    @Test
+    fun backgroundListenerNotificationAndSchedulerBuildCleanlyOnSdk36() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        com.example.system.ReminderScheduler.ensureNotificationChannel(context)
+        val notification = com.example.system.ReminderScheduler.buildBackgroundListenerNotification(context)
+        org.junit.Assert.assertNotNull(notification)
+        org.junit.Assert.assertEquals(
+            com.example.system.ReminderScheduler.BACKGROUND_SERVICE_CHANNEL_ID,
+            notification.channelId
+        )
+        com.example.system.SyncScheduler.scheduleBackgroundBroadcastAlarm(context, delayMs = 60_000L)
+        com.example.system.SyncScheduler.cancelBackgroundBroadcastAlarm(context)
+    }
 }
 

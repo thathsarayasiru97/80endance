@@ -2,6 +2,7 @@ package com.example.system
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -20,9 +21,11 @@ import java.util.Calendar
 object ReminderScheduler {
     const val CHANNEL_ID = "daily_checkin_channel"
     const val BROADCAST_CHANNEL_ID = "admin_broadcast_channel"
+    const val BACKGROUND_SERVICE_CHANNEL_ID = "background_listener_channel"
     const val NOTIFICATION_ID = 8001
     const val CONFIRMATION_NOTIFICATION_ID = 8002
     const val SUNDAY_PREP_NOTIFICATION_ID = 8003
+    const val BACKGROUND_SERVICE_NOTIFICATION_ID = 8099
     const val ACTION_DAILY_REMINDER = "com.example.action.DAILY_REMINDER"
     const val ACTION_SUNDAY_PREP = "com.example.action.SUNDAY_PREP"
     const val ACTION_QUICK_YES = "com.example.action.QUICK_YES"
@@ -32,6 +35,7 @@ object ReminderScheduler {
 
     private const val REQUEST_CODE_ALARM = 8010
     private const val REQUEST_CODE_SUNDAY_PREP = 8011
+    private const val REQUEST_CODE_BG_SERVICE_TAP = 8012
     private const val TAG = "ReminderScheduler"
 
     fun ensureNotificationChannel(context: Context) {
@@ -51,26 +55,79 @@ object ReminderScheduler {
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Custom announcements sent to your grade, stream, or class."
+                enableVibration(true)
+                enableLights(true)
+            }
+            val backgroundServiceChannel = NotificationChannel(
+                BACKGROUND_SERVICE_CHANNEL_ID,
+                context.getString(R.string.bg_service_channel_name),
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = context.getString(R.string.bg_service_channel_desc)
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
             }
             manager.createNotificationChannel(channel)
             manager.createNotificationChannel(broadcastChannel)
+            manager.createNotificationChannel(backgroundServiceChannel)
         }
     }
 
-    fun showBroadcastNotification(
-        context: Context,
-        broadcastId: String,
-        title: String,
-        message: String
-    ) {
+    fun hasNotificationPermission(context: Context): Boolean {
         val appContext = context.applicationContext
-        ensureNotificationChannel(appContext)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 appContext,
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) return
+            if (!granted) return false
+        }
+        return NotificationManagerCompat.from(appContext).areNotificationsEnabled()
+    }
+
+    fun buildBackgroundListenerNotification(context: Context): Notification {
+        val appContext = context.applicationContext
+        ensureNotificationChannel(appContext)
+        val openIntent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            appContext,
+            REQUEST_CODE_BG_SERVICE_TAP,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(appContext, BACKGROUND_SERVICE_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(appContext.getString(R.string.bg_service_notif_title))
+            .setContentText(appContext.getString(R.string.bg_service_notif_body))
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSilent(true)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
+            .setContentIntent(contentPendingIntent)
+            .build()
+    }
+
+    /**
+     * Posts a high-priority heads-up announcement notification.
+     * Returns true if posted successfully, false if notification permission is missing or blocked.
+     */
+    fun showBroadcastNotification(
+        context: Context,
+        broadcastId: String,
+        title: String,
+        message: String
+    ): Boolean {
+        val appContext = context.applicationContext
+        ensureNotificationChannel(appContext)
+        if (!hasNotificationPermission(appContext)) {
+            Log.w(TAG, "Skipping broadcast notification ($broadcastId): notification permission not granted")
+            return false
         }
 
         val openIntent = Intent(appContext, MainActivity::class.java).apply {
@@ -85,20 +142,24 @@ object ReminderScheduler {
 
         val notification = NotificationCompat.Builder(appContext, BROADCAST_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
+            .setContentTitle(title.ifBlank { appContext.getString(R.string.app_name) })
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(contentPendingIntent)
             .build()
 
-        runCatching {
+        return runCatching {
             val notifId = 9100 + (broadcastId.hashCode().and(0x3FF))
             NotificationManagerCompat.from(appContext).notify(notifId, notification)
+            true
         }.onFailure { e ->
             Log.w(TAG, "Could not show broadcast notification: ${e.message}")
-        }
+        }.getOrDefault(false)
     }
 
     fun scheduleDailyReminder(context: Context, enabled: Boolean, hour: Int, minute: Int) {

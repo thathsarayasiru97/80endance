@@ -1,11 +1,15 @@
 package com.example
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -78,6 +82,7 @@ import com.example.data.ReleaseNotesCatalog
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.AttendanceWidgetStore
+import com.example.system.BackgroundNotificationService
 import com.example.system.ReminderScheduler
 import com.example.system.SyncScheduler
 import com.example.system.UpdateCheckResult
@@ -411,6 +416,50 @@ private fun AuthenticatedAppShell(
     val manualCheckInDate by attendanceViewModel.manualCheckInDate.collectAsStateWithLifecycle()
     val snackbarMessage by attendanceViewModel.snackbarMessage.collectAsStateWithLifecycle()
     val isSaving by attendanceViewModel.isSaving.collectAsStateWithLifecycle()
+    val isCheckingBackgroundAlerts by attendanceViewModel.isCheckingBackgroundAlerts.collectAsStateWithLifecycle()
+
+    var hasRequestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && state.profile?.setupCompleted == true) {
+            SyncScheduler.ensureAllBackgroundChecksScheduled(
+                context = context,
+                instantListenerEnabled = state.instantBackgroundAlertsEnabled,
+                allowStartForegroundService = true
+            )
+        }
+    }
+
+    // Request POST_NOTIFICATIONS once for already-setup users on Android 13+ so background alerts aren't silently blocked
+    LaunchedEffect(state.profile?.setupCompleted, state.localPrefsLoaded) {
+        if (state.profile?.setupCompleted == true && state.localPrefsLoaded) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                !hasRequestedNotificationPermission &&
+                !ReminderScheduler.hasNotificationPermission(context)
+            ) {
+                hasRequestedNotificationPermission = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    // Arm Triple-Layer background notification engine whenever signed-in student is foregrounded
+    LaunchedEffect(
+        user.uid,
+        state.profile?.setupCompleted,
+        state.localPrefsLoaded,
+        state.instantBackgroundAlertsEnabled,
+        isAppForeground
+    ) {
+        if (state.profile?.setupCompleted == true && state.localPrefsLoaded && isAppForeground) {
+            SyncScheduler.ensureAllBackgroundChecksScheduled(
+                context = context,
+                instantListenerEnabled = state.instantBackgroundAlertsEnabled,
+                allowStartForegroundService = true
+            )
+        }
+    }
 
     var currentTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
     var editingProfileInSettings by rememberSaveable { mutableStateOf(false) }
@@ -619,6 +668,11 @@ private fun AuthenticatedAppShell(
                             onOpenAdminPanel = { if (isAdmin) showAdminPanel = true },
                             onSignOut = {
                                 attendanceViewModel.setPresence(false)
+                                BackgroundNotificationService.stop(context)
+                                SyncScheduler.cancelBackgroundBroadcastAlarm(context)
+                                scope.launch {
+                                    LocalPreferencesStore(context).clearCachedStudentAudience()
+                                }
                                 AttendanceWidgetStore.saveAndRefresh(context, WidgetSnapshot(signedIn = false))
                                 signOutGoogle(credentialManager, scope)
                             },
@@ -626,6 +680,13 @@ private fun AuthenticatedAppShell(
                             onOpenBaselineImport = { showBaselineImportDialog = true },
                             onClearBaseline = { attendanceViewModel.clearAttendancePercentageBaseline() },
                             onToggleSundayPrep = { enabled -> attendanceViewModel.setSundayPrepEnabled(enabled) },
+                            onToggleInstantBackgroundAlerts = { enabled ->
+                                attendanceViewModel.setInstantBackgroundAlertsEnabled(enabled)
+                            },
+                            onCheckBackgroundNotificationsNow = {
+                                attendanceViewModel.checkBackgroundNotificationsNow()
+                            },
+                            isCheckingBackgroundAlerts = isCheckingBackgroundAlerts,
                             onUpdateAppearance = { mode, palette -> attendanceViewModel.setAppearance(mode, palette) },
                             onSubmitFeedback = { type, title, message, onDone ->
                                 attendanceViewModel.submitFeedback(type, title, message, onDone)

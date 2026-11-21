@@ -10,7 +10,10 @@ import kotlinx.coroutines.launch
 
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        val action = intent?.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) {
+            return
+        }
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -27,7 +30,10 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 if (prefs.sundayPrepEnabled) {
                     ReminderScheduler.scheduleSundayPrep(appContext, true)
                 }
+                // Re-arm background notification backups after reboot or APK update
+                // (Do NOT start ForegroundService from boot/package-replaced on Android 12+ to obey background FGS restrictions)
                 SyncScheduler.schedulePeriodicNotificationSync(appContext)
+                SyncScheduler.scheduleBackgroundBroadcastAlarm(appContext, delayMs = 15_000L)
             } finally {
                 pendingResult.finish()
             }

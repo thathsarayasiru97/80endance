@@ -1,9 +1,12 @@
 package com.example.system
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.job.JobInfo
 import android.app.job.JobScheduler
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -17,7 +20,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 object SyncScheduler {
     private const val SYNC_JOB_ID = 80801
     private const val PERIODIC_NOTIFICATION_SYNC_JOB_ID = 80802
+    private const val REQUEST_CODE_BROADCAST_ALARM = 80803
     private const val PERIODIC_INTERVAL_MS = 15L * 60L * 1000L // 15 min minimum allowed by Android JobScheduler
+    const val DEFAULT_BROADCAST_ALARM_INTERVAL_MS = 2L * 60L * 1000L // 2 min Doze-aware wakeup backup
     private const val TAG = "SyncScheduler"
 
     fun scheduleBackgroundSync(context: Context) {
@@ -38,9 +43,8 @@ object SyncScheduler {
     }
 
     /**
-     * Schedules a Play-policy-compliant periodic JobScheduler task (every 15 minutes, persisted across reboots)
-     * that checks Firestore for newly released admin announcements and delivers them as device notifications
-     * even when the app is closed.
+     * Layer 3: Schedules a Play-policy-compliant periodic JobScheduler task (every 15 minutes,
+     * persisted across reboots) that checks Firestore for newly released announcements.
      */
     fun schedulePeriodicNotificationSync(context: Context) {
         val appContext = context.applicationContext
@@ -59,6 +63,76 @@ object SyncScheduler {
             Log.d(TAG, "Scheduled 15-min periodic background notification sync")
         } else {
             Log.w(TAG, "Could not schedule periodic background notification sync")
+        }
+    }
+
+    /**
+     * Layer 2: Schedules a Doze-aware `AlarmManager.setAndAllowWhileIdle` wakeup that checks
+     * Firestore even when the app has been swiped from Recent Apps or the device is idle.
+     */
+    fun scheduleBackgroundBroadcastAlarm(
+        context: Context,
+        delayMs: Long = DEFAULT_BROADCAST_ALARM_INTERVAL_MS
+    ) {
+        val appContext = context.applicationContext
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val intent = Intent(appContext, BroadcastCheckReceiver::class.java).apply {
+            action = BroadcastCheckReceiver.ACTION_CHECK_BROADCASTS
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            appContext,
+            REQUEST_CODE_BROADCAST_ALARM,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val triggerAt = System.currentTimeMillis() + delayMs.coerceAtLeast(5_000L)
+        runCatching {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                pendingIntent
+            )
+            Log.d(TAG, "Armed background broadcast check alarm in ${delayMs / 1000}s")
+        }.onFailure { err ->
+            Log.w(TAG, "Could not arm background broadcast alarm: ${err.message}")
+        }
+    }
+
+    fun cancelBackgroundBroadcastAlarm(context: Context) {
+        val appContext = context.applicationContext
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val intent = Intent(appContext, BroadcastCheckReceiver::class.java).apply {
+            action = BroadcastCheckReceiver.ACTION_CHECK_BROADCASTS
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            appContext,
+            REQUEST_CODE_BROADCAST_ALARM,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        runCatching { alarmManager.cancel(pendingIntent) }
+    }
+
+    /**
+     * Arms all three background notification layers:
+     * 1. Real-time `remoteMessaging` Foreground Listener (when enabled & started from foreground UI)
+     * 2. 2-minute Doze-aware AlarmManager wakeup
+     * 3. 15-minute persisted JobScheduler backup
+     */
+    fun ensureAllBackgroundChecksScheduled(
+        context: Context,
+        instantListenerEnabled: Boolean,
+        allowStartForegroundService: Boolean
+    ) {
+        val appContext = context.applicationContext
+        scheduleBackgroundBroadcastAlarm(appContext)
+        schedulePeriodicNotificationSync(appContext)
+        if (instantListenerEnabled) {
+            if (allowStartForegroundService) {
+                BackgroundNotificationService.start(appContext)
+            }
+        } else {
+            BackgroundNotificationService.stop(appContext)
         }
     }
 

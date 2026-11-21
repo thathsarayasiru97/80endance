@@ -36,10 +36,32 @@ data class LocalReminderPrefs(
     /** Last app versionName whose "What's New" dialog or initial setup was recorded. */
     val lastSeenAppVersion: String = "",
     /** Last app versionName for which the Feedback Encouragement popup was shown. */
-    val lastFeedbackPromptVersion: String = ""
+    val lastFeedbackPromptVersion: String = "",
+    /** Keeps the real-time silent background listener active for instant notifications even when swiped away. */
+    val instantBackgroundAlertsEnabled: Boolean = true,
+    /** Epoch millis of the most recent successful background announcement check. */
+    val lastBackgroundCheckMillis: Long = 0L,
+    /** Cached student audience attributes so cold-process background checks work even if profile fetch lags. */
+    val cachedUserId: String = "",
+    val cachedGrade: String = "",
+    val cachedStream: String = "",
+    val cachedClassName: String = "",
+    val cachedSetupCompleted: Boolean = false
 ) {
     val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
     val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
+
+    fun toCachedUserProfile(): UserProfile? {
+        if (cachedUserId.isBlank() || !cachedSetupCompleted) return null
+        return UserProfile(
+            id = cachedUserId,
+            userId = cachedUserId,
+            grade = cachedGrade,
+            alStream = cachedStream,
+            className = cachedClassName,
+            setupCompleted = true
+        )
+    }
 }
 
 class LocalPreferencesStore(private val context: Context) {
@@ -56,6 +78,13 @@ class LocalPreferencesStore(private val context: Context) {
     private val keyAckResolvedFeedbackIds = stringSetPreferencesKey("ack_resolved_feedback_ids")
     private val keyLastSeenAppVersion = stringPreferencesKey("last_seen_app_version")
     private val keyLastFeedbackPromptVersion = stringPreferencesKey("last_feedback_prompt_version")
+    private val keyInstantBgAlerts = booleanPreferencesKey("instant_background_alerts_enabled")
+    private val keyLastBgCheckMillis = longPreferencesKey("last_background_check_millis")
+    private val keyCachedUserId = stringPreferencesKey("cached_user_id")
+    private val keyCachedGrade = stringPreferencesKey("cached_student_grade")
+    private val keyCachedStream = stringPreferencesKey("cached_student_stream")
+    private val keyCachedClassName = stringPreferencesKey("cached_student_class")
+    private val keyCachedSetupCompleted = booleanPreferencesKey("cached_setup_completed")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -71,7 +100,14 @@ class LocalPreferencesStore(private val context: Context) {
             notifiedBroadcastIds = prefs[keyNotifiedBroadcastIds] ?: emptySet(),
             acknowledgedResolvedFeedbackIds = prefs[keyAckResolvedFeedbackIds] ?: emptySet(),
             lastSeenAppVersion = prefs[keyLastSeenAppVersion] ?: "",
-            lastFeedbackPromptVersion = prefs[keyLastFeedbackPromptVersion] ?: ""
+            lastFeedbackPromptVersion = prefs[keyLastFeedbackPromptVersion] ?: "",
+            instantBackgroundAlertsEnabled = prefs[keyInstantBgAlerts] ?: true,
+            lastBackgroundCheckMillis = prefs[keyLastBgCheckMillis] ?: 0L,
+            cachedUserId = prefs[keyCachedUserId] ?: "",
+            cachedGrade = prefs[keyCachedGrade] ?: "",
+            cachedStream = prefs[keyCachedStream] ?: "",
+            cachedClassName = prefs[keyCachedClassName] ?: "",
+            cachedSetupCompleted = prefs[keyCachedSetupCompleted] ?: false
         )
     }
 
@@ -154,6 +190,45 @@ class LocalPreferencesStore(private val context: Context) {
         if (versionName.isBlank()) return
         context.appPrefsDataStore.edit { prefs ->
             prefs[keyLastFeedbackPromptVersion] = versionName.trim()
+        }
+    }
+
+    suspend fun saveInstantBackgroundAlertsEnabled(enabled: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyInstantBgAlerts] = enabled
+        }
+    }
+
+    suspend fun markBackgroundCheckNow() {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastBgCheckMillis] = System.currentTimeMillis()
+        }
+    }
+
+    suspend fun saveCachedStudentAudience(
+        userId: String,
+        grade: String,
+        stream: String,
+        className: String,
+        setupCompleted: Boolean
+    ) {
+        if (userId.isBlank()) return
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyCachedUserId] = userId.trim()
+            prefs[keyCachedGrade] = grade.trim()
+            prefs[keyCachedStream] = stream.trim()
+            prefs[keyCachedClassName] = className.trim()
+            prefs[keyCachedSetupCompleted] = setupCompleted
+        }
+    }
+
+    suspend fun clearCachedStudentAudience() {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyCachedUserId] = ""
+            prefs[keyCachedGrade] = ""
+            prefs[keyCachedStream] = ""
+            prefs[keyCachedClassName] = ""
+            prefs[keyCachedSetupCompleted] = false
         }
     }
 }

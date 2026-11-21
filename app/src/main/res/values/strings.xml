@@ -30,4 +30,8 @@
     <string name="widget_description">View your live 80% attendance, streak, and log today in one tap.</string>
     <string name="widget_action_present">Present</string>
     <string name="widget_action_absent">Absent</string>
+    <string name="bg_service_channel_name">Background Announcement Listener</string>
+    <string name="bg_service_channel_desc">Silent status notification that keeps school and class announcements arriving even after closing the app.</string>
+    <string name="bg_service_notif_title">80endance • Active in background</string>
+    <string name="bg_service_notif_body">Listening for school &amp; class announcements</string>
 </resources>
