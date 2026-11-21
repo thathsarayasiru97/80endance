@@ -4,106 +4,70 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20%7C%20Material%203-2C3E7B)](https://developer.android.com/compose)
 
-**80endance** is an offline-capable Android attendance tracker built for **Royal College, Colombo** GCE A/L students (Grade 12 & Grade 13) to track daily attendance against the **80% GCE A/L exam eligibility** requirement.
+**80endance** is an offline-first Android attendance tracker built for **Royal College, Colombo** GCE A/L students (Grade 12 & Grade 13) to track daily attendance against the **80% GCE A/L exam eligibility** requirement.
 
 ---
 
 ## Features
 
-- **80% Exam Eligibility Dashboard**
-  - Animated circular eligibility gauge with a **Current Term / Overall (G12 & G13)** toggle.
-  - Real-time safe-skip and recovery-day calculations so you always know where you stand.
-  - A/L exam year countdown badge, personal attendance streak (bridging weekends, Poya days, and school holidays), and a Mon–Fri weekly summary card.
-- **Daily Check-In Reminder & Quick Popup**
-  - Customizable daily notification reminder with quick **Yes / No** actions.
-  - Fast in-app **"Did you attend school today?"** check-in sheet:
-    - **Yes:** Logs Present with optional tags for your three A/L subjects and notes.
-    - **No:** Choose from **Absent**, **Medical Excused**, **School Event**, or **No School / Holiday** with an optional note.
-- **Pinned School & Class Notices**
-  - Auto-advancing 5-second notice slideshow on the dashboard for school-wide, stream-specific, and class-specific announcements.
-- **Sri Lankan Poya & School Term Calendar**
-  - Monthly attendance calendar pre-loaded with Sri Lankan Full Moon Poya days and school term dates.
-  - Tap any date to view or update your attendance entry.
-- **Term Reports & Export**
-  - Term-by-term attendance breakdown, subject attendance counts, and one-tap summary sharing via the Android Share Sheet.
-- **Offline-First & Background Sync**
-  - Works seamlessly without an internet connection using an on-device Firestore cache and automatically syncs pending entries in the background once connectivity returns.
-- **Personalized A/L Setup**
-  - Sign in with Google and configure your name, optional nickname, Grade, A/L Stream, Class, A/L Exam Year, three subjects, preferred reminder time, and optional mid-term starting attendance balance.
+- **80% Eligibility Dashboard**
+  - Animated eligibility gauge (**Current Term / Overall**), safe-skip & recovery-day math, spotlight A/L countdown, personal attendance streak, and live student count pulse.
+  - Pinned updates slideshow always on top, followed by targeted announcements and feedback resolution alerts.
+- **Daily Check-In, Baseline Import & Period Locking**
+  - Daily reminder with quick **Yes / No** actions and in-app check-in sheet (Present with subject tags, Absent, Medical, School Event, or No School).
+  - **Import Attendance Calculator** (percentage or days attended up to a date) and **Custom Time-Period Locking** (log days missed, days attended, or % for any date range and lock it on the calendar to avoid duplicate counts).
+- **Sri Lankan Holiday & School Calendar**
+  - Pre-loaded with Sri Lankan Full Moon Poya and public holidays, separate from school events, exam-break no-school days, and audience-targeted class/stream notes.
+- **Community & Personal Trends & Reports**
+  - Slidable **Everyone** (default) and **My Stats** cards with **All Time** and **Monthly** views, monthly bar charts, Mon–Fri weekday patterns, term breakdowns, and one-tap summary sharing.
+- **Dynamic Resizable Home Screen Widget**
+  - Adaptive 2×2 to 4×4 widget showing live eligibility progress, **This Week's Mon–Fri attendance strip**, A/L countdown, next holiday, 1-tap **Present / Absent** buttons, and manual refresh.
+- **Background Notifications & In-App Updates**
+  - Background notification delivery for targeted admin broadcasts, automatic GitHub Releases update checking, and What's New release popups.
+- **Admin Panel**
+  - Live online counter, student directory with last-seen timestamps and installed app versions, multi-audience broadcast composer, bug/suggestion inbox, calendar event editor, and editable stream/class/subject catalogs.
+- **Offline-First Sync & Guided Setup**
+  - Google Sign-In, stream-aware class and subject pickers, automatic A/L exam year mapping, and offline Firestore caching with automatic background sync.
 
 ---
 
 ## Download & Install
 
-Pre-built APKs are published automatically in the **[Releases](../../releases)** tab:
+Pre-built APKs are published in the **[Releases](../../releases)** tab:
 
 1. Open the latest release on your Android phone (**Android 7.0 / API 24+**).
-2. Download the `.apk` file under **Assets**.
-3. Tap the downloaded file and approve installing from unknown sources if prompted.
+2. Download the `.apk` file under **Assets** and install it.
 
 ---
 
 ## Tech Stack
 
 - **Language & UI:** Kotlin, Jetpack Compose, Material Design 3
-- **Architecture:** MVVM with `ViewModel`, `StateFlow`, and Kotlin Coroutines
-- **Authentication & Sync:** Firebase Authentication (Google Sign-In via Jetpack Credential Manager) & Cloud Firestore with persistent local disk cache
-- **Preferences & Scheduling:** Jetpack DataStore, `AlarmManager` (daily check-in reminders), `JobScheduler` (network-aware background sync)
+- **Architecture:** MVVM (`ViewModel`, `StateFlow`, Kotlin Coroutines)
+- **Backend & Sync:** Firebase Auth (Google Sign-In via Credential Manager) & Cloud Firestore with persistent offline cache
+- **System & Widgets:** Jetpack DataStore, `AppWidgetProvider`, `AlarmManager`, `JobScheduler`
 
 ---
 
-## Building Locally
+## Building & Automated Releases
 
-### Prerequisites
-- **JDK 21** (compilation targets Java 11 bytecode)
-- **Android SDK** with API 36.1 platform tools
-- **Gradle 9.3.1** (or Android Studio with Gradle configured)
-- A valid `app/google-services.json` configured for package `com.aistudio.eightyendance.rcxkmv`
-
-### Build Commands
+**Prerequisites:** JDK 21, Android SDK (API 36.1), Gradle 9.3.1, and `app/google-services.json` for `com.aistudio.eightyendance.rcxkmv`.
 
 ```bash
-# Build Debug APK
+# Debug APK
 gradle :app:assembleDebug
 
-# Build Release APK (requires signing environment variables)
-KEYSTORE_PATH=/path/to/my-upload-key.jks \
-STORE_PASSWORD=your_store_password \
-KEY_PASSWORD=your_key_password \
+# Release APK
+KEYSTORE_PATH=/path/to/my-upload-key.jks STORE_PASSWORD=... KEY_PASSWORD=... \
 gradle :app:assembleRelease
 ```
 
+### GitHub Actions Workflows
+- **Official Releases (`.github/workflows/release-apk.yml`)** — Runs on version tags (e.g., `v1.6`) or manual dispatch from the **Actions** tab and publishes `80endance-v<version>.apk` with release notes to **Releases**.
+- **Development Builds (`.github/workflows/dev-build.yml`)** — Runs on every push to `main` / `master` / `dev` and uploads `80endance-dev` APKs as workflow artifacts (`com.aistudio.eightyendance.rcxkmv.dev` for side-by-side installs).
+
+> Configure `RELEASE_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` (plus optional `GOOGLE_SERVICES_JSON_BASE64`) in repository **Actions Secrets** for release-signed builds. Register your release SHA-1/SHA-256 in Firebase Console for Google Sign-In.
+
 ---
 
-## Automated Builds & Releases (GitHub Actions)
-
-This repository uses two separate workflows so testing builds stay separate from public releases:
-
-1. **Official Releases — `80endance` (`.github/workflows/release-apk.yml`)**
-   - Triggers when you push a version tag (e.g., `v1.0`, `v1.1`) or manually run the workflow from the **Actions** tab.
-   - Publishes `80endance-v<version>.apk` directly to the **[Releases](../../releases)** tab.
-2. **Development Builds — `80endance-dev` (`.github/workflows/dev-build.yml`)**
-   - Triggers automatically on every push to `main` / `master` / `dev`.
-   - Uploads `80endance-dev-build.<N>-<sha>.apk` as a **GitHub Actions Artifact** (downloadable under the **Actions** tab) without cluttering **Releases**.
-   - Automatically enables side-by-side installation (`com.aistudio.eightyendance.rcxkmv.dev`) alongside the main `80endance` app once `com.aistudio.eightyendance.rcxkmv.dev` is registered in the same Firebase project and included in `app/google-services.json`.
-
-### Release Signing Setup (Optional for Production APKs)
-
-If release signing secrets are not configured yet, builds fall back to the bundled debug keystore so pushes and tags work out of the box.
-
-To publish **release-signed APKs** automatically:
-
-1. Generate an upload keystore (keep the alias as `upload` to match `app/build.gradle.kts`):
-   ```bash
-   keytool -genkey -v -keystore my-upload-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
-   ```
-2. Convert the keystore to Base64:
-   ```bash
-   base64 -w 0 my-upload-key.jks
-   ```
-3. In your GitHub repository, go to **Settings → Secrets and variables → Actions** and add:
-   - `RELEASE_KEYSTORE_BASE64`: Base64 output from Step 2
-   - `STORE_PASSWORD`: Your keystore password
-   - `KEY_PASSWORD`: Your key password
-   - *(Optional)* `GOOGLE_SERVICES_JSON_BASE64`: Base64-encoded `app/google-services.json` if you choose not to commit it directly to the repository
-4. Register your release keystore's **SHA-1** and **SHA-256** fingerprints in **Firebase Console → Project Settings → Your Android App** so Google Sign-In works in release builds.
+*Developed by Ataya.*
