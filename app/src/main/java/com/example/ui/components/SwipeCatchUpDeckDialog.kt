@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -95,7 +97,9 @@ fun SwipeCatchUpDeckDialog(
     val orderedDays = remember { missedDays.distinct().sorted() }
     var currentIndex by remember { mutableIntStateOf(0) }
     var isAnimatingOut by remember { mutableStateOf(false) }
+    var medicalFlashActive by remember { mutableStateOf(false) }
     val offsetX = remember { Animatable(0f) }
+    val cardScale = remember { Animatable(1f) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
 
@@ -116,6 +120,12 @@ fun SwipeCatchUpDeckDialog(
                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 if (swipeDir != 0f) {
                     offsetX.animateTo(swipeDir * 900f, animationSpec = tween(160))
+                } else {
+                    medicalFlashActive = (status == AttendanceStatus.MEDICAL)
+                    cardScale.animateTo(0.93f, animationSpec = tween(75))
+                    cardScale.animateTo(1.03f, animationSpec = tween(85))
+                    cardScale.snapTo(1f)
+                    medicalFlashActive = false
                 }
                 onLogDay(dateToLog, status)
                 offsetX.snapTo(0f)
@@ -125,6 +135,8 @@ fun SwipeCatchUpDeckDialog(
                     currentIndex += 1
                 }
             } finally {
+                medicalFlashActive = false
+                cardScale.snapTo(1f)
                 isAnimatingOut = false
             }
         }
@@ -146,6 +158,12 @@ fun SwipeCatchUpDeckDialog(
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
+                    .animateContentSize(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    )
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -226,23 +244,28 @@ fun SwipeCatchUpDeckDialog(
                     )
                 }
 
-                // Card Stack
+                // Card Stack with depth-linked background card rise physics
+                val dragFraction = (offsetX.value / 260f).coerceIn(-1f, 1f)
+                val absDrag = abs(dragFraction)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(234.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Shadow preview of the next card underneath
+                    // Shadow preview of the next card underneath rises & scales up smoothly as top card drags
                     if (currentIndex + 1 < orderedDays.size) {
                         val nextDate = orderedDays[currentIndex + 1]
+                        val nextScale = 0.92f + (0.07f * absDrag)
+                        val nextOffsetY = (14f - (12f * absDrag)).dp
+                        val nextAlpha = (0.62f + (0.34f * absDrag)).coerceIn(0f, 1f)
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(212.dp)
-                                .scale(0.93f)
-                                .offset(y = 14.dp)
-                                .alpha(0.65f),
+                                .scale(nextScale)
+                                .offset(y = nextOffsetY)
+                                .alpha(nextAlpha),
                             shape = RoundedCornerShape(24.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -258,8 +281,8 @@ fun SwipeCatchUpDeckDialog(
                     }
 
                     // Active draggable + tappable card (Right=Present, Left=Absent, Tap=Medical)
-                    val dragFraction = (offsetX.value / 260f).coerceIn(-1f, 1f)
                     val stampColor = when {
+                        medicalFlashActive -> StatusOrange
                         dragFraction > 0.15f -> StatusGreen
                         dragFraction < -0.15f -> StatusRed
                         else -> MaterialTheme.colorScheme.primary
@@ -268,7 +291,8 @@ fun SwipeCatchUpDeckDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(220.dp)
-                            .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                            .offset { IntOffset(offsetX.value.roundToInt(), -(absDrag * 8f).roundToInt()) }
+                            .scale(cardScale.value)
                             .rotate(dragFraction * 9f)
                             .pointerInput(currentDate) {
                                 detectTapGestures(
@@ -300,10 +324,10 @@ fun SwipeCatchUpDeckDialog(
                         shape = RoundedCornerShape(24.dp),
                         color = Color(0xFF0E2144),
                         border = BorderStroke(
-                            width = if (abs(dragFraction) > 0.15f) 2.5.dp else 1.2.dp,
-                            color = if (abs(dragFraction) > 0.15f) stampColor else RoyalGold.copy(alpha = 0.4f)
+                            width = if (medicalFlashActive || absDrag > 0.15f) 2.5.dp else 1.2.dp,
+                            color = if (medicalFlashActive || absDrag > 0.15f) stampColor else RoyalGold.copy(alpha = 0.4f)
                         ),
-                        shadowElevation = 6.dp
+                        shadowElevation = (6f + absDrag * 6f).dp
                     ) {
                         Box(
                             modifier = Modifier
@@ -315,18 +339,28 @@ fun SwipeCatchUpDeckDialog(
                                 )
                                 .padding(20.dp)
                         ) {
-                            // Swipe stamp badge
-                            if (abs(dragFraction) > 0.15f) {
+                            // Swipe or Medical tap stamp badge
+                            if (medicalFlashActive || absDrag > 0.15f) {
                                 Surface(
                                     modifier = Modifier
-                                        .align(if (dragFraction > 0) Alignment.TopStart else Alignment.TopEnd)
-                                        .alpha(abs(dragFraction).coerceIn(0f, 1f)),
-                                    color = stampColor.copy(alpha = 0.22f),
+                                        .align(
+                                            when {
+                                                medicalFlashActive -> Alignment.TopCenter
+                                                dragFraction > 0 -> Alignment.TopStart
+                                                else -> Alignment.TopEnd
+                                            }
+                                        )
+                                        .alpha(if (medicalFlashActive) 1f else absDrag.coerceIn(0f, 1f)),
+                                    color = stampColor.copy(alpha = 0.24f),
                                     shape = RoundedCornerShape(10.dp),
                                     border = BorderStroke(1.5.dp, stampColor)
                                 ) {
                                     Text(
-                                        text = if (dragFraction > 0) "PRESENT ✓" else "ABSENT ✕",
+                                        text = when {
+                                            medicalFlashActive -> "MEDICAL +"
+                                            dragFraction > 0 -> "PRESENT ✓"
+                                            else -> "ABSENT ✕"
+                                        },
                                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Black),
                                         color = Color.White,
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)

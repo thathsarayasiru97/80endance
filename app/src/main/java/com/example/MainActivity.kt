@@ -571,7 +571,8 @@ private fun AuthenticatedAppShell(
     }
 
     // First-time Academic Setup OR Edit Profile flow
-    if (state.profile == null || !state.profile!!.setupCompleted || editingProfileInSettings) {
+    val currentProfile = state.profile
+    if (currentProfile == null || !currentProfile.setupCompleted || editingProfileInSettings) {
         if (editingProfileInSettings) {
             BackHandler { editingProfileInSettings = false }
         }

@@ -2,7 +2,11 @@ package com.example.ui.calendar
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -41,7 +46,6 @@ import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
-import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.Schedule
@@ -68,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -256,16 +261,23 @@ fun CalendarScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 if (hasBaseline) {
-                                    val pctLabel = profile?.baselinePercent?.let {
+                                    val baselineStart = profile.baselineStartDate
+                                    val baselineEnd = profile.baselineEndDate
+                                    val pctLabel = profile.baselinePercent?.let {
                                         String.format(java.util.Locale.US, "%.1f%%", it)
-                                    } ?: "${profile?.priorPresentCount}P / ${profile?.priorAbsentCount}A"
+                                    } ?: "${profile.priorPresentCount}P / ${profile.priorAbsentCount}A"
                                     Text(
                                         text = "Imported Period Locked • $pctLabel",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
+                                    val rangeLabel = if (baselineStart != null && baselineEnd != null) {
+                                        "${DateUtils.formatReadableShort(baselineStart)} → ${DateUtils.formatReadableShort(baselineEnd)} "
+                                    } else {
+                                        ""
+                                    }
                                     Text(
-                                        text = "${DateUtils.formatReadableShort(profile!!.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} (${profile.priorPresentCount}P / ${profile.priorAbsentCount}A) • Tap to update",
+                                        text = "$rangeLabel(${profile.priorPresentCount}P / ${profile.priorAbsentCount}A) • Tap to update",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                                     )
@@ -411,7 +423,14 @@ fun CalendarScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         // Month Header
@@ -661,6 +680,14 @@ fun CalendarScreen(
                                                 animationSpec = tween(240),
                                                 label = "cal_bg_$dateKey"
                                             )
+                                            val bulkScale by animateFloatAsState(
+                                                targetValue = if (isBulkSelected) 1.05f else 1f,
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessMedium
+                                                ),
+                                                label = "cal_bulk_scale_$dateKey"
+                                            )
                                             val textColor = when {
                                                 isBulkSelected -> MaterialTheme.colorScheme.onPrimaryContainer
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
@@ -680,6 +707,10 @@ fun CalendarScreen(
                                                 modifier = Modifier
                                                     .weight(1f)
                                                     .aspectRatio(1f)
+                                                    .graphicsLayer {
+                                                        scaleX = bulkScale
+                                                        scaleY = bulkScale
+                                                    }
                                                     .clip(RoundedCornerShape(12.dp))
                                                     .background(cellBg)
                                                     .then(
@@ -1628,9 +1659,10 @@ fun CalendarScreen(
         }
     }
 
-    if (isVerifiedAdmin && adminEventDialogDate != null && onAdminSaveCalendarEvent != null) {
+    val activeAdminEventDate = adminEventDialogDate
+    if (isVerifiedAdmin && activeAdminEventDate != null && onAdminSaveCalendarEvent != null) {
         AdminCalendarEventEditorDialog(
-            initialDateKey = adminEventDialogDate!!,
+            initialDateKey = activeAdminEventDate,
             editingEvent = editingCalendarEvent,
             students = state.adminAllStudents,
             catalog = state.academicCatalog,
@@ -1649,9 +1681,10 @@ fun CalendarScreen(
         )
     }
 
-    if (markerDialogDate != null && onSavePersonalMarker != null) {
+    val activeMarkerDate = markerDialogDate
+    if (activeMarkerDate != null && onSavePersonalMarker != null) {
         PersonalMarkerDialog(
-            dateKey = markerDialogDate!!,
+            dateKey = activeMarkerDate,
             existingMarker = editingPersonalMarker,
             onDismiss = {
                 markerDialogDate = null
@@ -1686,7 +1719,7 @@ private fun LegendItem(label: String, color: Color) {
 
 private fun calendarEventIcon(type: CalendarEventType) = when (type) {
     CalendarEventType.POYA -> Icons.Rounded.NightsStay
-    CalendarEventType.STUDY_LEAVE -> Icons.Rounded.MenuBook
+    CalendarEventType.STUDY_LEAVE -> Icons.AutoMirrored.Rounded.MenuBook
     CalendarEventType.SCHOOL_HOLIDAY, CalendarEventType.TERM_BREAK -> Icons.Rounded.EventBusy
     CalendarEventType.EXAM -> Icons.Rounded.School
     CalendarEventType.PUBLIC_HOLIDAY, CalendarEventType.SCHOOL_EVENT -> Icons.Rounded.Event

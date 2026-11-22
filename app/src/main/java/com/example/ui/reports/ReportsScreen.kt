@@ -25,8 +25,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.FactCheck
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.FactCheck
 import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Verified
@@ -104,10 +104,11 @@ fun ReportsScreen(
     }
 
     val subjectCounts = remember(state.attendanceRecords, selectedTerm) {
-        val scoped = if (selectedTerm != null) {
+        val term = selectedTerm
+        val scoped = if (term != null) {
             state.attendanceRecords.filter {
-                it.termId == selectedTerm?.id ||
-                    (it.dateKey >= selectedTerm!!.startDate && it.dateKey <= selectedTerm!!.endDate)
+                it.termId == term.id ||
+                    (it.dateKey >= term.startDate && it.dateKey <= term.endDate)
             }
         } else {
             state.attendanceRecords
@@ -448,7 +449,7 @@ fun ReportsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.FactCheck,
+                                    imageVector = Icons.AutoMirrored.Rounded.FactCheck,
                                     contentDescription = "Verify with Class Register",
                                     tint = MaterialTheme.colorScheme.onTertiaryContainer,
                                     modifier = Modifier.size(22.dp)

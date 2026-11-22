@@ -2,6 +2,8 @@ package com.example.ui.home
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -584,49 +586,50 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(12.dp))
 
                             // Actionable Safe-Skip / Recovery Forecast Banner
+                            val forecastBg = when {
+                                privacyBlurred -> MaterialTheme.colorScheme.surfaceContainerLow
+                                activeStats.eligible -> semantic.presentContainer.copy(alpha = 0.7f)
+                                else -> semantic.absentContainer.copy(alpha = 0.85f)
+                            }
+                            val forecastFg = when {
+                                privacyBlurred -> MaterialTheme.colorScheme.onSurfaceVariant
+                                activeStats.eligible -> semantic.onPresentContainer
+                                else -> semantic.onAbsentContainer
+                            }
+                            val forecastText = when {
+                                privacyBlurred -> "Privacy Mode active — % and absent count are hidden. Double-tap the ring or tap Reveal above."
+                                activeStats.totalCountedDays == 0 ->
+                                    "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
+                                activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
+                                    "You're on track! Safe buffer: up to ${activeStats.safeSkipsRemaining} more skip${if (activeStats.safeSkipsRemaining == 1) "" else "s"} without dropping below ${activeStats.thresholdPercent}%."
+                                activeStats.eligible ->
+                                    "Right on the ${activeStats.thresholdPercent}% line — attend the next school day to build a safe buffer."
+                                else ->
+                                    "Below ${activeStats.thresholdPercent}% — attend the next ${activeStats.daysNeededToRecover} consecutive school day${if (activeStats.daysNeededToRecover == 1) "" else "s"} to recover eligibility."
+                            }
                             AnimatedContent(
-                                targetState = Triple(
-                                    privacyBlurred,
-                                    scopeMode,
-                                    Triple(activeStats.eligible, activeStats.totalCountedDays, activeStats.safeSkipsRemaining)
-                                ),
+                                targetState = Triple(forecastBg, forecastFg, forecastText),
                                 transitionSpec = {
                                     (fadeIn(tween(240)) + slideInVertically { 12 })
                                         .togetherWith(fadeOut(tween(180)) + slideOutVertically { -12 })
                                 },
-                                label = "forecast_banner_anim"
-                            ) { _ ->
-                                val forecastBg = when {
-                                    privacyBlurred -> MaterialTheme.colorScheme.surfaceContainerLow
-                                    activeStats.eligible -> semantic.presentContainer.copy(alpha = 0.7f)
-                                    else -> semantic.absentContainer.copy(alpha = 0.85f)
-                                }
-                                val forecastFg = when {
-                                    privacyBlurred -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    activeStats.eligible -> semantic.onPresentContainer
-                                    else -> semantic.onAbsentContainer
-                                }
-                                val forecastText = when {
-                                    privacyBlurred -> "Privacy Mode active — % and absent count are hidden. Double-tap the ring or tap Reveal above."
-                                    activeStats.totalCountedDays == 0 ->
-                                        "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
-                                    activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
-                                        "You're on track! Safe buffer: up to ${activeStats.safeSkipsRemaining} more skip${if (activeStats.safeSkipsRemaining == 1) "" else "s"} without dropping below ${activeStats.thresholdPercent}%."
-                                    activeStats.eligible ->
-                                        "Right on the ${activeStats.thresholdPercent}% line — attend the next school day to build a safe buffer."
-                                    else ->
-                                        "Below ${activeStats.thresholdPercent}% — attend the next ${activeStats.daysNeededToRecover} consecutive school day${if (activeStats.daysNeededToRecover == 1) "" else "s"} to recover eligibility."
-                                }
-
+                                label = "forecast_banner_anim",
+                                modifier = Modifier.animateContentSize(
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                )
+                            ) { (bg, fg, copy) ->
                                 Surface(
-                                    color = forecastBg,
+                                    color = bg,
                                     shape = RoundedCornerShape(16.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text(
-                                        text = forecastText,
+                                        text = copy,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = forecastFg,
+                                        color = fg,
                                         modifier = Modifier.padding(14.dp)
                                     )
                                 }
@@ -1314,6 +1317,12 @@ private fun NextDaySchoolPollCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioLowBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
             .testTag("home_next_day_poll_card")
     ) {
         Column(
@@ -1376,13 +1385,24 @@ private fun NextDaySchoolPollCard(
                     color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(999.dp)
                 ) {
-                    Text(
-                        text = if (summary.totalVotes == 0) "LIVE" else "${summary.totalVotes} voted",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+                    if (summary.totalVotes == 0) {
+                        Text(
+                            text = "LIVE",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    } else {
+                        RollingCounterText(
+                            count = summary.totalVotes,
+                            suffix = " voted",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
 
@@ -1392,13 +1412,38 @@ private fun NextDaySchoolPollCard(
             ) {
                 val yesSelected = myVote == true
                 val noSelected = myVote == false
+                val yesBg by animateColorAsState(
+                    targetValue = if (yesSelected) semantic.present else semantic.presentContainer.copy(alpha = 0.72f),
+                    animationSpec = tween(240),
+                    label = "poll_yes_bg"
+                )
+                val yesFg by animateColorAsState(
+                    targetValue = if (yesSelected) MaterialTheme.colorScheme.onPrimary else semantic.onPresentContainer,
+                    animationSpec = tween(240),
+                    label = "poll_yes_fg"
+                )
+                val noBg by animateColorAsState(
+                    targetValue = if (noSelected) semantic.absentContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                    animationSpec = tween(240),
+                    label = "poll_no_bg"
+                )
+                val noFg by animateColorAsState(
+                    targetValue = if (noSelected) semantic.onAbsentContainer else MaterialTheme.colorScheme.onSurface,
+                    animationSpec = tween(240),
+                    label = "poll_no_fg"
+                )
+                val noBorder by animateColorAsState(
+                    targetValue = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outlineVariant,
+                    animationSpec = tween(240),
+                    label = "poll_no_border"
+                )
 
                 Button(
                     onClick = { onVote(true) },
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (yesSelected) semantic.present else semantic.presentContainer.copy(alpha = 0.72f),
-                        contentColor = if (yesSelected) MaterialTheme.colorScheme.onPrimary else semantic.onPresentContainer
+                        containerColor = yesBg,
+                        contentColor = yesFg
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     modifier = Modifier
@@ -1425,11 +1470,11 @@ private fun NextDaySchoolPollCard(
                     shape = RoundedCornerShape(16.dp),
                     border = BorderStroke(
                         width = if (noSelected) 1.8.dp else 1.dp,
-                        color = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outlineVariant
+                        color = noBorder
                     ),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (noSelected) semantic.absentContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                        contentColor = if (noSelected) semantic.onAbsentContainer else MaterialTheme.colorScheme.onSurface
+                        containerColor = noBg,
+                        contentColor = noFg
                     ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     modifier = Modifier

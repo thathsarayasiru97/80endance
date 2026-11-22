@@ -400,8 +400,8 @@ class AttendanceViewModel(
             thresholdPercent = threshold,
             countExcusedAsPresent = true,
             includePriorBalance = baselineWithinMonth,
-            priorPresent = if (baselineWithinMonth) (profile?.priorPresentCount ?: 0) else 0,
-            priorAbsent = if (baselineWithinMonth) (profile?.priorAbsentCount ?: 0) else 0,
+            priorPresent = if (baselineWithinMonth) profile.priorPresentCount else 0,
+            priorAbsent = if (baselineWithinMonth) profile.priorAbsentCount else 0,
             monthPrefixFilter = monthPrefix,
             lockedRange = lockedRange,
             periodBlocks = periodBlocks
@@ -850,19 +850,19 @@ class AttendanceViewModel(
                 updateBaselineFields = updateBaselineFields
             )
             val currentRecords = uiState.value.attendanceRecords
-            val shouldConsolidateBaseline = result.isSuccess &&
+            if (result.isSuccess &&
                 updateBaselineFields &&
+                isExisting &&
                 baselineStartDate != null &&
                 baselineEndDate != null &&
                 baselinePercent != null &&
-                isExisting &&
                 currentRecords.any { it.dateKey <= baselineEndDate }
-            if (shouldConsolidateBaseline) {
+            ) {
                 repository.saveAttendancePercentageBaseline(
                     userId = currentUserId,
-                    startDateKey = baselineStartDate!!,
-                    endDateKey = baselineEndDate!!,
-                    percentage = baselinePercent!!,
+                    startDateKey = baselineStartDate,
+                    endDateKey = baselineEndDate,
+                    percentage = baselinePercent,
                     presentDays = priorPresentCount,
                     absentDays = priorAbsentCount,
                     existingRecords = currentRecords
@@ -1405,6 +1405,9 @@ class AttendanceViewModel(
         if (uiState.value.isDateLocked(dateKey)) {
             _snackbarMessage.value = "Cannot modify days inside a locked attendance period"
             return
+        }
+        if (_undoableCheckIn.value?.dateKey == dateKey) {
+            _undoableCheckIn.value = null
         }
         viewModelScope.launch {
             val result = repository.deleteAttendance(

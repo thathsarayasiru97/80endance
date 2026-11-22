@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -85,6 +86,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -137,6 +139,7 @@ fun AnimatedEligibilityGauge(
 ) {
     val semantic = LocalAttendanceColors.current
     val haptic = LocalHapticFeedback.current
+    val latestDoubleTap by rememberUpdatedState(onDoubleTapTogglePrivacy)
     val targetPercent = stats.percentage.toFloat().coerceIn(0f, 100f)
     val totalAbsent = stats.absentDays + stats.priorAbsentDays + stats.periodAbsentDays
 
@@ -148,6 +151,22 @@ fun AnimatedEligibilityGauge(
         ),
         label = "gauge_percent"
     )
+    val animatedBlur by animateDpAsState(
+        targetValue = if (privacyBlurred) 10.dp else 0.dp,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "gauge_privacy_blur"
+    )
+    val toggleSquish = remember { Animatable(1f) }
+    LaunchedEffect(privacyBlurred) {
+        toggleSquish.animateTo(0.95f, tween(80))
+        toggleSquish.animateTo(
+            1f,
+            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+        )
+    }
 
     val mutedNeutralColor = MaterialTheme.colorScheme.outlineVariant
     val accentColor by animateColorAsState(
@@ -176,13 +195,17 @@ fun AnimatedEligibilityGauge(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(198.dp)
+            .graphicsLayer {
+                scaleX = toggleSquish.value
+                scaleY = toggleSquish.value
+            }
             .then(
                 if (onDoubleTapTogglePrivacy != null) {
-                    Modifier.pointerInput(Unit) {
+                    Modifier.pointerInput(true) {
                         detectTapGestures(
                             onDoubleTap = {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onDoubleTapTogglePrivacy()
+                                latestDoubleTap?.invoke()
                             }
                         )
                     }
@@ -277,7 +300,7 @@ fun AnimatedEligibilityGauge(
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = if (privacyBlurred) Modifier.blur(10.dp) else Modifier
+            modifier = if (animatedBlur > 0.dp) Modifier.blur(animatedBlur) else Modifier
         ) {
             Text(
                 text = if (privacyBlurred) "••.•%" else String.format(Locale.US, "%.1f%%", animatedPercent),
@@ -923,6 +946,12 @@ fun DailyCheckInDialog(
                 Column(
                     modifier = Modifier
                         .verticalScroll(rememberScrollState())
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
                         .padding(22.dp)
                 ) {
                 Row(
@@ -1229,20 +1258,28 @@ fun DailyCheckInDialog(
                                     )
                                 }
 
-                                val confirmTint = when (selectedNoStatus) {
-                                    AttendanceStatus.ABSENT -> semantic.absent
-                                    AttendanceStatus.MEDICAL -> semantic.medical
-                                    AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
-                                    AttendanceStatus.HOLIDAY -> semantic.poya
-                                    else -> MaterialTheme.colorScheme.primary
-                                }
-                                val confirmContentColor = when (selectedNoStatus) {
-                                    AttendanceStatus.ABSENT -> semantic.onAbsentContainer
-                                    AttendanceStatus.MEDICAL -> semantic.onMedicalContainer
-                                    AttendanceStatus.SCHOOL_EVENT -> semantic.onSchoolEventContainer
-                                    AttendanceStatus.HOLIDAY -> semantic.onPoyaContainer
-                                    else -> MaterialTheme.colorScheme.primary
-                                }
+                                val confirmTint by animateColorAsState(
+                                    targetValue = when (selectedNoStatus) {
+                                        AttendanceStatus.ABSENT -> semantic.absent
+                                        AttendanceStatus.MEDICAL -> semantic.medical
+                                        AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
+                                        AttendanceStatus.HOLIDAY -> semantic.poya
+                                        else -> MaterialTheme.colorScheme.primary
+                                    },
+                                    animationSpec = tween(240),
+                                    label = "checkin_confirm_tint"
+                                )
+                                val confirmContentColor by animateColorAsState(
+                                    targetValue = when (selectedNoStatus) {
+                                        AttendanceStatus.ABSENT -> semantic.onAbsentContainer
+                                        AttendanceStatus.MEDICAL -> semantic.onMedicalContainer
+                                        AttendanceStatus.SCHOOL_EVENT -> semantic.onSchoolEventContainer
+                                        AttendanceStatus.HOLIDAY -> semantic.onPoyaContainer
+                                        else -> MaterialTheme.colorScheme.primary
+                                    },
+                                    animationSpec = tween(240),
+                                    label = "checkin_confirm_content"
+                                )
 
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Row(
