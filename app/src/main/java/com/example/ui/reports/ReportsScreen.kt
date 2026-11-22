@@ -2,10 +2,12 @@ package com.example.ui.reports
 
 import android.content.Intent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,9 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.FactCheck
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.Share
@@ -45,7 +45,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -59,8 +61,6 @@ import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.StrokeCap
 import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -77,7 +77,6 @@ fun ReportsScreen(
     var selectedTerm by remember(state.terms) { mutableStateOf<AcademicTerm?>(null) } // null = Overall (G12 & 13)
     var showMonthlyWrapped by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
-    var showRegisterVerify by remember { mutableStateOf(false) }
 
     val personalInsightsForWrapped = remember(state.attendanceRecords, state.periodBlocks) {
         AttendanceCalculator.calculatePersonalInsightsForScope(
@@ -161,6 +160,29 @@ fun ReportsScreen(
                 }
             }
 
+            // 1. Trends & Patterns Card at the very top of Reports
+            item(key = "reports_trends_card") {
+                StaggeredReveal(index = 0) {
+                    AttendancePatternsAndChartCard(
+                        records = state.attendanceRecords,
+                        thresholdPercent = stats.thresholdPercent,
+                        periodBlocks = state.periodBlocks,
+                        communitySummaries = state.communityTrendSummaries,
+                        profile = state.profile
+                    )
+                }
+            }
+
+            // 2. Interactive "What-If" Skip Simulator right below Trends & Patterns
+            item(key = "reports_skip_simulator_card") {
+                StaggeredReveal(index = 1) {
+                    WhatIfSkipSimulatorCard(
+                        stats = stats,
+                        scopeTitle = selectedTerm?.name ?: "Overall GCE A/L"
+                    )
+                }
+            }
+
             // Scope Chips
             item {
                 FlowRow(
@@ -197,92 +219,99 @@ fun ReportsScreen(
                     animationSpec = tween(360),
                     label = "reports_summary_accent"
                 )
-                StaggeredReveal(index = 1) {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = selectedTerm?.name ?: "Overall GCE A/L",
-                                    style = MaterialTheme.typography.titleMedium
+                StaggeredReveal(index = 2) {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .animateContentSize(
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioLowBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
                                 )
-                                Text(
-                                    text = "${stats.effectiveAttended} of ${stats.totalCountedDays} counted school days",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Text(
-                                text = String.format(Locale.US, "%.1f%%", animatedPct),
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = summaryAccent
                             )
-                        }
-
-                        LinearProgressIndicator(
-                            progress = { (animatedPct / 100f).coerceIn(0f, 1f) },
-                            color = summaryAccent,
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                            strokeCap = StrokeCap.Round,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(10.dp)
-                                .clip(RoundedCornerShape(50))
-                        )
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            StatTile("Present", stats.presentDays, semantic.presentContainer, semantic.onPresentContainer, Modifier.weight(1f))
-                            StatTile("Absent", stats.absentDays, semantic.absentContainer, semantic.onAbsentContainer, Modifier.weight(1f))
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            StatTile("Medical", stats.medicalDays, semantic.medicalContainer, semantic.onMedicalContainer, Modifier.weight(1f))
-                            StatTile("Excused", stats.schoolEventDays, semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
-                        }
-
-                        if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0 || stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val parts = buildList {
-                                    if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
-                                        add("imported baseline: +${stats.priorPresentDays}P / +${stats.priorAbsentDays}A")
-                                    }
-                                    if (stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
-                                        add("locked periods: +${stats.periodPresentDays}P / +${stats.periodAbsentDays}A")
-                                    }
+                                Column {
+                                    Text(
+                                        text = selectedTerm?.name ?: "Overall GCE A/L",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        text = "${stats.effectiveAttended} of ${stats.totalCountedDays} counted school days",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                                 Text(
-                                    text = "Includes ${parts.joinToString(" • ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(10.dp)
+                                    text = String.format(Locale.US, "%.1f%%", animatedPct),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = summaryAccent
                                 )
+                            }
+
+                            LinearProgressIndicator(
+                                progress = { (animatedPct / 100f).coerceIn(0f, 1f) },
+                                color = summaryAccent,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                strokeCap = StrokeCap.Round,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                                    .clip(RoundedCornerShape(50))
+                            )
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                StatTile("Present", stats.presentDays, semantic.presentContainer, semantic.onPresentContainer, Modifier.weight(1f))
+                                StatTile("Absent", stats.absentDays, semantic.absentContainer, semantic.onAbsentContainer, Modifier.weight(1f))
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                StatTile("Medical", stats.medicalDays, semantic.medicalContainer, semantic.onMedicalContainer, Modifier.weight(1f))
+                                StatTile("Excused", stats.schoolEventDays, semantic.schoolEventContainer, semantic.onSchoolEventContainer, Modifier.weight(1f))
+                            }
+
+                            if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0 || stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    val parts = buildList {
+                                        if (stats.priorPresentDays > 0 || stats.priorAbsentDays > 0) {
+                                            add("imported baseline: +${stats.priorPresentDays}P / +${stats.priorAbsentDays}A")
+                                        }
+                                        if (stats.periodPresentDays > 0 || stats.periodAbsentDays > 0) {
+                                            add("locked periods: +${stats.periodPresentDays}P / +${stats.periodAbsentDays}A")
+                                        }
+                                    }
+                                    Text(
+                                        text = "Includes ${parts.joinToString(" • ")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(10.dp)
+                                    )
+                                }
                             }
                         }
                     }
-                }
                 }
             }
 
@@ -338,15 +367,7 @@ fun ReportsScreen(
                 }
             }
 
-            // Interactive "What-If" Skip Simulator
-            item {
-                WhatIfSkipSimulatorCard(
-                    stats = stats,
-                    scopeTitle = selectedTerm?.name ?: "Overall GCE A/L"
-                )
-            }
-
-            // Share & Verify Tools: Monthly Wrapped, Parent Summary & Class Register Verification
+            // Shareable Cards: Monthly Wrapped & Parent Summary
             item {
                 Card(
                     shape = RoundedCornerShape(22.dp),
@@ -363,7 +384,7 @@ fun ReportsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "Shareable Cards & Register Check",
+                            text = "Shareable Cards",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -434,54 +455,8 @@ fun ReportsScreen(
                                 }
                             }
                         }
-
-                        Surface(
-                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.58f),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showRegisterVerify = true }
-                                .testTag("reports_open_register_verify_btn")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.FactCheck,
-                                    contentDescription = "Verify with Class Register",
-                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Verify Against Class Register",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                                    )
-                                    Text(
-                                        text = "Compare your teacher's official register total to catch ±day mismatches early",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
-            }
-
-            // Slidable School-Wide & Personal Trends & Patterns Card (All-Time + Monthly)
-            item {
-                AttendancePatternsAndChartCard(
-                    records = state.attendanceRecords,
-                    thresholdPercent = stats.thresholdPercent,
-                    periodBlocks = state.periodBlocks,
-                    communitySummaries = state.communityTrendSummaries,
-                    profile = state.profile
-                )
             }
 
             // Subject Tags Summary
@@ -575,14 +550,6 @@ fun ReportsScreen(
             stats = stats,
             overallStats = state.overallStats,
             onDismiss = { showParentSummary = false }
-        )
-    }
-
-    if (showRegisterVerify) {
-        RegisterVerificationDialog(
-            termName = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
-            stats = stats,
-            onDismiss = { showRegisterVerify = false }
         )
     }
 }

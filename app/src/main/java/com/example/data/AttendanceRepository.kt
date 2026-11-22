@@ -592,8 +592,8 @@ class AttendanceRepository(
                     put("priorAbsentCount", priorAbsentCount.coerceIn(0, 600))
                     if (updateBaselineFields) {
                         if (hasValidBaseline) {
-                            put("baselineStartDate", cleanBaseStart!!)
-                            put("baselineEndDate", cleanBaseEnd!!)
+                            put("baselineStartDate", cleanBaseStart)
+                            put("baselineEndDate", cleanBaseEnd)
                             if (cleanBasePct != null) {
                                 put("baselinePercent", cleanBasePct)
                             } else {
@@ -1886,11 +1886,69 @@ class AttendanceRepository(
         }
     }
 
-    suspend fun deleteAcademicTerm(termId: String): Result<Unit> {
+    suspend fun deleteAcademicTerm(
+        termId: String,
+        currentDisplayedTerms: List<AcademicTerm> = emptyList()
+    ): Result<Unit> {
         val path = "academic_terms/$termId"
         return try {
             requireUserId()
-            db.collection("academic_terms").document(termId).delete().awaitOfflineAware()
+            val cleanId = termId.trim()
+            require(cleanId.isNotEmpty()) { "Invalid term ID" }
+            val existingDocs = runCatching {
+                db.collection("academic_terms").get().await().documents
+            }.getOrDefault(emptyList())
+
+            if (existingDocs.isEmpty()) {
+                val remaining = currentDisplayedTerms.filterNot { it.id == cleanId }
+                require(remaining.isNotEmpty()) { "At least one term must remain" }
+                val hasActive = remaining.any { it.active }
+                val batch = db.batch()
+                remaining.forEachIndexed { index, term ->
+                    val ref = if (term.id.isNotBlank()) {
+                        db.collection("academic_terms").document(term.id)
+                    } else {
+                        db.collection("academic_terms").document()
+                    }
+                    batch.set(
+                        ref,
+                        mapOf(
+                            "name" to term.name.trim().take(60),
+                            "startDate" to term.startDate,
+                            "endDate" to term.endDate,
+                            "academicYear" to term.academicYear.coerceIn(2024, 2035),
+                            "minEligibilityPercent" to term.minEligibilityPercent.coerceIn(50, 100),
+                            "active" to (term.active || (!hasActive && index == 0)),
+                            "published" to true,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.commit().awaitOfflineAware()
+                scheduleSyncIfOffline()
+                return Result.success(Unit)
+            }
+
+            val remainingDocs = existingDocs.filterNot { it.id == cleanId }
+            require(remainingDocs.isNotEmpty()) { "At least one term must remain" }
+
+            val batch = db.batch()
+            batch.delete(db.collection("academic_terms").document(cleanId))
+            val deletedWasActive = existingDocs.firstOrNull { it.id == cleanId }?.getBoolean("active") == true
+            val anyRemainingActive = remainingDocs.any { it.getBoolean("active") == true }
+            if (deletedWasActive || !anyRemainingActive) {
+                val promoteDoc = remainingDocs.minByOrNull { it.getString("startDate") ?: "9999-12-31" }
+                    ?: remainingDocs.first()
+                batch.update(
+                    promoteDoc.reference,
+                    mapOf(
+                        "active" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().awaitOfflineAware()
             scheduleSyncIfOffline()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -2018,6 +2076,7 @@ class AttendanceRepository(
                 "al2027ExamDate" to settings.al2027ExamDate,
                 "al2028ExamDate" to settings.al2028ExamDate,
                 "nextDayPollEnabled" to settings.nextDayPollEnabled,
+                "schoolStartDate" to (settings.validSchoolStartDate ?: ""),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             db.collection("app_settings").document("global").set(payload).awaitOfflineAware()
@@ -2027,92 +2086,6 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun seedSriLankaCalendar2026And2027(): Result<Unit> {
-        return try {
-            requireUserId()
-            val existingTermIds = runCatching {
-                db.collection("academic_terms").get().await().documents.map { it.id }.toSet()
-            }.getOrDefault(emptySet())
-            val existingEventIds = runCatching {
-                db.collection("calendar_events").get().await().documents.map { it.id }.toSet()
-            }.getOrDefault(emptySet())
-
-            val batch = db.batch()
-            for (term in SriLankaCalendarDefaults.defaultTerms) {
-                val ref = db.collection("academic_terms").document(term.id)
-                if (term.id in existingTermIds) {
-                    batch.update(
-                        ref,
-                        mapOf(
-                            "name" to term.name,
-                            "startDate" to term.startDate,
-                            "endDate" to term.endDate,
-                            "academicYear" to term.academicYear,
-                            "minEligibilityPercent" to term.minEligibilityPercent,
-                            "active" to term.active,
-                            "published" to true,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                } else {
-                    batch.set(
-                        ref,
-                        mapOf(
-                            "name" to term.name,
-                            "startDate" to term.startDate,
-                            "endDate" to term.endDate,
-                            "academicYear" to term.academicYear,
-                            "minEligibilityPercent" to term.minEligibilityPercent,
-                            "active" to term.active,
-                            "published" to true,
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                }
-            }
-            for (ev in SriLankaCalendarDefaults.defaultEvents) {
-                val ref = db.collection("calendar_events").document(ev.id)
-                if (ev.id in existingEventIds) {
-                    batch.update(
-                        ref,
-                        mapOf(
-                            "title" to ev.title,
-                            "dateKey" to ev.dateKey,
-                            "eventType" to ev.eventType,
-                            "academicYear" to ev.academicYear,
-                            "description" to (ev.description ?: ""),
-                            "published" to true,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                } else {
-                    batch.set(
-                        ref,
-                        mapOf(
-                            "title" to ev.title,
-                            "dateKey" to ev.dateKey,
-                            "eventType" to ev.eventType,
-                            "academicYear" to ev.academicYear,
-                            "description" to (ev.description ?: ""),
-                            "published" to true,
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                }
-            }
-            batch.commit().awaitOfflineAware()
-            saveAppSettings(AppSettings())
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, "calendar_events")
             Result.failure(e)
         }
     }

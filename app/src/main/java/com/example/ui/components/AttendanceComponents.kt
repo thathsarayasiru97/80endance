@@ -512,13 +512,16 @@ private fun NoticeBannerCard(
 ) {
     val isUrgent = notice.urgentFlag || notice.categoryEnum == NoticeCategory.TEACHER_ABSENT
     val isNormalNote = notice.categoryEnum == NoticeCategory.NORMAL_NOTE && !notice.urgentFlag
+    val isTip = notice.categoryEnum == NoticeCategory.TIP && !notice.urgentFlag
     val containerColor = when {
         isUrgent -> MaterialTheme.colorScheme.secondaryContainer
+        isTip -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.82f)
         isNormalNote -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
     }
     val contentColor = when {
         isUrgent -> MaterialTheme.colorScheme.onSecondaryContainer
+        isTip -> MaterialTheme.colorScheme.onTertiaryContainer
         isNormalNote -> MaterialTheme.colorScheme.onSurface
         else -> MaterialTheme.colorScheme.onPrimaryContainer
     }

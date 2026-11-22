@@ -64,6 +64,7 @@ enum class NoticeCategory(val raw: String, val label: String) {
     SCHEDULE_CHANGE("schedule_change", "Schedule Change"),
     EXAM("exam", "Exam Notice"),
     NORMAL_NOTE("normal_note", "Normal Note"),
+    TIP("tip", "Tip ✨"),
     GENERAL("general", "School Note");
 
     companion object {
@@ -429,13 +430,27 @@ data class AppSettings(
     val al2027ExamDate: String = "2027-08-09",
     val al2028ExamDate: String = "2028-08-07",
     val nextDayPollEnabled: Boolean = false,
+    val schoolStartDate: String? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    val validSchoolStartDate: String?
+        get() = schoolStartDate?.trim()?.takeIf { it.matches(DATE_KEY_REGEX) }
+
+    fun effectiveSchoolStartDate(examYear: Int? = null): String {
+        validSchoolStartDate?.let { return it }
+        val startYear = ((examYear ?: 2028) - 2).coerceAtLeast(2024)
+        return "$startYear-01-15"
+    }
+
     fun examDateForYear(year: Int): String = when (year) {
         2026 -> al2026ExamDate
         2027 -> al2027ExamDate
         2028 -> al2028ExamDate
         else -> "$year-08-10"
+    }
+
+    companion object {
+        private val DATE_KEY_REGEX = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
     }
 }
 

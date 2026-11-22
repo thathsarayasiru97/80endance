@@ -936,6 +936,21 @@ class AttendanceCalculatorTest {
         assertEquals(3, summary.myClassTotalCount)
         assertEquals(66.67, summary.myClassGoingPercent ?: 0.0, 0.1)
     }
+
+    @Test
+    fun customSchoolStartDateOverridesDefaultJourneyStartAndTipCategoryResolves() {
+        val customSettings = com.example.data.AppSettings(schoolStartDate = "2026-02-09")
+        val timeline = AttendanceCalculator.calculateAlJourneyTimeline(
+            examYear = 2028,
+            settings = customSettings,
+            terms = com.example.data.SriLankaCalendarDefaults.defaultTerms,
+            todayKey = "2026-05-01"
+        )
+        assertEquals("2026-02-09", timeline.startDateKey)
+        assertEquals("2026-02-09", timeline.milestones.first().dateKey)
+        assertEquals("Tip ✨", com.example.data.NoticeCategory.TIP.label)
+        assertEquals(com.example.data.NoticeCategory.TIP, com.example.data.NoticeCategory.fromRaw("tip"))
+    }
 }
 
 

@@ -648,24 +648,26 @@ fun CalendarScreen(
                                             val dateKey = DateUtils.formatDateKey(gridYear, gridMonth, dayNum)
                                             val isWeekend = col >= 5 || DateUtils.isWeekend(dateKey)
                                             val isFuture = dateKey > todayKey
-                                            val isLocked = !isWeekend && state.isDateLocked(dateKey)
-                                            val rec = if (isWeekend || isFuture || isLocked) null else recordMap[dateKey]
+                                            val isBeforeSchoolStart = !isWeekend && state.isBeforeSchoolStart(dateKey)
+                                            val isLocked = !isWeekend && !isBeforeSchoolStart && state.isDateLocked(dateKey)
+                                            val rec = if (isWeekend || isFuture || isBeforeSchoolStart || isLocked) null else recordMap[dateKey]
                                             val dayEvents = eventMap[dateKey].orEmpty()
                                             val dayPersonalMarkers = personalMarkerMap[dateKey].orEmpty()
                                             val isSlHoliday = dayEvents.any { it.isSriLankanHoliday }
                                             val isSchoolOff = dayEvents.any { !it.isSriLankanHoliday && it.nonSchoolDay }
                                             val isToday = dateKey == todayKey
-                                            val isBulkEligible = !isWeekend && !isFuture && !isLocked && !isSlHoliday && !isSchoolOff
+                                            val isBulkEligible = !isWeekend && !isFuture && !isBeforeSchoolStart && !isLocked && !isSlHoliday && !isSchoolOff
                                             val isBulkSelected = bulkSelectMode && dateKey in selectedBulkDates
                                             val isInteractive = if (bulkSelectMode) {
                                                 isBulkEligible
                                             } else {
-                                                isVerifiedAdmin || (!isWeekend && (!isFuture || dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty() || onSavePersonalMarker != null)) || (isWeekend && (dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty()))
+                                                isVerifiedAdmin || (!isWeekend && ((!isFuture && !isBeforeSchoolStart) || dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty() || onSavePersonalMarker != null || isBeforeSchoolStart)) || (isWeekend && (dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty()))
                                             }
 
                                             val targetCellBg = when {
                                                 isBulkSelected -> MaterialTheme.colorScheme.primaryContainer
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                                                isBeforeSchoolStart -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
                                                 isSlHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
                                                 isSchoolOff -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
                                                 isLocked -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.62f)
@@ -691,6 +693,7 @@ fun CalendarScreen(
                                             val textColor = when {
                                                 isBulkSelected -> MaterialTheme.colorScheme.onPrimaryContainer
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
+                                                isBeforeSchoolStart -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
                                                 isSlHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
                                                 isSchoolOff -> MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = if (isFuture) 0.72f else 1f)
                                                 isLocked -> MaterialTheme.colorScheme.onSecondaryContainer
@@ -1454,8 +1457,9 @@ fun CalendarScreen(
 
                 val isSelectedWeekend = DateUtils.isWeekend(dateKey)
                 val isSelectedFuture = dateKey > todayKey
+                val isSelectedBeforeStart = !isSelectedWeekend && state.isBeforeSchoolStart(dateKey)
                 val lockingPeriod = state.lockingPeriodFor(dateKey)
-                val isSelectedLocked = !isSelectedWeekend && state.isDateLocked(dateKey)
+                val isSelectedLocked = !isSelectedWeekend && !isSelectedBeforeStart && state.isDateLocked(dateKey)
 
                 when {
                     isSelectedWeekend -> {
@@ -1465,6 +1469,33 @@ fun CalendarScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 24.dp)
                         )
+                    }
+                    isSelectedBeforeStart -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 24.dp)
+                                .testTag("calendar_before_start_notice")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Lock,
+                                    contentDescription = "Before school start date",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Before school start (${DateUtils.formatReadableShort(state.effectiveSchoolStartDateKey)}) — attendance can only be marked from this date onward.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                     isSelectedFuture -> {
                         Surface(

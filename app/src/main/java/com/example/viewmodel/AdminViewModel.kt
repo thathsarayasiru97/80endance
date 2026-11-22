@@ -469,21 +469,32 @@ class AdminViewModel(
 
     fun deleteTerm(termId: String) {
         viewModelScope.launch {
-            val res = repository.deleteAcademicTerm(termId)
-            res.onSuccess { _snackbar.value = "Term deleted" }
-                .onFailure { e -> _snackbar.value = e.message ?: "Delete failed" }
+            _isBusy.value = true
+            val res = repository.deleteAcademicTerm(
+                termId = termId,
+                currentDisplayedTerms = uiState.value.terms
+            )
+            _isBusy.value = false
+            res.onSuccess { _snackbar.value = "Term removed" }
+                .onFailure { e -> _snackbar.value = e.message ?: "Could not remove term" }
         }
     }
 
-    fun seedSriLankaCalendar() {
+    fun saveSchoolStartDate(dateKey: String) {
+        val clean = dateKey.trim()
+        if (!clean.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) {
+            _snackbar.value = "Use YYYY-MM-DD format for school start date"
+            return
+        }
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.seedSriLankaCalendar2026And2027()
+            val updated = uiState.value.appSettings.copy(schoolStartDate = clean)
+            val res = repository.saveAppSettings(updated)
             _isBusy.value = false
             res.onSuccess {
-                _snackbar.value = "2026–2027 Sri Lankan Poya days & school terms synced to cloud"
+                _snackbar.value = "School start date updated to ${DateUtils.formatReadableShort(clean)}"
             }.onFailure { e ->
-                _snackbar.value = e.message ?: "Seeding failed"
+                _snackbar.value = e.message ?: "Could not save school start date"
             }
         }
     }

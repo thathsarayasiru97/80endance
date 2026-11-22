@@ -1576,8 +1576,7 @@ object AttendanceCalculator {
         todayKey: String = DateUtils.todayKey()
     ): AlJourneyTimeline {
         val examDateKey = settings.examDateForYear(examYear)
-        val startYear = (examYear - 2).coerceAtLeast(2024)
-        val startDateKey = "$startYear-01-15"
+        val startDateKey = settings.effectiveSchoolStartDate(examYear)
         val totalDays = max(1, DateUtils.daysBetween(startDateKey, examDateKey))
         val daysRemaining = max(0, DateUtils.daysBetween(todayKey, examDateKey))
         val elapsed = (totalDays - daysRemaining).coerceIn(0, totalDays)

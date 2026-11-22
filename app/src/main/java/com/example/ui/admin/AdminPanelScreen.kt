@@ -33,7 +33,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
-import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -551,35 +551,15 @@ fun AdminPanelScreen(
                                     isBusy = state.isBusy,
                                     onRolloverTerm = { targetTerm, alsoNotice ->
                                         viewModel.rolloverTerm(targetTerm, alsoNotice)
+                                    },
+                                    schoolStartDate = state.appSettings.effectiveSchoolStartDate(2028),
+                                    onSaveSchoolStartDate = { newDate ->
+                                        viewModel.saveSchoolStartDate(newDate)
+                                    },
+                                    onDeleteTerm = { term ->
+                                        viewModel.deleteTerm(term.id)
                                     }
                                 )
-                            }
-
-                            item {
-                                Card(
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text("Sri Lankan Poya & School Terms", style = MaterialTheme.typography.titleSmall)
-                                        Text(
-                                            text = "Sync standard 2026–2027 Full Moon Poya days, public holidays, and Term 1–3 dates to Firestore.",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                        Button(
-                                            onClick = { viewModel.seedSriLankaCalendar() },
-                                            enabled = !state.isBusy,
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Seed 2026–2027 SL Calendar")
-                                        }
-                                    }
-                                }
                             }
 
                             // Next-Day School Poll Dev Feature Toggle
@@ -802,7 +782,7 @@ fun AdminPanelScreen(
                                                     Icon(
                                                         imageVector = when {
                                                             isBug -> Icons.Rounded.BugReport
-                                                            isCatalogReq -> Icons.Rounded.MenuBook
+                                                            isCatalogReq -> Icons.AutoMirrored.Rounded.MenuBook
                                                             else -> Icons.Rounded.Lightbulb
                                                         },
                                                         contentDescription = fb.typeEnum.label,

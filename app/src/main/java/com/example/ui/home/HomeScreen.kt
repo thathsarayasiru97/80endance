@@ -107,9 +107,11 @@ import com.example.ui.components.PinnedNoticeSlideshow
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.AdminOnlineNowPill
+import com.example.ui.components.AdminOnlineUsersSheet
 import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
 import com.example.ui.components.DevelopedByAtayaFooter
+import com.example.ui.components.HOME_HEADER_PILL_HEIGHT
 import com.example.ui.components.ResolvedFeedbackBanner
 import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
@@ -163,6 +165,7 @@ fun HomeScreen(
     var autoOfferedSwipeDeck by rememberSaveable { mutableStateOf(false) }
     var privacyBlurred by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
+    var showAdminOnlineUsersSheet by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
 
@@ -370,17 +373,22 @@ fun HomeScreen(
                         }
 
                         state.adminOnlineNowCount?.let { onlineNow ->
-                            AdminOnlineNowPill(onlineCount = onlineNow)
+                            AdminOnlineNowPill(
+                                onlineCount = onlineNow,
+                                onClick = { showAdminOnlineUsersSheet = true }
+                            )
                         }
 
                         if (state.visibleNotices.isNotEmpty() && state.pinnedNotices.isEmpty()) {
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier.bouncyClickable(pressedScale = 0.93f) { showNoticeSheet = true }
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .height(HOME_HEADER_PILL_HEIGHT)
+                                    .bouncyClickable(pressedScale = 0.93f) { showNoticeSheet = true }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
@@ -389,10 +397,11 @@ fun HomeScreen(
                                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                         modifier = Modifier.size(15.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "${state.visibleNotices.size} Notices",
-                                        style = MaterialTheme.typography.labelMedium,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
                                 }
@@ -477,20 +486,20 @@ fun HomeScreen(
                                     Text("Month", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 SegmentedButton(
-                                    selected = scopeMode == DashboardScopeMode.CURRENT_TERM,
-                                    onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_TERM) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                                    modifier = Modifier.testTag("scope_tab_term")
-                                ) {
-                                    Text("Term", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                SegmentedButton(
                                     selected = scopeMode == DashboardScopeMode.OVERALL_AL,
                                     onClick = { onScopeModeChange(DashboardScopeMode.OVERALL_AL) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                                     modifier = Modifier.testTag("scope_tab_overall")
                                 ) {
                                     Text("Overall", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                SegmentedButton(
+                                    selected = scopeMode == DashboardScopeMode.CURRENT_TERM,
+                                    onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_TERM) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                                    modifier = Modifier.testTag("scope_tab_term")
+                                ) {
+                                    Text("Term", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
 
@@ -1245,6 +1254,13 @@ fun HomeScreen(
             stats = state.currentTermStats,
             overallStats = state.overallStats,
             onDismiss = { showParentSummary = false }
+        )
+    }
+
+    if (showAdminOnlineUsersSheet && state.adminOnlineNowCount != null) {
+        AdminOnlineUsersSheet(
+            onlineUsers = state.adminOnlineUsers,
+            onDismiss = { showAdminOnlineUsersSheet = false }
         )
     }
 

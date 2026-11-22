@@ -56,7 +56,7 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.FactCheck
+import androidx.compose.material.icons.automirrored.rounded.FactCheck
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -354,10 +354,10 @@ fun SettingsScreen(
                                 )
                                 Text(
                                     text = if (hasLocked) {
-                                        val pctText = profile?.baselinePercent?.let {
+                                        val pctText = profile.baselinePercent?.let {
                                             String.format(java.util.Locale.US, "%.1f%%", it)
                                         } ?: ""
-                                        "Imported $pctText (${profile!!.priorPresentCount}P / ${profile.priorAbsentCount}A) • ${DateUtils.formatReadableShort(profile.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} locked"
+                                        "Imported $pctText (${profile.priorPresentCount}P / ${profile.priorAbsentCount}A) • ${DateUtils.formatReadableShort(profile.baselineStartDate!!)} → ${DateUtils.formatReadableShort(profile.baselineEndDate!!)} locked"
                                     } else {
                                         "Enter your % from Day 1 up to a past date (e.g., from your class teacher). Included days are locked automatically."
                                     },
@@ -429,7 +429,7 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                                 .testTag("settings_verify_register_button")
                         ) {
-                            Icon(Icons.Rounded.FactCheck, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.AutoMirrored.Rounded.FactCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Verify Against Class Register")
                         }

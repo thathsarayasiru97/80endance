@@ -71,7 +71,7 @@
       "properties": {
         "title": { "type": "string", "description": "Short notice headline." },
         "message": { "type": "string", "description": "Full notice body text." },
-        "category": { "type": "string", "enum": ["teacher_absent", "school_event", "schedule_change", "exam", "normal_note", "general"], "description": "Notice category." },
+        "category": { "type": "string", "enum": ["teacher_absent", "school_event", "schedule_change", "exam", "normal_note", "tip", "general"], "description": "Notice category." },
         "pinned": { "type": "boolean", "description": "Whether displayed in the 5-second dashboard slideshow." },
         "targetType": { "type": "string", "enum": ["all", "grade", "stream", "class"], "description": "Target audience scope." },
         "targetValue": { "type": "string", "description": "Optional grade, stream name, or class code when targeted." },
@@ -137,6 +137,7 @@
         "al2027ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2027 A/L exam start." },
         "al2028ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2028 A/L exam start." },
         "nextDayPollEnabled": { "type": "boolean", "description": "Whether the 8:00 PM - 5:00 AM Next-Day School Poll feature is enabled globally." },
+        "schoolStartDate": { "type": "string", "description": "Optional ISO date YYYY-MM-DD marking the school/A-L journey start date before which attendance cannot be logged." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
       },
       "required": [

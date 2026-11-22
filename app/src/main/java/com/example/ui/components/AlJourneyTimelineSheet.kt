@@ -132,7 +132,9 @@ fun AnimatedAlCountdownPill(
 
     val pillShape = RoundedCornerShape(999.dp)
     Box(
+        contentAlignment = Alignment.Center,
         modifier = modifier
+            .height(34.dp)
             .clip(pillShape)
             .background(
                 Brush.horizontalGradient(
@@ -145,7 +147,7 @@ fun AnimatedAlCountdownPill(
             )
             .border(width = 1.4.dp, brush = borderBrush, shape = pillShape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .padding(horizontal = 12.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

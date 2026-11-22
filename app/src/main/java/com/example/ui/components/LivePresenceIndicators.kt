@@ -20,21 +20,28 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.PeopleOutline
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,10 +57,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.BroadcastNotification
+import com.example.data.UserProfile
 import com.example.ui.theme.LocalAttendanceColors
+
+/**
+ * Shared height across Home header pills (A/L Journey, Community Account Count, Admin Online Now).
+ */
+val HOME_HEADER_PILL_HEIGHT: Dp = 34.dp
 
 /**
  * Animated radar-ring green dot representing live community count or active online users.
@@ -110,6 +124,7 @@ fun PulsingLiveDot(
 
 /**
  * Public community counter shown on Home: pulsing green dot + rolling account count number only.
+ * Matches the exact height & sleek proportions of the A/L Journey pill.
  */
 @Composable
 fun CommunityAccountCountPill(
@@ -118,15 +133,17 @@ fun CommunityAccountCountPill(
 ) {
     val semantic = LocalAttendanceColors.current
     val count = totalAccounts.coerceAtLeast(1)
+    val pillShape = RoundedCornerShape(999.dp)
 
     Surface(
         color = semantic.presentContainer.copy(alpha = 0.85f),
-        shape = RoundedCornerShape(50),
+        shape = pillShape,
         modifier = modifier
+            .height(HOME_HEADER_PILL_HEIGHT)
             .border(
-                width = 1.dp,
-                color = semantic.present.copy(alpha = 0.34f),
-                shape = RoundedCornerShape(50)
+                width = 1.2.dp,
+                color = semantic.present.copy(alpha = 0.36f),
+                shape = pillShape
             )
             .semantics(mergeDescendants = true) {
                 contentDescription = "$count registered accounts"
@@ -134,14 +151,14 @@ fun CommunityAccountCountPill(
             .testTag("home_community_count_pill")
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PulsingLiveDot(color = semantic.present, dotSize = 7.dp)
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             RollingCounterText(
                 count = count,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 color = semantic.onPresentContainer
             )
@@ -151,37 +168,226 @@ fun CommunityAccountCountPill(
 
 /**
  * Live online user count pill visible exclusively to the verified admin.
+ * Tappable to inspect who is currently online, sized identically to the A/L Journey pill.
  */
 @Composable
 fun AdminOnlineNowPill(
     onlineCount: Int,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val semantic = LocalAttendanceColors.current
+    val pillShape = RoundedCornerShape(999.dp)
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(50),
+        shape = pillShape,
         modifier = modifier
+            .height(HOME_HEADER_PILL_HEIGHT)
+            .clip(pillShape)
             .border(
-                width = 1.dp,
-                color = semantic.present.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(50)
+                width = 1.2.dp,
+                color = semantic.present.copy(alpha = 0.48f),
+                shape = pillShape
             )
+            .then(
+                if (onClick != null) {
+                    Modifier.bouncyClickable(pressedScale = 0.94f, onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription = "$onlineCount online now. Tap to view online users."
+            }
             .testTag("admin_online_now_pill")
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             PulsingLiveDot(color = semantic.present, dotSize = 7.dp)
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             RollingCounterText(
                 count = onlineCount,
                 suffix = " online now",
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
+        }
+    }
+}
+
+/**
+ * Admin-only bottom sheet opened by tapping the pulsing "<x> online now" pill on Home.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminOnlineUsersSheet(
+    onlineUsers: List<UserProfile>,
+    onDismiss: () -> Unit
+) {
+    val semantic = LocalAttendanceColors.current
+    val nowMs = remember(onlineUsers) { System.currentTimeMillis() }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .testTag("admin_online_users_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PulsingLiveDot(color = semantic.present, dotSize = 8.dp)
+                    Column {
+                        Text(
+                            text = "Online Now (${onlineUsers.size})",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Students currently active on 80endance",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (onlineUsers.isEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 28.dp, horizontal = 16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PeopleOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(34.dp)
+                        )
+                        Text(
+                            text = "No one else is online right now",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Active users appear here in real time while the app is open.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    itemsIndexed(
+                        items = onlineUsers,
+                        key = { _, user -> user.userId.ifBlank { user.email } }
+                    ) { idx, user ->
+                        StaggeredReveal(index = idx.coerceAtMost(8)) {
+                            val seenMs = user.lastSeenAt?.toDate()?.time
+                            val activeLabel = when {
+                                seenMs == null -> "Active now"
+                                nowMs - seenMs < 45_000L -> "Active now"
+                                else -> "${((nowMs - seenMs) / 60_000L).coerceAtLeast(1L)}m ago"
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("admin_online_user_${user.userId}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box {
+                                        ProfileAvatar(
+                                            customAvatarBase64 = user.customAvatarBase64,
+                                            googlePhotoUrl = user.photoUrl,
+                                            displayName = user.fullName,
+                                            size = 42.dp
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .size(12.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                                .padding(2.dp)
+                                                .clip(CircleShape)
+                                                .background(semantic.present)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        val nick = user.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                                        Text(
+                                            text = if (nick != null) "${user.fullName} ($nick)" else user.fullName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = listOf(user.grade, user.className, user.alStream)
+                                                .filter { it.isNotBlank() }
+                                                .joinToString(" • "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Surface(
+                                        color = semantic.presentContainer.copy(alpha = 0.85f),
+                                        shape = RoundedCornerShape(999.dp)
+                                    ) {
+                                        Text(
+                                            text = activeLabel,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = semantic.onPresentContainer,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

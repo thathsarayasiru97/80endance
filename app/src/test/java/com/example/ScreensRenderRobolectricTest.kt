@@ -560,25 +560,50 @@ class ScreensRenderRobolectricTest {
                 active = false
             )
         )
+        var deletedTermId: String? = null
         composeTestRule.setContent {
             EightyEndanceTheme {
-                AdminTermRolloverCard(
-                    terms = terms,
-                    isBusy = false,
-                    onRolloverTerm = { _, _ -> }
-                )
+                androidx.compose.foundation.layout.Column(
+                    modifier = androidx.compose.ui.Modifier
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                ) {
+                    AdminTermRolloverCard(
+                        terms = terms,
+                        isBusy = false,
+                        onRolloverTerm = { _, _ -> },
+                        schoolStartDate = "2026-02-02",
+                        onSaveSchoolStartDate = {},
+                        onDeleteTerm = { deletedTermId = it.id }
+                    )
+                }
             }
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("admin_term_rollover_card").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("admin_rollover_confirm_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_school_start_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_school_start_save_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_remove_selected_term_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("admin_confirm_remove_term_button").performClick()
+        composeTestRule.waitForIdle()
+        org.junit.Assert.assertEquals("term_2_2026", deletedTermId)
     }
 
     @Test
     fun homeScreenShowsCommunityCountPillAdminOnlinePillAndBroadcastBanner() {
+        val onlineStudent = sampleState.profile!!.copy(
+            id = "u_online_1",
+            userId = "u_online_1",
+            firstName = "Senith",
+            lastName = "Fernando",
+            className = "12M1",
+            grade = "Grade 12",
+            alStream = "Physical Science"
+        )
         val stateWithLiveCommunity = sampleState.copy(
             totalAccounts = 128,
-            adminOnlineNowCount = 9,
+            adminOnlineNowCount = 1,
+            adminOnlineUsers = listOf(onlineStudent),
             unreadBroadcasts = listOf(
                 BroadcastNotification(
                     id = "bc_1",
@@ -595,7 +620,7 @@ class ScreensRenderRobolectricTest {
                 LiquidGlassBackdropHost {
                     HomeScreen(
                         state = stateWithLiveCommunity,
-                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        scopeMode = DashboardScopeMode.OVERALL_AL,
                         onScopeModeChange = {},
                         onOpenCheckIn = {},
                         onSyncClick = {}
@@ -609,6 +634,16 @@ class ScreensRenderRobolectricTest {
         composeTestRule.onNodeWithText("128 students").assertDoesNotExist()
         composeTestRule.onNodeWithTag("admin_online_now_pill").assertIsDisplayed()
         composeTestRule.onNodeWithTag("home_broadcast_alert_card").assertIsDisplayed()
+
+        // Tapping admin online now pill opens the online users sheet showing active students
+        composeTestRule.onNodeWithTag("admin_online_now_pill").performClick()
+        repeat(4) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            composeTestRule.mainClock.advanceTimeByFrame()
+            composeTestRule.mainClock.advanceTimeBy(300L)
+        }
+        composeTestRule.onNodeWithTag("admin_online_users_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("admin_online_user_u_online_1").assertIsDisplayed()
     }
 
     @Test
@@ -1398,15 +1433,17 @@ class ScreensRenderRobolectricTest {
             }
         }
         composeTestRule.waitForIdle()
+        // Trends & Patterns card is now at the top of Reports
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("cohort_pulse_section"))
+        composeTestRule.onNodeWithTag("cohort_pulse_section").assertIsDisplayed()
+
+        // Shareable Cards keeps Monthly Wrapped & Parent Card, and removes duplicate Register Check button
         composeTestRule.onNodeWithTag("reports_lazy_column")
             .performScrollToNode(hasTestTag("reports_tools_card"))
         composeTestRule.onNodeWithTag("reports_open_wrapped_btn").assertIsDisplayed()
         composeTestRule.onNodeWithTag("reports_open_parent_card_btn").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("reports_open_register_verify_btn").assertIsDisplayed()
-
-        composeTestRule.onNodeWithTag("reports_lazy_column")
-            .performScrollToNode(hasTestTag("cohort_pulse_section"))
-        composeTestRule.onNodeWithTag("cohort_pulse_section").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reports_open_register_verify_btn").assertDoesNotExist()
     }
 
     @Test
@@ -1740,6 +1777,35 @@ class ScreensRenderRobolectricTest {
         org.junit.Assert.assertNull(
             com.example.system.AttendanceWidgetStore.consumePendingExternalUndo(ctx, nowMillis = now + 4_000L)
         )
+    }
+
+    @Test
+    fun calendarBlocksAttendanceBeforeSchoolStartDateAndTipNoticeRendersSparkleLabel() {
+        val startRestrictedState = sampleState.copy(
+            appSettings = sampleState.appSettings.copy(schoolStartDate = "2026-11-18")
+        )
+        org.junit.Assert.assertTrue(startRestrictedState.isBeforeSchoolStart("2026-11-17"))
+        org.junit.Assert.assertFalse(startRestrictedState.isBeforeSchoolStart("2026-11-18"))
+        org.junit.Assert.assertEquals("Tip ✨", NoticeCategory.TIP.label)
+        org.junit.Assert.assertEquals(NoticeCategory.TIP, NoticeCategory.fromRaw("tip"))
+
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    CalendarScreen(
+                        state = startRestrictedState,
+                        onEditDate = {},
+                        onDeleteDate = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_day_2026-11-17"))
+        composeTestRule.onNodeWithTag("calendar_day_2026-11-17").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_before_start_notice").assertIsDisplayed()
     }
 }
 

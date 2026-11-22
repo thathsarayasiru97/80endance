@@ -683,4 +683,73 @@ test("Next-day school poll votes and AppSettings.nextDayPollEnabled follow zero-
   );
 });
 
+test("Notice tip category & app_settings schoolStartDate: admin allowed with valid format, malformed & non-admin denied", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+  const now = new Date(Date.now() - 2000);
+  const later = new Date(Date.now() - 500);
 
+  // Admin can publish a 'tip' category notice
+  await assertSucceeds(
+    adminDb.collection("notices").doc("notice_tip_1").set(
+      validNoticePayload({
+        title: "Use Bulk Select for Medical Weeks",
+        message: "Tap Select Multiple on Calendar to mark a whole week at once.",
+        category: "tip",
+        priority: "normal",
+      })
+    )
+  );
+  // Student cannot publish a tip notice
+  await assertFails(
+    studentA.collection("notices").doc("notice_tip_2").set(
+      validNoticePayload({ category: "tip" })
+    )
+  );
+
+  // Admin can save schoolStartDate in app_settings/global
+  await assertSucceeds(
+    adminDb.collection("app_settings").doc("global").set({
+      defaultEligibilityPercent: 80,
+      defaultReminderHour: 14,
+      defaultReminderMinute: 0,
+      currentAcademicYear: 2026,
+      al2026ExamDate: "2026-11-25",
+      al2027ExamDate: "2027-08-09",
+      al2028ExamDate: "2028-08-07",
+      nextDayPollEnabled: false,
+      schoolStartDate: "2026-02-02",
+      updatedAt: now,
+    })
+  );
+
+  // Admin can update schoolStartDate to another valid ISO date
+  await assertSucceeds(
+    adminDb.collection("app_settings").doc("global").update({
+      schoolStartDate: "2026-01-20",
+      updatedAt: later,
+    })
+  );
+
+  // Malformed schoolStartDate rejected
+  await assertFails(
+    adminDb.collection("app_settings").doc("global").update({
+      schoolStartDate: "20/01/2026",
+      updatedAt: later,
+    })
+  );
+
+  // Student cannot update schoolStartDate
+  await assertFails(
+    studentA.collection("app_settings").doc("global").update({
+      schoolStartDate: "2026-01-25",
+      updatedAt: later,
+    })
+  );
+});

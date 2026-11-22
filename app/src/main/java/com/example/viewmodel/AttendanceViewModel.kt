@@ -114,6 +114,7 @@ data class StudentAppState(
     val accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE,
     val totalAccounts: Int = 0,
     val adminOnlineNowCount: Int? = null,
+    val adminOnlineUsers: List<UserProfile> = emptyList(),
     val unreadBroadcasts: List<BroadcastNotification> = emptyList(),
     val resolvedFeedbackAlerts: List<FeedbackReport> = emptyList(),
     val lastSeenAppVersion: String = "",
@@ -130,6 +131,12 @@ data class StudentAppState(
     val pollWindow: NextDayPollWindow = NextDayPollWindow(),
     val nextDayPollSummary: NextDayPollSummary = NextDayPollSummary()
 ) {
+    val effectiveSchoolStartDateKey: String
+        get() = appSettings.effectiveSchoolStartDate(profile?.alExamYear)
+
+    fun isBeforeSchoolStart(dateKey: String): Boolean =
+        dateKey < effectiveSchoolStartDateKey
+
     fun lockingPeriodFor(dateKey: String): AttendancePeriodBlock? =
         periodBlocks.firstOrNull { it.containsDate(dateKey) }
 
@@ -149,7 +156,8 @@ private data class CoreFirestoreBundle(
 
 private data class AdminStreamBundle(
     val students: List<UserProfile> = emptyList(),
-    val onlineNowCount: Int? = null
+    val onlineNowCount: Int? = null,
+    val onlineUsers: List<UserProfile> = emptyList()
 )
 
 private data class StudentExtraData(
@@ -192,7 +200,7 @@ class AttendanceViewModel(
     val isVerifiedAdmin: Boolean = false
 ) : ViewModel() {
 
-    private val _scopeMode = MutableStateFlow(DashboardScopeMode.CURRENT_TERM)
+    private val _scopeMode = MutableStateFlow(DashboardScopeMode.OVERALL_AL)
     val scopeMode: StateFlow<DashboardScopeMode> = _scopeMode.asStateFlow()
 
     private val _manualCheckInDate = MutableStateFlow<String?>(null)
@@ -273,9 +281,13 @@ class AttendanceViewModel(
                 }
             }
         ) { studentsPair, nowMs ->
+            val onlineList = studentsPair.first
+                .filter { it.isCurrentlyOnline(nowMs) }
+                .sortedByDescending { it.lastSeenAt?.toDate()?.time ?: 0L }
             AdminStreamBundle(
                 students = studentsPair.first,
-                onlineNowCount = studentsPair.first.count { it.isCurrentlyOnline(nowMs) }
+                onlineNowCount = onlineList.size,
+                onlineUsers = onlineList
             )
         }
     } else {
@@ -450,9 +462,10 @@ class AttendanceViewModel(
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
         val todayIsWeekend = DateUtils.isWeekend(todayKey)
         val todayNonSchoolEvent = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
+        val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
         val todayIsLocked = profile?.isDateInLockedBaseline(todayKey) == true ||
             periodBlocks.any { it.containsDate(todayKey) }
-        val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null && !todayIsLocked
+        val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null && !todayIsLocked && todayKey >= schoolStartKey
 
         val (nowHour, nowMinute) = DateUtils.currentHourMinute()
         val remHour = profile?.reminderHour ?: prefs.hour
@@ -466,11 +479,12 @@ class AttendanceViewModel(
             !sessionDismissed &&
             prefs.lastDismissedDate != todayKey
 
-        val missedSchoolDays = if (profile?.setupCompleted == true) {
+        val effectiveLookbackStart = if (schoolStartKey > activeTerm.startDate) schoolStartKey else activeTerm.startDate
+        val missedSchoolDays = if (profile?.setupCompleted == true && todayKey >= schoolStartKey) {
             AttendanceCalculator.findUnloggedRecentSchoolDays(
                 records = bundle.records,
                 calendarEvents = effectiveEvents,
-                activeTermStartDate = activeTerm.startDate,
+                activeTermStartDate = effectiveLookbackStart,
                 todayKey = todayKey,
                 lookbackCalendarDays = 10,
                 maxItems = 5,
@@ -698,6 +712,7 @@ class AttendanceViewModel(
             accentPalette = prefs.accentPalette,
             totalAccounts = displayedAccounts,
             adminOnlineNowCount = extras.adminBundle.onlineNowCount,
+            adminOnlineUsers = if (isVerifiedAdmin) extras.adminBundle.onlineUsers else emptyList(),
             unreadBroadcasts = recentMatchingBroadcasts,
             resolvedFeedbackAlerts = resolvedFeedbackAlerts,
             lastSeenAppVersion = prefs.lastSeenAppVersion,
@@ -772,6 +787,10 @@ class AttendanceViewModel(
         if (DateUtils.isWeekend(dateKey)) return
         if (dateKey > DateUtils.todayKey()) {
             _snackbarMessage.value = "You can't mark attendance for future dates"
+            return
+        }
+        if (uiState.value.isBeforeSchoolStart(dateKey)) {
+            _snackbarMessage.value = "Attendance starts from ${DateUtils.formatReadableShort(uiState.value.effectiveSchoolStartDateKey)}"
             return
         }
         if (uiState.value.isDateLocked(dateKey)) {
@@ -1069,6 +1088,10 @@ class AttendanceViewModel(
             _snackbarMessage.value = "You can't mark attendance for future dates"
             return
         }
+        if (uiState.value.isBeforeSchoolStart(dateKey)) {
+            _snackbarMessage.value = "Attendance starts from ${DateUtils.formatReadableShort(uiState.value.effectiveSchoolStartDateKey)}"
+            return
+        }
         if (uiState.value.isDateLocked(dateKey)) {
             _snackbarMessage.value = "Cannot edit days inside a locked attendance period"
             return
@@ -1294,7 +1317,7 @@ class AttendanceViewModel(
         val current = uiState.value
         val today = DateUtils.todayKey()
         val eligibleDates = dateKeys.filter { key ->
-            key <= today && !DateUtils.isWeekend(key) && !current.isDateLocked(key)
+            key <= today && !DateUtils.isWeekend(key) && !current.isBeforeSchoolStart(key) && !current.isDateLocked(key)
         }.distinct()
         if (eligibleDates.isEmpty()) {
             _snackbarMessage.value = "No editable school days selected"
