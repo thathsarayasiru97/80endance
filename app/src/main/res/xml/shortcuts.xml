@@ -3,7 +3,7 @@
     <shortcut
         android:shortcutId="mark_present_today"
         android:enabled="true"
-        android:icon="@android:drawable/checkbox_on_background"
+        android:icon="@drawable/ic_shortcut_present"
         android:shortcutShortLabel="@string/shortcut_mark_present_short"
         android:shortcutLongLabel="@string/shortcut_mark_present_long">
         <intent
@@ -19,7 +19,7 @@
     <shortcut
         android:shortcutId="mark_absent_today"
         android:enabled="true"
-        android:icon="@android:drawable/ic_delete"
+        android:icon="@drawable/ic_shortcut_absent"
         android:shortcutShortLabel="@string/shortcut_mark_absent_short"
         android:shortcutLongLabel="@string/shortcut_mark_absent_long">
         <intent
@@ -35,7 +35,7 @@
     <shortcut
         android:shortcutId="open_calendar"
         android:enabled="true"
-        android:icon="@android:drawable/ic_menu_my_calendar"
+        android:icon="@drawable/ic_shortcut_calendar"
         android:shortcutShortLabel="@string/shortcut_open_calendar_short"
         android:shortcutLongLabel="@string/shortcut_open_calendar_long">
         <intent
@@ -51,7 +51,7 @@
     <shortcut
         android:shortcutId="open_reports"
         android:enabled="true"
-        android:icon="@android:drawable/ic_menu_sort_by_size"
+        android:icon="@drawable/ic_shortcut_trends"
         android:shortcutShortLabel="@string/shortcut_open_reports_short"
         android:shortcutLongLabel="@string/shortcut_open_reports_long">
         <intent

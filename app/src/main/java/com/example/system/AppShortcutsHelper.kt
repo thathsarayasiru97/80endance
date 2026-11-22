@@ -10,21 +10,30 @@ import com.example.R
 import com.example.data.AppConstants
 
 /**
- * Registers dynamic Android launcher long-press shortcuts using the runtime [Context.getPackageName],
- * guaranteeing shortcuts work on both release and dev builds alongside `res/xml/shortcuts.xml`.
+ * Ensures Android launcher long-press shortcuts work reliably on both standard and dev builds:
+ * - On the standard package (`com.aistudio.eightyendance.rcxkmv`), static `res/xml/shortcuts.xml`
+ *   provides all 4 instant actions immediately upon install, so dynamic duplicates are cleared.
+ * - On alternative/dev package IDs, publishes the exact same 4 dynamic shortcuts bound to the
+ *   runtime [Context.getPackageName].
  */
 object AppShortcutsHelper {
+
+    private const val STATIC_SHORTCUTS_PACKAGE = "com.aistudio.eightyendance.rcxkmv"
 
     fun publishDynamicShortcuts(context: Context) {
         val appCtx = context.applicationContext
         runCatching {
+            if (appCtx.packageName == STATIC_SHORTCUTS_PACKAGE) {
+                ShortcutManagerCompat.removeAllDynamicShortcuts(appCtx)
+                return@runCatching
+            }
             val shortcuts = listOf(
                 buildShortcut(
                     context = appCtx,
                     id = "dyn_mark_present",
                     shortLabel = appCtx.getString(R.string.shortcut_mark_present_short),
                     longLabel = appCtx.getString(R.string.shortcut_mark_present_long),
-                    iconRes = android.R.drawable.checkbox_on_background,
+                    iconRes = R.drawable.ic_shortcut_present,
                     actionValue = AppConstants.SHORTCUT_MARK_PRESENT,
                     rank = 0
                 ),
@@ -33,7 +42,7 @@ object AppShortcutsHelper {
                     id = "dyn_mark_absent",
                     shortLabel = appCtx.getString(R.string.shortcut_mark_absent_short),
                     longLabel = appCtx.getString(R.string.shortcut_mark_absent_long),
-                    iconRes = android.R.drawable.ic_delete,
+                    iconRes = R.drawable.ic_shortcut_absent,
                     actionValue = AppConstants.SHORTCUT_MARK_ABSENT,
                     rank = 1
                 ),
@@ -42,7 +51,7 @@ object AppShortcutsHelper {
                     id = "dyn_open_calendar",
                     shortLabel = appCtx.getString(R.string.shortcut_open_calendar_short),
                     longLabel = appCtx.getString(R.string.shortcut_open_calendar_long),
-                    iconRes = android.R.drawable.ic_menu_my_calendar,
+                    iconRes = R.drawable.ic_shortcut_calendar,
                     actionValue = AppConstants.SHORTCUT_OPEN_CALENDAR,
                     rank = 2
                 ),
@@ -51,7 +60,7 @@ object AppShortcutsHelper {
                     id = "dyn_open_reports",
                     shortLabel = appCtx.getString(R.string.shortcut_open_reports_short),
                     longLabel = appCtx.getString(R.string.shortcut_open_reports_long),
-                    iconRes = android.R.drawable.ic_menu_sort_by_size,
+                    iconRes = R.drawable.ic_shortcut_trends,
                     actionValue = AppConstants.SHORTCUT_OPEN_REPORTS,
                     rank = 3
                 )

@@ -77,6 +77,81 @@ object AttendanceWidgetStore {
     private const val KEY_AL_YEAR = "al_year"
     private const val KEY_NEXT_HOLIDAY_TITLE = "next_holiday_title"
     private const val KEY_NEXT_HOLIDAY_DATE = "next_holiday_date"
+    private const val KEY_UNDO_DATE = "ext_undo_date"
+    private const val KEY_UNDO_LABEL = "ext_undo_status_label"
+    private const val KEY_UNDO_PREV_STATUS = "ext_undo_prev_status"
+    private const val KEY_UNDO_PREV_NOTE = "ext_undo_prev_note"
+    private const val KEY_UNDO_SOURCE = "ext_undo_source"
+    private const val KEY_UNDO_TS = "ext_undo_ts"
+
+    data class PendingExternalUndo(
+        val dateKey: String,
+        val statusLabel: String,
+        val previousStatusRaw: String?,
+        val previousNote: String?,
+        val source: String,
+        val timestampMillis: Long
+    )
+
+    fun savePendingExternalUndo(
+        context: Context,
+        dateKey: String,
+        statusLabel: String,
+        previousStatusRaw: String?,
+        previousNote: String?,
+        source: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_UNDO_DATE, dateKey)
+            .putString(KEY_UNDO_LABEL, statusLabel)
+            .putString(KEY_UNDO_PREV_STATUS, previousStatusRaw)
+            .putString(KEY_UNDO_PREV_NOTE, previousNote)
+            .putString(KEY_UNDO_SOURCE, source)
+            .putLong(KEY_UNDO_TS, nowMillis)
+            .apply()
+    }
+
+    fun clearPendingExternalUndo(context: Context) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .remove(KEY_UNDO_DATE)
+            .remove(KEY_UNDO_LABEL)
+            .remove(KEY_UNDO_PREV_STATUS)
+            .remove(KEY_UNDO_PREV_NOTE)
+            .remove(KEY_UNDO_SOURCE)
+            .remove(KEY_UNDO_TS)
+            .apply()
+    }
+
+    /**
+     * Returns and clears a recent (< 20s old) external check-in (widget / notification / Quick Tile)
+     * so the app can immediately offer a 5-second Undo snackbar upon foregrounding.
+     */
+    fun consumePendingExternalUndo(
+        context: Context,
+        nowMillis: Long = System.currentTimeMillis(),
+        maxAgeMillis: Long = 20_000L
+    ): PendingExternalUndo? {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val dateKey = prefs.getString(KEY_UNDO_DATE, null) ?: return null
+        val label = prefs.getString(KEY_UNDO_LABEL, null) ?: return null
+        val ts = prefs.getLong(KEY_UNDO_TS, 0L)
+        val prevStatus = prefs.getString(KEY_UNDO_PREV_STATUS, null)
+        val prevNote = prefs.getString(KEY_UNDO_PREV_NOTE, null)
+        val source = prefs.getString(KEY_UNDO_SOURCE, "widget") ?: "widget"
+        clearPendingExternalUndo(context)
+        if (ts <= 0L || (nowMillis - ts) > maxAgeMillis) return null
+        return PendingExternalUndo(
+            dateKey = dateKey,
+            statusLabel = label,
+            previousStatusRaw = prevStatus,
+            previousNote = prevNote,
+            source = source,
+            timestampMillis = ts
+        )
+    }
 
     fun toWidgetWeekDays(summary: List<WeekDaySummary>): List<WidgetWeekDay> {
         return summary.take(5).map { day ->

@@ -1218,6 +1218,30 @@ class AttendanceViewModel(
         _undoableCheckIn.value = null
     }
 
+    fun consumePendingExternalUndo() {
+        val pending = AttendanceWidgetStore.consumePendingExternalUndo(appContext) ?: return
+        val prevRecord = pending.previousStatusRaw?.takeIf { it.isNotBlank() }?.let { raw ->
+            AttendanceRecord(
+                userId = currentUserId,
+                dateKey = pending.dateKey,
+                termId = AttendanceCalculator.resolveTermIdForDate(pending.dateKey, uiState.value.terms),
+                status = raw,
+                note = pending.previousNote
+            )
+        }
+        val sourceLabel = when (pending.source) {
+            "widget" -> "widget"
+            "quick_tile" -> "Quick Settings tile"
+            "notification" -> "notification"
+            else -> "quick action"
+        }
+        _undoableCheckIn.value = UndoableCheckInAction(
+            message = "Marked ${pending.statusLabel} via $sourceLabel (${DateUtils.formatReadableShort(pending.dateKey)})",
+            dateKey = pending.dateKey,
+            previousRecord = prevRecord
+        )
+    }
+
     fun dismissCelebration() {
         _celebrationEvent.value = null
     }
@@ -1225,6 +1249,7 @@ class AttendanceViewModel(
     fun undoLastCheckIn() {
         val action = _undoableCheckIn.value ?: return
         _undoableCheckIn.value = null
+        AttendanceWidgetStore.clearPendingExternalUndo(appContext)
         viewModelScope.launch {
             _isSaving.value = true
             val current = uiState.value

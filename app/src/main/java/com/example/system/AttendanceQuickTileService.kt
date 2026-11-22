@@ -33,6 +33,14 @@ class AttendanceQuickTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        if (isLocked) {
+            unlockAndRun { performTileClick() }
+        } else {
+            performTileClick()
+        }
+    }
+
+    private fun performTileClick() {
         val appCtx = applicationContext
         val snapshot = AttendanceWidgetStore.load(appCtx)
         val todayKey = DateUtils.todayKey()

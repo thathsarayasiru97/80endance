@@ -65,6 +65,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,6 +131,7 @@ fun HomeScreen(
     onOpenCheckIn: (String) -> Unit,
     onSyncClick: () -> Unit,
     onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
+    onUndoSwipeDate: (String) -> Unit = {},
     onVoteNextDay: (Boolean) -> Unit = {},
     onSaveCustomAvatar: (String?) -> Unit = {},
     onDismissBroadcast: (String) -> Unit = {},
@@ -156,7 +158,7 @@ fun HomeScreen(
     var showPhotoDialog by remember { mutableStateOf(false) }
     var showAlTimelineSheet by remember { mutableStateOf(false) }
     var showSwipeCatchUpDeck by remember { mutableStateOf(false) }
-    var autoOfferedSwipeDeck by remember { mutableStateOf(false) }
+    var autoOfferedSwipeDeck by rememberSaveable { mutableStateOf(false) }
     var privacyBlurred by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
@@ -170,7 +172,7 @@ fun HomeScreen(
         }
     }
 
-    // Auto-offer Swipe-to-Catch-Up stack once if student has a 3+ day unlogged backlog
+    // Auto-offer Swipe-to-Catch-Up stack once per launch if student has a 3+ day unlogged backlog
     LaunchedEffect(state.missedSchoolDays.size, state.shouldAutoShowCheckIn) {
         if (!autoOfferedSwipeDeck && state.missedSchoolDays.size >= 3 && !state.shouldAutoShowCheckIn) {
             autoOfferedSwipeDeck = true
@@ -1217,10 +1219,11 @@ fun HomeScreen(
         )
     }
 
-    if (showSwipeCatchUpDeck && state.missedSchoolDays.isNotEmpty()) {
+    if (showSwipeCatchUpDeck) {
         SwipeCatchUpDeckDialog(
             missedDays = state.missedSchoolDays,
             onLogDay = onQuickLogDate,
+            onUndoLastDay = onUndoSwipeDate,
             onDismiss = { showSwipeCatchUpDeck = false }
         )
     }

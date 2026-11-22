@@ -47,6 +47,7 @@ object ReminderScheduler {
     const val ACTION_POLL_VOTE_NO = "com.example.action.POLL_VOTE_NO"
     const val EXTRA_SOURCE = "extra_checkin_source"
     const val EXTRA_PREVIOUS_STATUS = "extra_previous_status"
+    const val EXTRA_PREVIOUS_NOTE = "extra_previous_note"
     const val EXTRA_TARGET_DATE = "extra_target_date"
     const val EXTRA_POLL_TARGET_DATE = "extra_poll_target_date"
 

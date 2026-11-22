@@ -43,6 +43,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -918,7 +920,11 @@ fun DailyCheckInDialog(
                             )
                         )
                 )
-                Column(modifier = Modifier.padding(22.dp)) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(22.dp)
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -978,6 +984,10 @@ fun DailyCheckInDialog(
                                 )
                                 Spacer(modifier = Modifier.height(22.dp))
 
+                                val absentImpact = remember(dateKey, previewForStatus) {
+                                    previewForStatus?.invoke(AttendanceStatus.ABSENT)
+                                }
+
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -987,7 +997,7 @@ fun DailyCheckInDialog(
                                         backdrop = dialogBackdrop,
                                         tint = semantic.present,
                                         contentColor = semantic.onPresentContainer,
-                                        minHeight = 60.dp,
+                                        minHeight = 64.dp,
                                         modifier = Modifier
                                             .weight(1f)
                                             .testTag("checkin_yes_button")
@@ -1002,20 +1012,36 @@ fun DailyCheckInDialog(
                                         backdrop = dialogBackdrop,
                                         tint = semantic.absent,
                                         contentColor = semantic.onAbsentContainer,
-                                        minHeight = 60.dp,
+                                        minHeight = 64.dp,
                                         modifier = Modifier
                                             .weight(1f)
                                             .testTag("checkin_no_button")
                                     ) {
-                                        Icon(Icons.Rounded.EventBusy, contentDescription = null, tint = semantic.absent)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("No", style = MaterialTheme.typography.titleMedium)
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Rounded.EventBusy, contentDescription = null, tint = semantic.absent)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("No", style = MaterialTheme.typography.titleMedium)
+                                            }
+                                            if (absentImpact != null) {
+                                                Text(
+                                                    text = String.format(
+                                                        Locale.US,
+                                                        "%.1f%% → %.1f%%",
+                                                        absentImpact.currentPercent,
+                                                        absentImpact.projectedPercent
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = semantic.absent,
+                                                    maxLines = 1,
+                                                    modifier = Modifier.testTag("checkin_no_btn_impact_badge")
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
-                                val absentImpact = remember(dateKey, previewForStatus) {
-                                    previewForStatus?.invoke(AttendanceStatus.ABSENT)
-                                }
                                 if (absentImpact != null) {
                                     Spacer(modifier = Modifier.height(12.dp))
                                     CheckInImpactPreviewBadge(
@@ -1203,15 +1229,33 @@ fun DailyCheckInDialog(
                                     )
                                 }
 
+                                val confirmTint = when (selectedNoStatus) {
+                                    AttendanceStatus.ABSENT -> semantic.absent
+                                    AttendanceStatus.MEDICAL -> semantic.medical
+                                    AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
+                                    AttendanceStatus.HOLIDAY -> semantic.poya
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+                                val confirmContentColor = when (selectedNoStatus) {
+                                    AttendanceStatus.ABSENT -> semantic.onAbsentContainer
+                                    AttendanceStatus.MEDICAL -> semantic.onMedicalContainer
+                                    AttendanceStatus.SCHOOL_EVENT -> semantic.onSchoolEventContainer
+                                    AttendanceStatus.HOLIDAY -> semantic.onPoyaContainer
+                                    else -> MaterialTheme.colorScheme.primary
+                                }
+
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     OutlinedButton(
                                         onClick = { step = CheckInStep.ASK_YES_NO },
                                         shape = RoundedCornerShape(14.dp),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier
+                                            .weight(0.72f)
+                                            .height(56.dp)
                                     ) { Text("Back") }
                                     LiquidGlassButton(
                                         onClick = {
@@ -1223,14 +1267,44 @@ fun DailyCheckInDialog(
                                         },
                                         backdrop = dialogBackdrop,
                                         enabled = !isSaving,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        contentColor = MaterialTheme.colorScheme.primary,
-                                        minHeight = 48.dp,
-                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                                        tint = confirmTint,
+                                        contentColor = confirmContentColor,
+                                        minHeight = 56.dp,
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                         modifier = Modifier
-                                            .weight(1.4f)
+                                            .weight(1.75f)
                                             .testTag("checkin_confirm_no_button")
-                                    ) { Text("Save ${selectedNoStatus.shortLabel}") }
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(
+                                                text = "Save ${selectedNoStatus.shortLabel}",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1
+                                            )
+                                            if (selectedImpact != null) {
+                                                val shortBuffer = if (selectedImpact.willStayEligible) {
+                                                    "${selectedImpact.remainingSafeSkips} safe skip${if (selectedImpact.remainingSafeSkips == 1) "" else "s"} left"
+                                                } else {
+                                                    "Need +${selectedImpact.daysNeededToRecover}d"
+                                                }
+                                                Text(
+                                                    text = String.format(
+                                                        Locale.US,
+                                                        "%.1f%% → %.1f%% · %s",
+                                                        selectedImpact.currentPercent,
+                                                        selectedImpact.projectedPercent,
+                                                        shortBuffer
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = confirmTint,
+                                                    maxLines = 1,
+                                                    modifier = Modifier.testTag("checkin_confirm_live_badge")
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1276,16 +1350,10 @@ private fun CheckInImpactPreviewBadge(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "$label: ${String.format(Locale.US, "%.1f%%", preview.currentPercent)} → ${String.format(Locale.US, "%.1f%%", preview.projectedPercent)}",
-                style = MaterialTheme.typography.labelMedium,
+                text = "$label: ${String.format(Locale.US, "%.1f%%", preview.currentPercent)} → ${String.format(Locale.US, "%.1f%%", preview.projectedPercent)} · $bufferText",
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = tint
-            )
-            Text(
-                text = bufferText,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

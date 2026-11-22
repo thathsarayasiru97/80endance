@@ -47,7 +47,8 @@ class DailyReminderReceiver : BroadcastReceiver() {
                     ReminderScheduler.ACTION_QUICK_UNDO -> handleQuickUndo(
                         context = context,
                         dateKey = intent.getStringExtra(ReminderScheduler.EXTRA_TARGET_DATE) ?: DateUtils.todayKey(),
-                        previousStatusRaw = intent.getStringExtra(ReminderScheduler.EXTRA_PREVIOUS_STATUS)
+                        previousStatusRaw = intent.getStringExtra(ReminderScheduler.EXTRA_PREVIOUS_STATUS),
+                        previousNote = intent.getStringExtra(ReminderScheduler.EXTRA_PREVIOUS_NOTE)
                     )
                     ReminderScheduler.ACTION_NEXT_DAY_POLL_ALARM -> handleNextDayPollAlarm(context)
                     ReminderScheduler.ACTION_POLL_VOTE_YES -> handleNextDayPollVote(
@@ -201,7 +202,9 @@ class DailyReminderReceiver : BroadcastReceiver() {
 
         // Capture any pre-existing record for today so Quick Undo can restore it cleanly
         val (preProfile, preRecords, _) = repository.getQuickWidgetMetrics(uid, todayKey)
-        val previousStatusRaw = preRecords.firstOrNull { it.dateKey == todayKey }?.status
+        val previousRecord = preRecords.firstOrNull { it.dateKey == todayKey }
+        val previousStatusRaw = previousRecord?.status
+        val previousNote = previousRecord?.note
 
         val result = repository.upsertAttendance(
             targetUserId = uid,
@@ -216,6 +219,15 @@ class DailyReminderReceiver : BroadcastReceiver() {
             LocalPreferencesStore(appCtx).markPromptDismissedForDate(todayKey)
             SyncScheduler.scheduleBackgroundSync(appCtx)
 
+            AttendanceWidgetStore.savePendingExternalUndo(
+                context = appCtx,
+                dateKey = todayKey,
+                statusLabel = status.label,
+                previousStatusRaw = previousStatusRaw,
+                previousNote = previousNote,
+                source = source
+            )
+
             val newPercent = refreshWidgetsFromRepository(appCtx, repository, uid, todayKey, status, termId)
 
             // Provide instant silent confirmation with a 1-tap Undo button
@@ -225,7 +237,8 @@ class DailyReminderReceiver : BroadcastReceiver() {
                 status = status,
                 dateKey = todayKey,
                 newPercent = newPercent,
-                previousStatusRaw = previousStatusRaw
+                previousStatusRaw = previousStatusRaw,
+                previousNote = previousNote
             )
             if (preProfile == null) {
                 Log.d("DailyReminderReceiver", "Quick check-in saved without cached profile ($source)")
@@ -236,11 +249,13 @@ class DailyReminderReceiver : BroadcastReceiver() {
     private suspend fun handleQuickUndo(
         context: Context,
         dateKey: String,
-        previousStatusRaw: String?
+        previousStatusRaw: String?,
+        previousNote: String? = null
     ) {
         val appCtx = context.applicationContext
         val manager = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         manager?.cancel(ReminderScheduler.CONFIRMATION_NOTIFICATION_ID)
+        AttendanceWidgetStore.clearPendingExternalUndo(appCtx)
 
         val uid = Firebase.auth.currentUser?.uid ?: return
         val repository = AttendanceRepository(appCtx)
@@ -253,7 +268,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
                 termId = termId,
                 status = prevStatus,
                 subjectTags = emptyList(),
-                note = null,
+                note = previousNote,
                 markedBy = "student"
             )
             refreshWidgetsFromRepository(appCtx, repository, uid, dateKey, prevStatus, termId)
@@ -262,6 +277,18 @@ class DailyReminderReceiver : BroadcastReceiver() {
             refreshWidgetsFromRepository(appCtx, repository, uid, dateKey, null, termId)
         }
         SyncScheduler.scheduleBackgroundSync(appCtx)
+
+        if (manager != null && ReminderScheduler.hasNotificationPermission(appCtx)) {
+            val revertedNotif = NotificationCompat.Builder(appCtx, ReminderScheduler.CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Check-in undone")
+                .setContentText("Reverted ${DateUtils.formatReadableShort(dateKey)}.")
+                .setSilent(true)
+                .setTimeoutAfter(3_000L)
+                .setAutoCancel(true)
+                .build()
+            manager.notify(ReminderScheduler.CONFIRMATION_NOTIFICATION_ID, revertedNotif)
+        }
     }
 
     private suspend fun refreshWidgetsFromRepository(
@@ -345,7 +372,8 @@ class DailyReminderReceiver : BroadcastReceiver() {
         status: AttendanceStatus,
         dateKey: String,
         newPercent: Double,
-        previousStatusRaw: String?
+        previousStatusRaw: String?,
+        previousNote: String? = null
     ) {
         if (manager == null) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -369,6 +397,9 @@ class DailyReminderReceiver : BroadcastReceiver() {
             putExtra(ReminderScheduler.EXTRA_TARGET_DATE, dateKey)
             if (!previousStatusRaw.isNullOrBlank()) {
                 putExtra(ReminderScheduler.EXTRA_PREVIOUS_STATUS, previousStatusRaw)
+            }
+            if (!previousNote.isNullOrBlank()) {
+                putExtra(ReminderScheduler.EXTRA_PREVIOUS_NOTE, previousNote)
             }
         }
         val undoPending = PendingIntent.getBroadcast(

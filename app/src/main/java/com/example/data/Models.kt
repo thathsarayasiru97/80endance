@@ -625,7 +625,7 @@ data class CelebrationEvent(
 )
 
 data class UndoableCheckInAction(
-    val id: Long = System.currentTimeMillis(),
+    val id: Long = System.nanoTime(),
     val message: String,
     val dateKey: String,
     val previousRecord: AttendanceRecord?

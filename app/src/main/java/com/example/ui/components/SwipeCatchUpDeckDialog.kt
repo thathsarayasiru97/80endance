@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,9 +17,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
@@ -34,16 +37,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
@@ -70,25 +75,32 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Interactive Swipe-to-Catch-Up Card Stack for clearing a backlog of unlogged school days in seconds.
+ * Interactive Swipe-to-Catch-Up Card Stack for clearing a 3–5+ day backlog in seconds.
  * - Swipe Right → Present
  * - Swipe Left → Absent
- * - Tap quick pill → Medical or Excused
+ * - Tap the card → Medical
+ * - Accessible action buttons below for Present / Absent / Medical / Excused + Undo Last
+ *
+ * Snapshots [missedDays] once when opened so real-time Firestore updates mid-swipe never reset
+ * [currentIndex] or skip cards.
  */
 @Composable
 fun SwipeCatchUpDeckDialog(
     missedDays: List<String>,
     onLogDay: (dateKey: String, status: AttendanceStatus) -> Unit,
+    onUndoLastDay: ((dateKey: String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    val orderedDays = remember(missedDays) { missedDays.sorted() }
-    var currentIndex by remember(orderedDays) { mutableIntStateOf(0) }
+    // Snapshot the backlog for this session so live Firestore updates do not reset index mid-swipe
+    val orderedDays = remember { missedDays.distinct().sorted() }
+    var currentIndex by remember { mutableIntStateOf(0) }
+    var isAnimatingOut by remember { mutableStateOf(false) }
     val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
 
     if (orderedDays.isEmpty() || currentIndex >= orderedDays.size) {
-        onDismiss()
+        LaunchedEffect(Unit) { onDismiss() }
         return
     }
 
@@ -96,17 +108,24 @@ fun SwipeCatchUpDeckDialog(
     val remainingCount = orderedDays.size - currentIndex
 
     fun commitStatus(status: AttendanceStatus, swipeDir: Float = 0f) {
+        if (isAnimatingOut) return
+        val dateToLog = currentDate
+        isAnimatingOut = true
         scope.launch {
-            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            if (swipeDir != 0f) {
-                offsetX.animateTo(swipeDir * 900f, animationSpec = tween(180))
-            }
-            onLogDay(currentDate, status)
-            offsetX.snapTo(0f)
-            if (currentIndex + 1 >= orderedDays.size) {
-                onDismiss()
-            } else {
-                currentIndex += 1
+            try {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                if (swipeDir != 0f) {
+                    offsetX.animateTo(swipeDir * 900f, animationSpec = tween(160))
+                }
+                onLogDay(dateToLog, status)
+                offsetX.snapTo(0f)
+                if (currentIndex + 1 >= orderedDays.size) {
+                    onDismiss()
+                } else {
+                    currentIndex += 1
+                }
+            } finally {
+                isAnimatingOut = false
             }
         }
     }
@@ -125,8 +144,10 @@ fun SwipeCatchUpDeckDialog(
             tonalElevation = 8.dp
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Header
@@ -156,23 +177,50 @@ fun SwipeCatchUpDeckDialog(
                             )
                         }
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("swipe_deck_close")) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Close")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (currentIndex > 0) {
+                            TextButton(
+                                onClick = {
+                                    if (!isAnimatingOut && currentIndex > 0) {
+                                        val prevDate = orderedDays[currentIndex - 1]
+                                        currentIndex -= 1
+                                        onUndoLastDay?.invoke(prevDate)
+                                    }
+                                },
+                                modifier = Modifier.testTag("swipe_deck_undo_btn")
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.Undo,
+                                    contentDescription = "Undo previous card",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.size(4.dp))
+                                Text("Undo", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        IconButton(onClick = onDismiss, modifier = Modifier.testTag("swipe_deck_close")) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Close")
+                        }
                     }
                 }
 
-                // Swipe instruction strip
+                // Swipe + Tap instruction strip
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "← Swipe Left: Absent",
+                        text = "← Left: Absent",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = StatusRed
                     )
                     Text(
-                        text = "Swipe Right: Present →",
+                        text = "Tap: Medical",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = StatusOrange
+                    )
+                    Text(
+                        text = "Right: Present →",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = StatusGreen
                     )
@@ -182,7 +230,7 @@ fun SwipeCatchUpDeckDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(230.dp),
+                        .height(234.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     // Shadow preview of the next card underneath
@@ -191,7 +239,7 @@ fun SwipeCatchUpDeckDialog(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(210.dp)
+                                .height(212.dp)
                                 .scale(0.93f)
                                 .offset(y = 14.dp)
                                 .alpha(0.65f),
@@ -209,7 +257,7 @@ fun SwipeCatchUpDeckDialog(
                         }
                     }
 
-                    // Active draggable card
+                    // Active draggable + tappable card (Right=Present, Left=Absent, Tap=Medical)
                     val dragFraction = (offsetX.value / 260f).coerceIn(-1f, 1f)
                     val stampColor = when {
                         dragFraction > 0.15f -> StatusGreen
@@ -219,15 +267,20 @@ fun SwipeCatchUpDeckDialog(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(218.dp)
+                            .height(220.dp)
                             .offset { IntOffset(offsetX.value.roundToInt(), 0) }
                             .rotate(dragFraction * 9f)
+                            .pointerInput(currentDate) {
+                                detectTapGestures(
+                                    onTap = { commitStatus(AttendanceStatus.MEDICAL, 0f) }
+                                )
+                            }
                             .pointerInput(currentDate) {
                                 detectHorizontalDragGestures(
                                     onDragEnd = {
                                         when {
-                                            offsetX.value > 180f -> commitStatus(AttendanceStatus.PRESENT, 1f)
-                                            offsetX.value < -180f -> commitStatus(AttendanceStatus.ABSENT, -1f)
+                                            offsetX.value > 165f -> commitStatus(AttendanceStatus.PRESENT, 1f)
+                                            offsetX.value < -165f -> commitStatus(AttendanceStatus.ABSENT, -1f)
                                             else -> scope.launch {
                                                 offsetX.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 400f))
                                             }
@@ -237,7 +290,9 @@ fun SwipeCatchUpDeckDialog(
                                         scope.launch { offsetX.animateTo(0f, spring()) }
                                     },
                                     onHorizontalDrag = { _, dragAmount ->
-                                        scope.launch { offsetX.snapTo(offsetX.value + dragAmount) }
+                                        if (!isAnimatingOut) {
+                                            scope.launch { offsetX.snapTo(offsetX.value + dragAmount) }
+                                        }
                                     }
                                 )
                             }
@@ -300,7 +355,7 @@ fun SwipeCatchUpDeckDialog(
                                     textAlign = TextAlign.Center
                                 )
                                 Text(
-                                    text = "Did you attend school on this day?",
+                                    text = "Swipe right for Present, left for Absent, or tap for Medical",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFFC5D8FA),
                                     textAlign = TextAlign.Center
@@ -310,7 +365,7 @@ fun SwipeCatchUpDeckDialog(
                             Text(
                                 text = "${currentIndex + 1} / ${orderedDays.size}",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = Color.White.copy(alpha = 0.6f),
+                                color = Color.White.copy(alpha = 0.65f),
                                 modifier = Modifier.align(Alignment.BottomCenter)
                             )
                         }
@@ -359,7 +414,7 @@ fun SwipeCatchUpDeckDialog(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(44.dp)
+                            .height(48.dp)
                             .testTag("swipe_deck_medical_btn")
                     ) {
                         Icon(
@@ -376,7 +431,7 @@ fun SwipeCatchUpDeckDialog(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(44.dp)
+                            .height(48.dp)
                             .testTag("swipe_deck_excused_btn")
                     ) {
                         Icon(

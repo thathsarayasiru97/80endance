@@ -413,6 +413,7 @@ private fun AuthenticatedAppShell(
                 Lifecycle.Event.ON_START -> {
                     isAppForeground = true
                     attendanceViewModel.setPresence(true)
+                    attendanceViewModel.consumePendingExternalUndo()
                 }
                 Lifecycle.Event.ON_STOP -> {
                     isAppForeground = false
@@ -496,12 +497,20 @@ private fun AuthenticatedAppShell(
 
     LaunchedEffect(undoableCheckIn) {
         undoableCheckIn?.let { action ->
-            val result = snackbarHostState.showSnackbar(
-                message = action.message,
-                actionLabel = "Undo",
-                withDismissAction = true,
-                duration = SnackbarDuration.Short
-            )
+            val autoDismissJob = launch {
+                delay(5_000L)
+                snackbarHostState.currentSnackbarData?.dismiss()
+            }
+            val result = try {
+                snackbarHostState.showSnackbar(
+                    message = action.message,
+                    actionLabel = "Undo",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite
+                )
+            } finally {
+                autoDismissJob.cancel()
+            }
             if (result == SnackbarResult.ActionPerformed) {
                 attendanceViewModel.undoLastCheckIn()
             } else {
@@ -684,6 +693,7 @@ private fun AuthenticatedAppShell(
                             onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
                             onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
+                            onUndoSwipeDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
                             onVoteNextDay = { going -> attendanceViewModel.submitNextDayVote(going) },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onDismissBroadcast = { id -> attendanceViewModel.dismissBroadcastAlert(id) },

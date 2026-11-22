@@ -4,10 +4,10 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_pill_glass_bg"
-    android:gravity="center_vertical"
+    android:gravity="center"
     android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:paddingEnd="14dp"
+    android:paddingEnd="16dp"
     android:paddingTop="6dp"
     android:paddingBottom="6dp">
 
@@ -17,8 +17,8 @@
         android:layout_height="wrap_content"
         android:text="●"
         android:textColor="#34D399"
-        android:textSize="11sp"
-        android:layout_marginEnd="8dp" />
+        android:textSize="10sp"
+        android:layout_marginEnd="7dp" />
 
     <TextView
         android:id="@+id/pill_percent_text"
@@ -26,7 +26,7 @@
         android:layout_height="wrap_content"
         android:text="86.4%"
         android:textColor="#FFFFFF"
-        android:textSize="15sp"
+        android:textSize="14sp"
         android:textStyle="bold"
         android:maxLines="1" />
 
@@ -60,11 +60,11 @@
 
     <TextView
         android:id="@+id/pill_al_text"
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="1"
+        android:singleLine="true"
         android:text="214d to A/L"
         android:textColor="#E2B93B"
         android:textSize="12sp"

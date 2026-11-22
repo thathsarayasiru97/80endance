@@ -1601,6 +1601,146 @@ class ScreensRenderRobolectricTest {
             .performScrollTo()
             .assertIsDisplayed()
     }
+
+    @Test
+    fun dailyCheckInDialogShowsLiveImpactBadgeRightInsideAbsentConfirmButton() {
+        val sampleImpact = com.example.data.CheckInImpactPreview(
+            currentPercent = 84.2,
+            projectedPercent = 83.1,
+            percentDelta = -1.1,
+            remainingSafeSkips = 3,
+            daysNeededToRecover = 0,
+            willStayEligible = true
+        )
+        var savedStatus: AttendanceStatus? = null
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    DailyCheckInDialog(
+                        dateKey = "2026-11-20",
+                        existingRecord = null,
+                        subjects = listOf("Physics", "Chemistry"),
+                        isSaving = false,
+                        previewForStatus = { sampleImpact },
+                        onDismiss = {},
+                        onSave = { status, _, _ -> savedStatus = status }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        // Step 1 shows tiny live delta directly inside the No button
+        composeTestRule.onNodeWithTag("checkin_no_btn_impact_badge", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("84.2% → 83.1%", useUnmergedTree = true).assertIsDisplayed()
+
+        // Advance to Step 2 (No details -> Absent default)
+        composeTestRule.onNodeWithTag("checkin_no_button").performClick()
+        composeTestRule.waitForIdle()
+
+        // Confirm button itself displays the live impact badge before confirming Absent
+        composeTestRule.onNodeWithTag("checkin_confirm_no_button").performScrollTo()
+        composeTestRule.onNodeWithTag("checkin_confirm_live_badge", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("84.2% → 83.1% · 3 safe skips left", useUnmergedTree = true).assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("checkin_confirm_no_button").performClick()
+        org.junit.Assert.assertEquals(AttendanceStatus.ABSENT, savedStatus)
+    }
+
+    @Test
+    fun swipeCatchUpDeckSupportsTapForMedicalStableStackAndUndoLast() {
+        val logged = mutableListOf<Pair<String, AttendanceStatus>>()
+        val undone = mutableListOf<String>()
+        var dismissed = false
+        val missed = listOf("2026-11-16", "2026-11-17", "2026-11-18")
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    com.example.ui.components.SwipeCatchUpDeckDialog(
+                        missedDays = missed,
+                        onLogDay = { dk, st -> logged.add(dk to st) },
+                        onUndoLastDay = { dk -> undone.add(dk) },
+                        onDismiss = { dismissed = true }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("swipe_catchup_deck_dialog").assertIsDisplayed()
+
+        // Card 1: Tap directly on active card -> logs Medical
+        composeTestRule.onNodeWithTag("swipe_deck_active_card").performClick()
+        composeTestRule.mainClock.advanceTimeBy(300)
+        composeTestRule.waitForIdle()
+        org.junit.Assert.assertEquals(listOf("2026-11-16" to AttendanceStatus.MEDICAL), logged)
+
+        // Undo Last appears on card 2 and steps back cleanly
+        composeTestRule.onNodeWithTag("swipe_deck_undo_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("swipe_deck_undo_btn").performClick()
+        composeTestRule.waitForIdle()
+        org.junit.Assert.assertEquals(listOf("2026-11-16"), undone)
+
+        // Clear all 3 cards cleanly (Present, Absent, Medical)
+        composeTestRule.onNodeWithTag("swipe_deck_present_btn").performScrollTo().performClick()
+        composeTestRule.mainClock.advanceTimeBy(300)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("swipe_deck_absent_btn").performScrollTo().performClick()
+        composeTestRule.mainClock.advanceTimeBy(300)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("swipe_deck_medical_btn").performScrollTo().performClick()
+        composeTestRule.mainClock.advanceTimeBy(300)
+        composeTestRule.waitForIdle()
+        org.junit.Assert.assertTrue(dismissed)
+    }
+
+    @Test
+    fun glassPillWidgetFormatExternalUndoBridgeAndReminderStringsWork() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+
+        // 1. Ultra-Slim 4x1 Glass Pill Widget exact formatting
+        val (pct, status, al) = com.example.system.AttendancePillWidgetProvider.formatPillSegments(
+            com.example.system.WidgetSnapshot(
+                signedIn = true,
+                percentage = 86.4,
+                eligible = true,
+                totalCountedDays = 40,
+                safeSkipsRemaining = 4,
+                daysUntilAlExam = 214,
+                alExamYear = 2027
+            )
+        )
+        org.junit.Assert.assertEquals("86.4%", pct)
+        org.junit.Assert.assertEquals("Safe (+4d)", status)
+        org.junit.Assert.assertEquals("214d to A/L", al)
+
+        // 2. Notification "Remind me in 1h" action label
+        org.junit.Assert.assertEquals("Remind me in 1h", ctx.getString(R.string.notif_action_snooze_1h))
+
+        // 3. External Undo bridge (widget / notification / Quick Settings tile -> in-app 5s snackbar)
+        val now = 1_700_000_000_000L
+        com.example.system.AttendanceWidgetStore.savePendingExternalUndo(
+            context = ctx,
+            dateKey = "2026-11-20",
+            statusLabel = "Absent",
+            previousStatusRaw = AttendanceStatus.PRESENT.raw,
+            previousNote = "Morning assembly",
+            source = "widget",
+            nowMillis = now
+        )
+        val consumed = com.example.system.AttendanceWidgetStore.consumePendingExternalUndo(
+            context = ctx,
+            nowMillis = now + 3_000L
+        )
+        org.junit.Assert.assertNotNull(consumed)
+        org.junit.Assert.assertEquals("2026-11-20", consumed!!.dateKey)
+        org.junit.Assert.assertEquals("Absent", consumed.statusLabel)
+        org.junit.Assert.assertEquals(AttendanceStatus.PRESENT.raw, consumed.previousStatusRaw)
+        org.junit.Assert.assertEquals("Morning assembly", consumed.previousNote)
+        org.junit.Assert.assertEquals("widget", consumed.source)
+        // Consumed once -> cleared on second read
+        org.junit.Assert.assertNull(
+            com.example.system.AttendanceWidgetStore.consumePendingExternalUndo(ctx, nowMillis = now + 4_000L)
+        )
+    }
 }
 
 
