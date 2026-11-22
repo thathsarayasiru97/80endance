@@ -582,6 +582,52 @@ fun AdminPanelScreen(
                                 }
                             }
 
+                            // Next-Day School Poll Dev Feature Toggle
+                            item {
+                                Card(
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("admin_next_day_poll_card")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(end = 12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Next-Day School Poll (Dev Toggle)",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "8:00 PM – 5:00 AM daily \"Going to school tomorrow?\" notification + live dashboard poll. Keep OFF until enough students join.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = state.appSettings.nextDayPollEnabled,
+                                            onCheckedChange = { enabled ->
+                                                viewModel.setNextDayPollEnabled(enabled)
+                                            },
+                                            modifier = Modifier.testTag("admin_next_day_poll_switch")
+                                        )
+                                    }
+                                }
+                            }
+
                             // Global Defaults & A/L Exam Dates
                             item {
                                 Card(
@@ -626,7 +672,7 @@ fun AdminPanelScreen(
                                                 val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
                                                 if (exam2026.matches(dateRegex) && exam2027.matches(dateRegex) && exam2028.matches(dateRegex)) {
                                                     viewModel.saveGlobalSettings(
-                                                        AppSettings(
+                                                        state.appSettings.copy(
                                                             defaultEligibilityPercent = (thresholdText.toIntOrNull() ?: 80).coerceIn(50, 100),
                                                             al2026ExamDate = exam2026,
                                                             al2027ExamDate = exam2027,

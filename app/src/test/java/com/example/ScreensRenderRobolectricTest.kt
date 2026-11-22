@@ -1279,7 +1279,246 @@ class ScreensRenderRobolectricTest {
         org.junit.Assert.assertEquals(5, restored.size)
         org.junit.Assert.assertEquals(sampleDays, restored)
     }
+
+    @Test
+    fun homeScreenShowsDangerZoneBannerPrivacyBlurSwipeButtonAndCelebration() {
+        val edgeStats = com.example.data.AttendanceStats(
+            percentage = 80.0, eligible = true, thresholdPercent = 80,
+            presentDays = 8, absentDays = 2, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 8, totalCountedDays = 10, safeSkipsRemaining = 0, daysNeededToRecover = 0
+        )
+        val homeState = sampleState.copy(
+            currentTermStats = edgeStats,
+            overallStats = edgeStats,
+            isInDangerZone = true,
+            missedSchoolDays = listOf("2026-11-18", "2026-11-19")
+        )
+        val celebration = com.example.data.CelebrationEvent(
+            type = com.example.data.CelebrationType.PERFECT_WEEK,
+            title = "Perfect 5/5 Week!",
+            subtitle = "You attended every school day Mon–Fri.",
+            badgeLabel = "5/5"
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = homeState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {},
+                        celebrationEvent = celebration,
+                        onDismissCelebration = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(500)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("celebration_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("privacy_blur_toggle"))
+        composeTestRule.onNodeWithTag("privacy_blur_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("home_danger_zone_banner"))
+        composeTestRule.onNodeWithTag("home_danger_zone_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("home_open_swipe_deck_btn"))
+        composeTestRule.onNodeWithTag("home_open_swipe_deck_btn").assertIsDisplayed()
+    }
+
+    @Test
+    fun calendarScreenSupportsBulkSelectAndPersonalAcademicMarkers() {
+        val today = DateUtils.todayKey()
+        val stateWithMarker = sampleState.copy(
+            personalMarkers = listOf(
+                com.example.data.PersonalAcademicMarker(
+                    id = "pm1",
+                    userId = "u1",
+                    dateKey = today,
+                    title = "Physics Practical",
+                    category = com.example.data.PersonalMarkerCategory.PRACTICAL.raw,
+                    note = "Lab 2"
+                )
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    CalendarScreen(
+                        state = stateWithMarker,
+                        onEditDate = {},
+                        onDeleteDate = {},
+                        onBulkLogAttendance = { _, _, _ -> },
+                        onSavePersonalMarker = { _, _, _, _, _ -> },
+                        onDeletePersonalMarker = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_bulk_select_toggle"))
+        composeTestRule.onNodeWithTag("calendar_bulk_select_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("calendar_bulk_action_bar").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("calendar_lazy_column")
+            .performScrollToNode(hasTestTag("calendar_personal_markers_section"))
+        composeTestRule.onNodeWithTag("calendar_personal_markers_section").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("calendar_personal_marker_pm1").assertIsDisplayed()
+    }
+
+    @Test
+    fun reportsScreenShowsWrappedParentRegisterToolsAndCohortPulse() {
+        val myProf = sampleState.profile!!
+        val stateWithCommunity = sampleState.copy(
+            communityTrendSummaries = listOf(
+                com.example.data.StudentTrendSummary(
+                    id = "u1", userId = "u1", totalAttended = 9, totalAbsent = 1,
+                    grade = myProf.grade,
+                    alStream = myProf.alStream,
+                    className = myProf.className
+                ),
+                com.example.data.StudentTrendSummary(
+                    id = "u2", userId = "u2", totalAttended = 8, totalAbsent = 2,
+                    grade = myProf.grade,
+                    alStream = myProf.alStream,
+                    className = "13M9"
+                )
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    ReportsScreen(state = stateWithCommunity)
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("reports_tools_card"))
+        composeTestRule.onNodeWithTag("reports_open_wrapped_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reports_open_parent_card_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reports_open_register_verify_btn").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("reports_lazy_column")
+            .performScrollToNode(hasTestTag("cohort_pulse_section"))
+        composeTestRule.onNodeWithTag("cohort_pulse_section").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsScreenShowsUnlockPromptDangerNudgeAndRegisterVerify() {
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    SettingsScreen(
+                        state = sampleState,
+                        isVerifiedAdmin = false,
+                        onEditProfile = {},
+                        onUpdatePreferences = { _, _, _, _ -> },
+                        onPreviewCheckInPopup = {},
+                        onManualSync = {},
+                        onOpenAdminPanel = {},
+                        onSignOut = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_verify_register_button"))
+        composeTestRule.onNodeWithTag("settings_verify_register_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_unlock_prompt_switch"))
+        composeTestRule.onNodeWithTag("settings_unlock_prompt_switch").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_danger_nudge_switch"))
+        composeTestRule.onNodeWithTag("settings_danger_nudge_switch").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreenShowsNextDayPollCardWhenEnabledAndOpenAndSupportsVoteSwitching() {
+        var latestVote: Boolean? = null
+        val pollState = sampleState.copy(
+            appSettings = sampleState.appSettings.copy(nextDayPollEnabled = true),
+            pollWindow = com.example.data.NextDayPollWindow(
+                isOpen = true,
+                targetDateKey = "2026-11-23",
+                isTomorrowTarget = true,
+                isTargetSchoolDay = true
+            ),
+            nextDayPollSummary = com.example.data.NextDayPollSummary(
+                targetDateKey = "2026-11-23",
+                totalVotes = 10,
+                goingCount = 7,
+                notGoingCount = 3,
+                goingPercent = 70.0,
+                notGoingPercent = 30.0,
+                myVoteGoing = true,
+                myClassGoingCount = 4,
+                myClassTotalCount = 5,
+                myClassGoingPercent = 80.0
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = pollState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {},
+                        onVoteNextDay = { latestVote = it }
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(500)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("home_next_day_poll_card"))
+        composeTestRule.onNodeWithTag("home_next_day_poll_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poll_live_analysis_bar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poll_vote_no_btn").performClick()
+        org.junit.Assert.assertEquals(false, latestVote)
+        composeTestRule.onNodeWithTag("poll_vote_yes_btn").performClick()
+        org.junit.Assert.assertEquals(true, latestVote)
+    }
+
+    @Test
+    fun homeScreenHidesNextDayPollCardWhenAdminToggleIsOff() {
+        val pollDisabledState = sampleState.copy(
+            appSettings = sampleState.appSettings.copy(nextDayPollEnabled = false),
+            pollWindow = com.example.data.NextDayPollWindow(
+                isOpen = true,
+                targetDateKey = "2026-11-23",
+                isTomorrowTarget = true,
+                isTargetSchoolDay = true
+            )
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = pollDisabledState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(500)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("home_next_day_poll_card").assertDoesNotExist()
+    }
 }
+
 
 
 

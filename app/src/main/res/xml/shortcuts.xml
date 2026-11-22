@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="mark_present_today"
+        android:enabled="true"
+        android:icon="@android:drawable/checkbox_on_background"
+        android:shortcutShortLabel="@string/shortcut_mark_present_short"
+        android:shortcutLongLabel="@string/shortcut_mark_present_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.eightyendance.rcxkmv"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="shortcut_mark_present" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="mark_absent_today"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_delete"
+        android:shortcutShortLabel="@string/shortcut_mark_absent_short"
+        android:shortcutLongLabel="@string/shortcut_mark_absent_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.eightyendance.rcxkmv"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="shortcut_mark_absent" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="open_calendar"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_my_calendar"
+        android:shortcutShortLabel="@string/shortcut_open_calendar_short"
+        android:shortcutLongLabel="@string/shortcut_open_calendar_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.eightyendance.rcxkmv"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="shortcut_open_calendar" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="open_reports"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_sort_by_size"
+        android:shortcutShortLabel="@string/shortcut_open_reports_short"
+        android:shortcutLongLabel="@string/shortcut_open_reports_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.eightyendance.rcxkmv"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="shortcut_open_reports" />
+        </intent>
+    </shortcut>
+</shortcuts>

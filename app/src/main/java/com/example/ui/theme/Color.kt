@@ -144,3 +144,11 @@ val AmethystAccentDarkPrimary = Color(0xFFC4B5FD)
 val AmethystAccentDarkOnPrimary = Color(0xFF2E1065)
 val AmethystAccentDarkPrimaryContainer = Color(0xFF4C1D95)
 val AmethystAccentDarkOnPrimaryContainer = Color(0xFFEDE9FE)
+
+// Accent & Celebration Highlight Tokens
+val RoyalGold = Color(0xFFF5B700)
+val StatusGreen = Color(0xFF22C55E)
+val StatusRed = Color(0xFFEF4444)
+val StatusOrange = Color(0xFFF59E0B)
+val StatusBlue = Color(0xFF38BDF8)
+

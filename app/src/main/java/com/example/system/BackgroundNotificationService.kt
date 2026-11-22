@@ -1,8 +1,10 @@
 package com.example.system
 
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -10,6 +12,7 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.example.data.BroadcastNotification
+import com.example.data.DateUtils
 import com.example.data.FirestoreProvider
 import com.example.data.LocalPreferencesStore
 import com.example.data.UserProfile
@@ -46,11 +49,53 @@ class BackgroundNotificationService : Service() {
     @Volatile
     private var cachedProfile: UserProfile? = null
 
+    private var unlockReceiverRegistered = false
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_USER_PRESENT) return
+            val appCtx = applicationContext
+            serviceScope.launch {
+                handleAfterSchoolUnlock(appCtx)
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                userPresentReceiver,
+                IntentFilter(Intent.ACTION_USER_PRESENT),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            unlockReceiverRegistered = true
+        }
+    }
+
+    private suspend fun handleAfterSchoolUnlock(appCtx: Context) {
+        val prefsStore = LocalPreferencesStore(appCtx)
+        val prefs = prefsStore.getSnapshot()
+        if (!prefs.afterSchoolUnlockPromptEnabled) return
+        val todayKey = DateUtils.todayKey()
+        if (DateUtils.isWeekend(todayKey)) return
+        if (prefs.lastUnlockPromptDate == todayKey) return
+
+        // Only fire on first unlock after 1:45 PM (13:45) and before 10:30 PM
+        val (hour, minute) = DateUtils.currentHourMinute()
+        val minutesOfDay = hour * 60 + minute
+        if (minutesOfDay < (13 * 60 + 45) || minutesOfDay > (22 * 60 + 30)) return
+
+        // Mark fired for today first so subsequent unlocks don't duplicate
+        prefsStore.markUnlockPromptFiredForDate(todayKey)
+        val triggerIntent = Intent(appCtx, DailyReminderReceiver::class.java).apply {
+            action = ReminderScheduler.ACTION_UNLOCK_REMINDER
+            putExtra(ReminderScheduler.EXTRA_SOURCE, "after_school_unlock")
+        }
+        appCtx.sendBroadcast(triggerIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -195,6 +240,10 @@ class BackgroundNotificationService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (unlockReceiverRegistered) {
+            runCatching { unregisterReceiver(userPresentReceiver) }
+            unlockReceiverRegistered = false
+        }
         detachListeners()
         serviceScope.cancel()
         super.onDestroy()

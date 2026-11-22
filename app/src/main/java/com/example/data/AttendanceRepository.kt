@@ -304,6 +304,25 @@ class AttendanceRepository(
         )
     }
 
+    fun observePersonalMarkers(userId: String): Flow<List<PersonalAcademicMarker>> = flow {
+        require(userId.isNotBlank()) { "userId must not be blank" }
+        val path = "users/$userId/personal_markers"
+        emitAll(
+            db.collection("users").document(userId).collection("personal_markers")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        PersonalAcademicMarker::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedBy { it.dateKey }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, userId)
+                    throw error
+                }
+        )
+    }
+
     fun observeUserFeedbackReports(userId: String): Flow<List<FeedbackReport>> = flow {
         require(userId.isNotBlank()) { "userId must not be blank" }
         val path = "feedback"
@@ -1010,6 +1029,162 @@ class AttendanceRepository(
         }
     }
 
+    suspend fun savePersonalMarker(
+        userId: String,
+        dateKey: String,
+        title: String,
+        category: PersonalMarkerCategory,
+        note: String?,
+        existingMarkerId: String? = null
+    ): Result<Unit> {
+        val path = "users/$userId/personal_markers"
+        return try {
+            requireUserId()
+            val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            require(dateKey.matches(dateRegex)) { "Invalid date" }
+            val cleanTitle = title.trim().take(100)
+            require(cleanTitle.isNotEmpty()) { "Title is required" }
+            val cleanNote = note?.trim()?.take(300)?.ifEmpty { null }
+            val col = db.collection("users").document(userId).collection("personal_markers")
+            if (!existingMarkerId.isNullOrBlank()) {
+                val updates = mutableMapOf<String, Any>(
+                    "dateKey" to dateKey,
+                    "title" to cleanTitle,
+                    "category" to category.raw,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (cleanNote != null) {
+                    updates["note"] = cleanNote
+                } else {
+                    updates["note"] = FieldValue.delete()
+                }
+                col.document(existingMarkerId).update(updates).awaitOfflineAware()
+            } else {
+                val payload = mapOf(
+                    "userId" to userId,
+                    "dateKey" to dateKey,
+                    "title" to cleanTitle,
+                    "category" to category.raw,
+                    "note" to cleanNote,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+                col.document().set(payload).awaitOfflineAware()
+            }
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deletePersonalMarker(userId: String, markerId: String): Result<Unit> {
+        val path = "users/$userId/personal_markers/$markerId"
+        return try {
+            requireUserId()
+            db.collection("users").document(userId)
+                .collection("personal_markers").document(markerId)
+                .delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun bulkUpsertAttendance(
+        targetUserId: String,
+        dateKeys: List<String>,
+        status: AttendanceStatus,
+        note: String?,
+        terms: List<AcademicTerm>,
+        existingRecords: List<AttendanceRecord>
+    ): Result<Int> {
+        val path = "users/$targetUserId/attendance"
+        return try {
+            requireUserId()
+            val cleanDates = dateKeys
+                .filter { it.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) }
+                .distinct()
+            if (cleanDates.isEmpty()) return Result.success(0)
+
+            val cleanNote = note?.trim()?.take(300)?.ifEmpty { null }
+            val existingByDate = existingRecords.associateBy { it.dateKey }
+            val userDocRef = db.collection("users").document(targetUserId)
+            val attendanceCol = userDocRef.collection("attendance")
+            val batch = db.batch()
+
+            val merged = existingByDate.toMutableMap()
+            cleanDates.forEach { dateKey ->
+                val termId = AttendanceCalculator.resolveActiveTerm(terms, dateKey).id
+                val docRef = attendanceCol.document(dateKey)
+                val existing = existingByDate[dateKey]
+                if (existing != null) {
+                    val updates = mutableMapOf<String, Any>(
+                        "termId" to termId,
+                        "status" to status.raw,
+                        "subjectTags" to existing.subjectTags.take(6),
+                        "markedBy" to "student",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (cleanNote != null) {
+                        updates["note"] = cleanNote
+                    }
+                    batch.update(docRef, updates)
+                    merged[dateKey] = existing.copy(termId = termId, status = status.raw, note = cleanNote ?: existing.note)
+                } else {
+                    val payload = mapOf(
+                        "userId" to targetUserId,
+                        "dateKey" to dateKey,
+                        "termId" to termId,
+                        "status" to status.raw,
+                        "subjectTags" to emptyList<String>(),
+                        "note" to cleanNote,
+                        "markedBy" to "student",
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ).filterValues { it != null }
+                    batch.set(docRef, payload)
+                    merged[dateKey] = AttendanceRecord(
+                        id = dateKey,
+                        userId = targetUserId,
+                        dateKey = dateKey,
+                        termId = termId,
+                        status = status.raw,
+                        note = cleanNote
+                    )
+                }
+            }
+
+            val allRecs = merged.values
+            batch.update(
+                userDocRef,
+                mapOf(
+                    "presentCount" to allRecs.count { it.statusEnum == AttendanceStatus.PRESENT },
+                    "absentCount" to allRecs.count { it.statusEnum == AttendanceStatus.ABSENT },
+                    "medicalCount" to allRecs.count { it.statusEnum == AttendanceStatus.MEDICAL },
+                    "schoolEventCount" to allRecs.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT },
+                    "lastCheckInDate" to (allRecs.maxOfOrNull { it.dateKey } ?: ""),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            batch.commit().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(cleanDates.size)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
     suspend fun upsertStudentTrendSummary(summary: StudentTrendSummary): Result<Unit> {
         val uid = summary.userId.ifBlank { auth.currentUser?.uid.orEmpty() }
         if (uid.isBlank() || auth.currentUser?.uid != uid) return Result.success(Unit)
@@ -1019,7 +1194,7 @@ class AttendanceRepository(
             val cleanWeekdayJson = summary.monthlyWeekdayJson.ifBlank { "{}" }.take(16000)
             val cleanAtt = List(5) { idx -> summary.allTimeWeekdayAttended.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
             val cleanAbs = List(5) { idx -> summary.allTimeWeekdayAbsent.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
-            val payload = mapOf(
+            val payload = mutableMapOf<String, Any>(
                 "userId" to uid,
                 "monthlyTotalsJson" to cleanTotalsJson,
                 "monthlyWeekdayJson" to cleanWeekdayJson,
@@ -1029,6 +1204,9 @@ class AttendanceRepository(
                 "totalAbsent" to summary.totalAbsent.coerceIn(0, 3000),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
+            summary.grade?.trim()?.take(32)?.takeIf { it.isNotEmpty() }?.let { payload["grade"] = it }
+            summary.alStream?.trim()?.take(48)?.takeIf { it.isNotEmpty() }?.let { payload["alStream"] = it }
+            summary.className?.trim()?.take(32)?.takeIf { it.isNotEmpty() }?.let { payload["className"] = it }
             db.collection("student_trend_summaries").document(uid)
                 .set(payload)
                 .awaitOfflineAware()
@@ -1037,6 +1215,112 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             Log.w("AttendanceRepo", "Trend summary sync skipped: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    // --- NEXT-DAY SCHOOL POLL VOTES ---
+
+    fun observeNextDayVotesForDate(targetDateKey: String): Flow<List<NextDaySchoolVote>> = flow {
+        val uid = requireUserId()
+        if (!targetDateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) {
+            emit(emptyList())
+            return@flow
+        }
+        val path = "next_day_votes"
+        emitAll(
+            db.collection("next_day_votes")
+                .whereEqualTo("targetDateKey", targetDateKey)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        NextDaySchoolVote::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    suspend fun getNextDayVotesForDate(targetDateKey: String): List<NextDaySchoolVote> {
+        if (!targetDateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) return emptyList()
+        return runCatching {
+            withTimeoutOrNull(3_000L) {
+                db.collection("next_day_votes")
+                    .whereEqualTo("targetDateKey", targetDateKey)
+                    .get()
+                    .await()
+                    .toObjects(NextDaySchoolVote::class.java)
+            }
+        }.getOrNull().orEmpty()
+    }
+
+    suspend fun getMyNextDayVote(userId: String, targetDateKey: String): NextDaySchoolVote? {
+        if (userId.isBlank() || !targetDateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) return null
+        return runCatching {
+            withTimeoutOrNull(2_500L) {
+                val doc = db.collection("next_day_votes")
+                    .document("${targetDateKey}_$userId")
+                    .get()
+                    .await()
+                if (doc.exists()) doc.toObject(NextDaySchoolVote::class.java) else null
+            }
+        }.getOrNull()
+    }
+
+    suspend fun submitNextDayVote(
+        userId: String,
+        targetDateKey: String,
+        going: Boolean,
+        profile: UserProfile?
+    ): Result<Unit> {
+        val docId = "${targetDateKey}_$userId"
+        val path = "next_day_votes/$docId"
+        return try {
+            requireUserId()
+            require(targetDateKey.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) {
+                "Invalid poll date"
+            }
+            val docRef = db.collection("next_day_votes").document(docId)
+            val alreadyExists = runCatching {
+                withTimeoutOrNull(2_000L) { docRef.get().await().exists() } ?: false
+            }.getOrDefault(false)
+
+            val cleanGrade = profile?.grade?.trim()?.take(32)?.ifEmpty { null }
+            val cleanStream = profile?.alStream?.trim()?.take(48)?.ifEmpty { null }
+            val cleanClass = profile?.className?.trim()?.take(32)?.ifEmpty { null }
+
+            if (alreadyExists) {
+                val updates = mutableMapOf<String, Any>(
+                    "going" to going,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (cleanGrade != null) updates["grade"] = cleanGrade
+                if (cleanStream != null) updates["alStream"] = cleanStream
+                if (cleanClass != null) updates["className"] = cleanClass
+                docRef.update(updates).awaitOfflineAware()
+            } else {
+                val payload = mapOf(
+                    "userId" to userId,
+                    "targetDateKey" to targetDateKey,
+                    "going" to going,
+                    "grade" to cleanGrade,
+                    "alStream" to cleanStream,
+                    "className" to cleanClass,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+                docRef.set(payload).awaitOfflineAware()
+            }
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
             Result.failure(e)
         }
     }
@@ -1733,6 +2017,7 @@ class AttendanceRepository(
                 "al2026ExamDate" to settings.al2026ExamDate,
                 "al2027ExamDate" to settings.al2027ExamDate,
                 "al2028ExamDate" to settings.al2028ExamDate,
+                "nextDayPollEnabled" to settings.nextDayPollEnabled,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             db.collection("app_settings").document("global").set(payload).awaitOfflineAware()

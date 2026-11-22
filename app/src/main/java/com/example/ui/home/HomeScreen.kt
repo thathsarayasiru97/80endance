@@ -74,10 +74,30 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.HowToVote
+import androidx.compose.material.icons.rounded.Swipe
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
+import com.example.data.CelebrationEvent
 import com.example.data.DateUtils
+import com.example.data.NextDayPollSummary
+import com.example.data.NextDayPollWindow
+import kotlin.math.roundToInt
 import com.example.data.Notice
+import com.example.ui.components.AlJourneyTimelineSheet
+import com.example.ui.components.AnimatedAlCountdownPill
 import com.example.ui.components.AnimatedEligibilityGauge
+import com.example.ui.components.CelebrationOverlay
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
@@ -91,6 +111,7 @@ import com.example.ui.components.ResolvedFeedbackBanner
 import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.StreakAndWeeklyCard
+import com.example.ui.components.SwipeCatchUpDeckDialog
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalAttendanceColors
@@ -108,9 +129,12 @@ fun HomeScreen(
     onOpenCheckIn: (String) -> Unit,
     onSyncClick: () -> Unit,
     onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
+    onVoteNextDay: (Boolean) -> Unit = {},
     onSaveCustomAvatar: (String?) -> Unit = {},
     onDismissBroadcast: (String) -> Unit = {},
     onDismissResolvedFeedback: (String) -> Unit = {},
+    celebrationEvent: CelebrationEvent? = null,
+    onDismissCelebration: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -129,6 +153,10 @@ fun HomeScreen(
     var showNoticeSheet by remember { mutableStateOf(false) }
     var focusedNotice by remember { mutableStateOf<Notice?>(null) }
     var showPhotoDialog by remember { mutableStateOf(false) }
+    var showAlTimelineSheet by remember { mutableStateOf(false) }
+    var showSwipeCatchUpDeck by remember { mutableStateOf(false) }
+    var autoOfferedSwipeDeck by remember { mutableStateOf(false) }
+    var privacyBlurred by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
 
@@ -137,6 +165,15 @@ fun HomeScreen(
         if (state.daysUntilAlExam > 0) {
             delay(2000L)
             heroCountdownExpanded = false
+        }
+    }
+
+    // Auto-offer Swipe-to-Catch-Up stack once if student has a 3+ day unlogged backlog
+    LaunchedEffect(state.missedSchoolDays.size, state.shouldAutoShowCheckIn) {
+        if (!autoOfferedSwipeDeck && state.missedSchoolDays.size >= 3 && !state.shouldAutoShowCheckIn) {
+            autoOfferedSwipeDeck = true
+            delay(900L)
+            showSwipeCatchUpDeck = true
         }
     }
 
@@ -231,7 +268,10 @@ fun HomeScreen(
                             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .bouncyClickable(pressedScale = 0.97f) { heroCountdownExpanded = false }
+                                .bouncyClickable(pressedScale = 0.97f) {
+                                    heroCountdownExpanded = false
+                                    showAlTimelineSheet = true
+                                }
                                 .testTag("home_al_countdown_hero")
                         ) {
                             Box(
@@ -311,40 +351,12 @@ fun HomeScreen(
                             ),
                             exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.82f)
                         ) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier
-                                    .bouncyClickable(
-                                        enabled = state.daysUntilAlExam > 0,
-                                        pressedScale = 0.93f
-                                    ) {
-                                        if (state.daysUntilAlExam > 0) heroCountdownExpanded = true
-                                    }
-                                    .testTag("home_al_countdown_chip")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Timer,
-                                        contentDescription = "A/L exam countdown",
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (state.daysUntilAlExam > 0) {
-                                            "$examYear A/L • ${state.daysUntilAlExam}d left"
-                                        } else {
-                                            "$examYear A/L Exam Period"
-                                        },
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                }
-                            }
+                            AnimatedAlCountdownPill(
+                                daysUntilAlExam = state.daysUntilAlExam,
+                                examYear = examYear,
+                                onClick = { showAlTimelineSheet = true },
+                                modifier = Modifier.testTag("home_al_countdown_chip")
+                            )
                         }
 
                         if (state.totalAccounts > 0) {
@@ -495,7 +507,42 @@ fun HomeScreen(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            AnimatedEligibilityGauge(stats = activeStats)
+                            AnimatedEligibilityGauge(
+                                stats = activeStats,
+                                privacyBlurred = privacyBlurred,
+                                onDoubleTapTogglePrivacy = { privacyBlurred = !privacyBlurred }
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Surface(
+                                color = if (privacyBlurred) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerLow
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .clickable { privacyBlurred = !privacyBlurred }
+                                    .testTag("privacy_blur_toggle")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (privacyBlurred) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        contentDescription = "Toggle privacy blur",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = if (privacyBlurred) "Privacy Blur On • Tap to reveal" else "Double-tap ring to blur",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
 
                             Spacer(modifier = Modifier.height(12.dp))
 
@@ -519,6 +566,7 @@ fun HomeScreen(
                                     semantic.onAbsentContainer
                                 }
                                 val forecastText = when {
+                                    privacyBlurred -> "Privacy Mode active — tap above or double-tap the ring to view your attendance numbers."
                                     activeStats.totalCountedDays == 0 ->
                                         "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
                                     activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
@@ -538,12 +586,70 @@ fun HomeScreen(
                                         text = forecastText,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = forecastFg,
-                                        modifier = Modifier.padding(14.dp)
+                                        modifier = Modifier
+                                            .padding(14.dp)
+                                            .then(if (privacyBlurred) Modifier.blur(4.dp) else Modifier)
                                     )
                                 }
                             }
                         }
                     }
+                }
+            }
+
+            // 3b. Danger-Zone Smart Nudge Banner (only shown when sitting right on the 80% edge)
+            if (state.isInDangerZone && !privacyBlurred) {
+                item(key = "danger_zone_nudge_banner") {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = semantic.medicalContainer.copy(alpha = 0.85f),
+                        border = BorderStroke(1.2.dp, semantic.medical.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_danger_zone_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.WarningAmber,
+                                contentDescription = "80% safety edge warning",
+                                tint = semantic.medical,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "80% Edge Heads-Up",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = semantic.onMedicalContainer
+                                )
+                                Text(
+                                    text = if (state.currentTermStats.safeSkipsRemaining <= 0) {
+                                        "Heads up — 1 more absence drops you below ${state.currentTermStats.thresholdPercent}%."
+                                    } else {
+                                        "Careful — only ${state.currentTermStats.safeSkipsRemaining} safe skip left before dropping below ${state.currentTermStats.thresholdPercent}%."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = semantic.onMedicalContainer.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3c. Next-Day School Poll Card (only visible 8:00 PM – 5:00 AM when enabled by admin)
+            if (state.appSettings.nextDayPollEnabled && state.pollWindow.isOpen) {
+                item(key = "home_next_day_poll_card") {
+                    NextDaySchoolPollCard(
+                        window = state.pollWindow,
+                        summary = state.nextDayPollSummary,
+                        myClassName = profile?.className,
+                        onVote = onVoteNextDay
+                    )
                 }
             }
 
@@ -872,10 +978,36 @@ fun HomeScreen(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Tap P, E, or A to fill recent school days — or tap a date for Medical/notes",
+                                        text = "Swipe through in 5s or tap P, E, A below",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .clickable { showSwipeCatchUpDeck = true }
+                                        .testTag("home_open_swipe_deck_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Swipe,
+                                            contentDescription = "Swipe catch-up deck",
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Swipe",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
                                 }
                             }
 
@@ -1022,6 +1154,38 @@ fun HomeScreen(
 
             item { Spacer(modifier = Modifier.height(12.dp)) }
         }
+
+        // Celebratory confetti + banner overlay for Perfect Week (5/5), Streaks, and 80% Recovery
+        CelebrationOverlay(
+            event = celebrationEvent,
+            onDismiss = onDismissCelebration,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = 600.dp)
+        )
+    }
+
+    if (showAlTimelineSheet) {
+        val examYear = profile?.alExamYear ?: state.appSettings.currentAcademicYear
+        val timeline = remember(examYear, state.appSettings, state.terms) {
+            AttendanceCalculator.calculateAlJourneyTimeline(
+                examYear = examYear,
+                settings = state.appSettings,
+                terms = state.terms
+            )
+        }
+        AlJourneyTimelineSheet(
+            timeline = timeline,
+            onDismiss = { showAlTimelineSheet = false }
+        )
+    }
+
+    if (showSwipeCatchUpDeck && state.missedSchoolDays.isNotEmpty()) {
+        SwipeCatchUpDeckDialog(
+            missedDays = state.missedSchoolDays,
+            onLogDay = onQuickLogDate,
+            onDismiss = { showSwipeCatchUpDeck = false }
+        )
     }
 
     if (showNoticeSheet) {
@@ -1068,6 +1232,244 @@ fun HomeScreen(
             onSaveCustomAvatar = onSaveCustomAvatar,
             onDismiss = { showPhotoDialog = false }
         )
+    }
+}
+
+@Composable
+private fun NextDaySchoolPollCard(
+    window: NextDayPollWindow,
+    summary: NextDayPollSummary,
+    myClassName: String?,
+    onVote: (Boolean) -> Unit
+) {
+    val semantic = LocalAttendanceColors.current
+    val myVote = summary.myVoteGoing
+    val comingRatio by animateFloatAsState(
+        targetValue = if (summary.totalVotes > 0) (summary.goingPercent / 100.0).toFloat().coerceIn(0f, 1f) else 0.5f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "poll_coming_ratio"
+    )
+    val comingPctInt = summary.goingPercent.roundToInt()
+    val notComingPctInt = (100 - comingPctInt).coerceIn(0, 100)
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+        ),
+        border = BorderStroke(
+            width = 1.2.dp,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("home_next_day_poll_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f),
+                            MaterialTheme.colorScheme.surfaceContainerLowest
+                        )
+                    )
+                )
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.HowToVote,
+                                contentDescription = "Next-day school poll",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = if (window.isTomorrowTarget) {
+                                "Going to school tomorrow?"
+                            } else {
+                                "Going to school today?"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${DateUtils.formatReadableShort(window.targetDateKey)} • Closes at 5:00 AM",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(999.dp)
+                ) {
+                    Text(
+                        text = if (summary.totalVotes == 0) "LIVE" else "${summary.totalVotes} voted",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val yesSelected = myVote == true
+                val noSelected = myVote == false
+
+                Button(
+                    onClick = { onVote(true) },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (yesSelected) semantic.present else semantic.presentContainer.copy(alpha = 0.72f),
+                        contentColor = if (yesSelected) MaterialTheme.colorScheme.onPrimary else semantic.onPresentContainer
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .testTag("poll_vote_yes_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (yesSelected) "Coming ✓" else "Yes, Coming",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { onVote(false) },
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(
+                        width = if (noSelected) 1.8.dp else 1.dp,
+                        color = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outlineVariant
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (noSelected) semantic.absentContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                        contentColor = if (noSelected) semantic.onAbsentContainer else MaterialTheme.colorScheme.onSurface
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .testTag("poll_vote_no_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (noSelected) "Skipping ✓" else "No, Skipping",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("poll_live_analysis_bar")
+            ) {
+                if (summary.totalVotes > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Coming $comingPctInt% (${summary.goingCount})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = semantic.present
+                        )
+                        Text(
+                            text = "Not Coming $notComingPctInt% (${summary.notGoingCount})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = semantic.absent
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(CircleShape)
+                            .background(semantic.absent.copy(alpha = 0.25f))
+                    ) {
+                        if (comingRatio > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(comingRatio.coerceAtLeast(0.001f))
+                                    .height(10.dp)
+                                    .background(semantic.present)
+                            )
+                        }
+                        val notRatio = (1f - comingRatio)
+                        if (notRatio > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(notRatio.coerceAtLeast(0.001f))
+                                    .height(10.dp)
+                                    .background(semantic.absent)
+                            )
+                        }
+                    }
+                    val classSuffix = if (summary.myClassTotalCount > 0 && !myClassName.isNullOrBlank()) {
+                        " • ${summary.myClassGoingCount}/${summary.myClassTotalCount} in $myClassName coming"
+                    } else {
+                        ""
+                    }
+                    Text(
+                        text = "Switch your vote anytime before 5:00 AM$classSuffix",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = "Be the first to vote — live turnout breakdown unlocks right away and stays switchable until 5:00 AM.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }
 

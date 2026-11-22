@@ -13,6 +13,11 @@ object AppConstants {
     const val DEFAULT_REMINDER_HOUR = 14
     const val DEFAULT_REMINDER_MINUTE = 0
     const val EXTRA_OPEN_CHECKIN = "extra_open_checkin"
+    const val EXTRA_SHORTCUT_ACTION = "extra_shortcut_action"
+    const val SHORTCUT_MARK_PRESENT = "shortcut_mark_present"
+    const val SHORTCUT_MARK_ABSENT = "shortcut_mark_absent"
+    const val SHORTCUT_OPEN_CALENDAR = "shortcut_open_calendar"
+    const val SHORTCUT_OPEN_REPORTS = "shortcut_open_reports"
 
     val GRADES = listOf("Grade 12", "Grade 13")
     val AL_STREAMS = listOf(
@@ -218,6 +223,9 @@ data class UserProfile(
             .joinToString(" ")
             .ifEmpty { email.substringBefore("@") }
 
+    val preferredDisplayName: String
+        get() = fullName.ifBlank { greetingName }
+
     val hasLockedBaseline: Boolean
         get() = !baselineStartDate.isNullOrBlank() &&
             !baselineEndDate.isNullOrBlank() &&
@@ -420,6 +428,7 @@ data class AppSettings(
     val al2026ExamDate: String = "2026-11-25",
     val al2027ExamDate: String = "2027-08-09",
     val al2028ExamDate: String = "2028-08-07",
+    val nextDayPollEnabled: Boolean = false,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     fun examDateForYear(year: Int): String = when (year) {
@@ -565,9 +574,76 @@ data class StudentTrendSummary(
     val allTimeWeekdayAbsent: List<Int> = listOf(0, 0, 0, 0, 0),
     val totalAttended: Int = 0,
     val totalAbsent: Int = 0,
+    val grade: String? = null,
+    val alStream: String? = null,
+    val className: String? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     val totalCounted: Int get() = totalAttended + totalAbsent
 }
+
+enum class PersonalMarkerCategory(val raw: String, val label: String) {
+    EXAM("exam", "Term Test / Exam"),
+    PRACTICAL("practical", "Practical / Lab"),
+    DEADLINE("deadline", "SBA / Deadline"),
+    TUITION("tuition", "Revision / Class"),
+    OTHER("other", "Personal Note");
+
+    companion object {
+        fun fromRaw(raw: String?): PersonalMarkerCategory =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: OTHER
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class PersonalAcademicMarker(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val dateKey: String = "",
+    val title: String = "",
+    val category: String = PersonalMarkerCategory.EXAM.raw,
+    val note: String? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val categoryEnum: PersonalMarkerCategory
+        get() = PersonalMarkerCategory.fromRaw(category)
+}
+
+enum class CelebrationType {
+    PERFECT_WEEK,
+    STREAK_MILESTONE,
+    ELIGIBILITY_RECOVERY
+}
+
+data class CelebrationEvent(
+    val type: CelebrationType,
+    val title: String,
+    val subtitle: String,
+    val badgeLabel: String
+)
+
+data class UndoableCheckInAction(
+    val id: Long = System.currentTimeMillis(),
+    val message: String,
+    val dateKey: String,
+    val previousRecord: AttendanceRecord?
+)
+
+@Keep
+@IgnoreExtraProperties
+data class NextDaySchoolVote(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val targetDateKey: String = "",
+    val going: Boolean = true,
+    val grade: String? = null,
+    val alStream: String? = null,
+    val className: String? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
 
 

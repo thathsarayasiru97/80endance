@@ -100,9 +100,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.input.pointer.pointerInput
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStats
 import com.example.data.AttendanceStatus
+import com.example.data.CheckInImpactPreview
 import com.example.data.DateUtils
 import com.example.data.Notice
 import com.example.data.NoticeCategory
@@ -123,7 +127,9 @@ import kotlin.math.sin
 @Composable
 fun AnimatedEligibilityGauge(
     stats: AttendanceStats,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    privacyBlurred: Boolean = false,
+    onDoubleTapTogglePrivacy: (() -> Unit)? = null
 ) {
     val semantic = LocalAttendanceColors.current
     val targetPercent = stats.percentage.toFloat().coerceIn(0f, 100f)
@@ -157,7 +163,18 @@ fun AnimatedEligibilityGauge(
 
     Box(
         contentAlignment = Alignment.Center,
-        modifier = modifier.size(192.dp)
+        modifier = modifier
+            .size(192.dp)
+            .then(
+                if (onDoubleTapTogglePrivacy != null) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = { onDoubleTapTogglePrivacy() })
+                    }
+                } else {
+                    Modifier
+                }
+            )
+            .testTag("eligibility_gauge")
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val strokePx = 16.dp.toPx()
@@ -240,9 +257,12 @@ fun AnimatedEligibilityGauge(
             )
         }
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = if (privacyBlurred) Modifier.blur(12.dp) else Modifier
+        ) {
             Text(
-                text = String.format(Locale.US, "%.1f%%", animatedPercent),
+                text = if (privacyBlurred) "••.•%" else String.format(Locale.US, "%.1f%%", animatedPercent),
                 style = MaterialTheme.typography.displayMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -809,6 +829,7 @@ fun DailyCheckInDialog(
     existingRecord: AttendanceRecord?,
     subjects: List<String>,
     isSaving: Boolean,
+    previewForStatus: ((AttendanceStatus) -> CheckInImpactPreview?)? = null,
     onDismiss: () -> Unit,
     onSave: (status: AttendanceStatus, subjectTags: List<String>, note: String?) -> Unit
 ) {
@@ -956,6 +977,19 @@ fun DailyCheckInDialog(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("No", style = MaterialTheme.typography.titleMedium)
                                     }
+                                }
+
+                                val absentImpact = remember(dateKey, previewForStatus) {
+                                    previewForStatus?.invoke(AttendanceStatus.ABSENT)
+                                }
+                                if (absentImpact != null) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    CheckInImpactPreviewBadge(
+                                        label = "If Absent",
+                                        preview = absentImpact,
+                                        isNegative = true,
+                                        modifier = Modifier.testTag("checkin_live_impact_preview")
+                                    )
                                 }
                             }
                         }
@@ -1122,7 +1156,20 @@ fun DailyCheckInDialog(
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
-                                Spacer(modifier = Modifier.height(16.dp))
+                                val selectedImpact = remember(dateKey, selectedNoStatus, previewForStatus) {
+                                    previewForStatus?.invoke(selectedNoStatus)
+                                }
+                                if (selectedImpact != null) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    CheckInImpactPreviewBadge(
+                                        label = "Impact (${selectedNoStatus.shortLabel})",
+                                        preview = selectedImpact,
+                                        isNegative = selectedNoStatus == AttendanceStatus.ABSENT,
+                                        modifier = Modifier.testTag("checkin_no_live_impact_preview")
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     modifier = Modifier.fillMaxWidth()
@@ -1157,6 +1204,55 @@ fun DailyCheckInDialog(
                 }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CheckInImpactPreviewBadge(
+    label: String,
+    preview: CheckInImpactPreview,
+    isNegative: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalAttendanceColors.current
+    val tint = when {
+        !preview.willStayEligible -> semantic.absent
+        isNegative -> semantic.medical
+        else -> semantic.present
+    }
+    val bg = when {
+        !preview.willStayEligible -> semantic.absentContainer.copy(alpha = 0.7f)
+        isNegative -> semantic.medicalContainer.copy(alpha = 0.65f)
+        else -> semantic.presentContainer.copy(alpha = 0.65f)
+    }
+    val bufferText = if (preview.willStayEligible) {
+        "${preview.remainingSafeSkips} safe skip${if (preview.remainingSafeSkips == 1) "" else "s"} left"
+    } else {
+        "Drops below 80% (need +${preview.daysNeededToRecover}d)"
+    }
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "$label: ${String.format(Locale.US, "%.1f%%", preview.currentPercent)} → ${String.format(Locale.US, "%.1f%%", preview.projectedPercent)}",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = tint
+            )
+            Text(
+                text = bufferText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

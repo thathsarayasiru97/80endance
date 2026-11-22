@@ -30,6 +30,9 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 if (prefs.sundayPrepEnabled) {
                     ReminderScheduler.scheduleSundayPrep(appContext, true)
                 }
+                if (prefs.cachedNextDayPollEnabled) {
+                    ReminderScheduler.scheduleNextDayPollAlarm(appContext, true)
+                }
                 // Re-arm background notification backups after reboot or APK update
                 // (Do NOT start ForegroundService from boot/package-replaced on Android 12+ to obey background FGS restrictions)
                 SyncScheduler.schedulePeriodicNotificationSync(appContext)

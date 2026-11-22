@@ -49,6 +49,11 @@ service cloud.firestore {
              (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 60));
     }
 
+    function isOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) || data[field] == null ||
+             (data[field] is string && data[field].size() >= minLen && data[field].size() <= maxLen);
+    }
+
     // --- ENTITY VALIDATION BLUEPRINTS ---
 
     function isValidUserProfile(data) {
@@ -142,7 +147,8 @@ service cloud.firestore {
              data.currentAcademicYear is int && data.currentAcademicYear >= 2024 && data.currentAcademicYear <= 2035 &&
              isValidDateKey(data.al2026ExamDate) &&
              isValidDateKey(data.al2027ExamDate) &&
-             isValidDateKey(data.al2028ExamDate);
+             isValidDateKey(data.al2028ExamDate) &&
+             (!('nextDayPollEnabled' in data) || data.nextDayPollEnabled is bool);
     }
 
     function isValidFeedbackReport(data) {
@@ -213,7 +219,27 @@ service cloud.firestore {
              isValidWeekdayCounts(data.allTimeWeekdayAttended) &&
              isValidWeekdayCounts(data.allTimeWeekdayAbsent) &&
              data.totalAttended is int && data.totalAttended >= 0 && data.totalAttended <= 3000 &&
-             data.totalAbsent is int && data.totalAbsent >= 0 && data.totalAbsent <= 3000;
+             data.totalAbsent is int && data.totalAbsent >= 0 && data.totalAbsent <= 3000 &&
+             isOptionalString(data, 'grade', 0, 32) &&
+             isOptionalString(data, 'alStream', 0, 48) &&
+             isOptionalString(data, 'className', 0, 32);
+    }
+
+    function isValidPersonalAcademicMarker(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             isValidDateKey(data.dateKey) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.category in ['exam', 'practical', 'deadline', 'tuition', 'other'] &&
+             isOptionalString(data, 'note', 0, 300);
+    }
+
+    function isValidNextDaySchoolVote(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             isValidDateKey(data.targetDateKey) &&
+             data.going is bool &&
+             isOptionalString(data, 'grade', 0, 32) &&
+             isOptionalString(data, 'alStream', 0, 48) &&
+             isOptionalString(data, 'className', 0, 32);
     }
 
     // --- COLLECTION 1: USER PROFILES (PII STRICTLY ISOLATED) ---
@@ -367,6 +393,44 @@ service cloud.firestore {
 
         allow delete: if isSignedIn() && isValidId(userId) && isValidId(periodId) && (isOwner(userId) || isAdmin());
       }
+
+      // --- COLLECTION 2c: PERSONAL ACADEMIC MARKERS (STUDENT-PINNED DATES ON CALENDAR) ---
+      match /personal_markers/{markerId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(markerId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+
+        allow create: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidId(markerId) &&
+                         isValidPersonalAcademicMarker(incoming()) &&
+                         incoming().userId == userId &&
+                         (isOwner(userId) || isAdmin()) &&
+                         incoming().keys().hasAll([
+                           'userId', 'dateKey', 'title', 'category', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'dateKey', 'title', 'category', 'note', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt);
+
+        allow update: if isSignedIn() &&
+                         isValidId(userId) &&
+                         isValidId(markerId) &&
+                         isValidPersonalAcademicMarker(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         (isOwner(userId) || isAdmin()) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'dateKey', 'title', 'category', 'note', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'dateKey', 'title', 'category', 'note', 'updatedAt'
+                         ]);
+
+        allow delete: if isSignedIn() && isValidId(userId) && isValidId(markerId) && (isOwner(userId) || isAdmin());
+      }
     }
 
     // --- COLLECTION 3: NOTICES & PINNED SLIDES ---
@@ -479,7 +543,8 @@ service cloud.firestore {
                        ]) &&
                        incoming().keys().hasOnly([
                          'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
-                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate', 'updatedAt'
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
+                         'nextDayPollEnabled', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().updatedAt);
 
@@ -487,9 +552,15 @@ service cloud.firestore {
                        settingId == 'global' &&
                        isValidAppSettings(incoming()) &&
                        isValidTimestamp(incoming().updatedAt) &&
+                       incoming().keys().hasOnly([
+                         'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
+                         'nextDayPollEnabled', 'updatedAt'
+                       ]) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
-                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate', 'updatedAt'
+                         'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
+                         'nextDayPollEnabled', 'updatedAt'
                        ]);
 
       allow delete: if false;
@@ -613,7 +684,7 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'userId', 'monthlyTotalsJson', 'monthlyWeekdayJson',
                          'allTimeWeekdayAttended', 'allTimeWeekdayAbsent',
-                         'totalAttended', 'totalAbsent', 'updatedAt'
+                         'totalAttended', 'totalAbsent', 'grade', 'alStream', 'className', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().updatedAt);
 
@@ -625,11 +696,48 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'userId', 'monthlyTotalsJson', 'monthlyWeekdayJson',
                          'allTimeWeekdayAttended', 'allTimeWeekdayAbsent',
-                         'totalAttended', 'totalAbsent', 'updatedAt'
+                         'totalAttended', 'totalAbsent', 'grade', 'alStream', 'className', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().updatedAt);
 
       allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+    }
+
+    // --- COLLECTION 12: NEXT-DAY SCHOOL POLL VOTES (ZERO PII — TIME-WINDOWED ROLL CALL) ---
+    match /next_day_votes/{voteId} {
+      allow get: if isSignedIn() && isValidId(voteId);
+      allow list: if isSignedIn() && isValidDateKey(existing().targetDateKey);
+
+      allow create: if isSignedIn() &&
+                       isValidId(voteId) &&
+                       isValidNextDaySchoolVote(incoming()) &&
+                       incoming().userId == request.auth.uid &&
+                       voteId == incoming().targetDateKey + '_' + request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'targetDateKey', 'going', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isSignedIn() &&
+                       isValidId(voteId) &&
+                       isOwner(existing().userId) &&
+                       isValidNextDaySchoolVote(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().targetDateKey == existing().targetDateKey &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'going', 'grade', 'alStream', 'className', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(voteId) && (isOwner(existing().userId) || isAdmin());
     }
   }
 }

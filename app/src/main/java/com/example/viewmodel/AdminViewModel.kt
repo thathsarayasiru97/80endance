@@ -498,6 +498,22 @@ class AdminViewModel(
         }
     }
 
+    fun setNextDayPollEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val updated = uiState.value.appSettings.copy(nextDayPollEnabled = enabled)
+            val res = repository.saveAppSettings(updated)
+            res.onSuccess {
+                _snackbar.value = if (enabled) {
+                    "Next-Day School Poll enabled (8:00 PM – 5:00 AM)"
+                } else {
+                    "Next-Day School Poll turned off"
+                }
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not update poll toggle"
+            }
+        }
+    }
+
     fun rolloverTerm(
         targetTerm: AcademicTerm,
         alsoPostNotice: Boolean,

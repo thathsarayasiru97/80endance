@@ -641,7 +641,303 @@ class AttendanceCalculatorTest {
         )
         assertTrue(unlogged.isEmpty())
     }
+
+    @Test
+    fun cohortPulseAggregatesClassStreamGradeAndSchoolAnonymously() {
+        val myProfile = UserProfile(
+            grade = "Grade 13",
+            alStream = "Physical Science",
+            className = "13M1"
+        )
+        val summaries = listOf(
+            com.example.data.StudentTrendSummary(
+                id = "u1", userId = "u1", totalAttended = 9, totalAbsent = 1,
+                grade = "Grade 13", alStream = "Physical Science", className = "13M1"
+            ),
+            com.example.data.StudentTrendSummary(
+                id = "u2", userId = "u2", totalAttended = 7, totalAbsent = 3,
+                grade = "Grade 13", alStream = "Physical Science", className = "13M1"
+            ),
+            com.example.data.StudentTrendSummary(
+                id = "u3", userId = "u3", totalAttended = 10, totalAbsent = 0,
+                grade = "Grade 13", alStream = "Physical Science", className = "13M2"
+            ),
+            com.example.data.StudentTrendSummary(
+                id = "u4", userId = "u4", totalAttended = 6, totalAbsent = 4,
+                grade = "Grade 13", alStream = "Bio Science", className = "13B1"
+            ),
+            com.example.data.StudentTrendSummary(
+                id = "u5", userId = "u5", totalAttended = 8, totalAbsent = 2,
+                grade = "Grade 12", alStream = "Commerce", className = "12C1"
+            )
+        )
+        val pulse = AttendanceCalculator.calculateCohortPulse(
+            summaries = summaries,
+            profile = myProfile,
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME
+        )
+        assertEquals(80.0, pulse.classItem?.percentage ?: 0.0, 0.05) // 16/20
+        assertEquals(2, pulse.classItem?.contributorCount)
+        assertEquals(86.67, pulse.streamItem?.percentage ?: 0.0, 0.1) // 26/30
+        assertEquals(3, pulse.streamItem?.contributorCount)
+        assertEquals(80.0, pulse.gradeItem?.percentage ?: 0.0, 0.05) // 32/40
+        assertEquals(4, pulse.gradeItem?.contributorCount)
+        assertEquals(80.0, pulse.schoolItem?.percentage ?: 0.0, 0.05) // 40/50
+        assertEquals(5, pulse.schoolItem?.contributorCount)
+    }
+
+    @Test
+    fun previewCheckInImpactComputesBeforeAfterAndSafeSkips() {
+        val term = com.example.data.AcademicTerm(
+            id = "t1", name = "Term 1", academicYear = 2026,
+            startDate = "2026-01-01", endDate = "2026-12-31", minEligibilityPercent = 80
+        )
+        val schoolDays = listOf(
+            "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08",
+            "2026-05-11", "2026-05-12", "2026-05-13"
+        )
+        val records = schoolDays.map { dk ->
+            AttendanceRecord(dateKey = dk, termId = "t1", status = AttendanceStatus.PRESENT.raw)
+        } + listOf(
+            AttendanceRecord(dateKey = "2026-05-14", termId = "t1", status = AttendanceStatus.ABSENT.raw)
+        ) // 8/9 = 88.89%
+
+        val absentPreview = AttendanceCalculator.previewCheckInImpact(
+            records = records,
+            dateKey = "2026-05-15",
+            proposedStatus = AttendanceStatus.ABSENT,
+            activeTerm = term,
+            thresholdPercent = 80,
+            profile = null
+        )
+        assertEquals(88.89, absentPreview.currentPercent, 0.05)
+        assertEquals(80.0, absentPreview.projectedPercent, 0.05)
+        assertTrue(absentPreview.willStayEligible)
+        assertEquals(0, absentPreview.remainingSafeSkips)
+
+        val presentPreview = AttendanceCalculator.previewCheckInImpact(
+            records = records,
+            dateKey = "2026-05-15",
+            proposedStatus = AttendanceStatus.PRESENT,
+            activeTerm = term,
+            thresholdPercent = 80,
+            profile = null
+        )
+        assertEquals(90.0, presentPreview.projectedPercent, 0.05)
+        assertTrue(presentPreview.percentDelta > 0.0)
+        assertEquals(1, presentPreview.remainingSafeSkips)
+    }
+
+    @Test
+    fun dangerZoneAndPerfectWeekDetectionWorkAccurately() {
+        val edgeStats = com.example.data.AttendanceStats(
+            percentage = 80.0, eligible = true, thresholdPercent = 80,
+            presentDays = 8, absentDays = 2, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 8, totalCountedDays = 10, safeSkipsRemaining = 0, daysNeededToRecover = 0
+        )
+        val comfortableStats = edgeStats.copy(
+            presentDays = 19, absentDays = 1, effectiveAttended = 19,
+            totalCountedDays = 20, percentage = 95.0, safeSkipsRemaining = 3
+        )
+        val alreadyBelowStats = edgeStats.copy(
+            presentDays = 7, absentDays = 3, effectiveAttended = 7,
+            totalCountedDays = 10, percentage = 70.0, eligible = false, daysNeededToRecover = 5
+        )
+        assertTrue(AttendanceCalculator.isDangerZone(edgeStats))
+        assertFalse(AttendanceCalculator.isDangerZone(comfortableStats))
+        assertFalse(AttendanceCalculator.isDangerZone(alreadyBelowStats))
+
+        val perfectWeek = listOf("Mon", "Tue", "Wed", "Thu", "Fri").mapIndexed { idx, lbl ->
+            com.example.data.WeekDaySummary(
+                dayLabel = lbl,
+                dateKey = "2026-11-0${idx + 2}",
+                status = if (idx == 2) AttendanceStatus.MEDICAL else AttendanceStatus.PRESENT,
+                holidayLabel = null,
+                isToday = idx == 4,
+                isFuture = false
+            )
+        }
+        assertTrue(AttendanceCalculator.isPerfectFiveOfFiveWeek(perfectWeek))
+        assertFalse(AttendanceCalculator.isPerfectFiveOfFiveWeek(perfectWeek.dropLast(1) + perfectWeek.last().copy(status = AttendanceStatus.ABSENT)))
+    }
+
+    @Test
+    fun verifyAgainstClassRegisterFlagsExactAndMismatch() {
+        val stats = com.example.data.AttendanceStats(
+            percentage = (64.0 / 78.0) * 100.0, eligible = true, thresholdPercent = 80,
+            presentDays = 64, absentDays = 14, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 64, totalCountedDays = 78, safeSkipsRemaining = 2, daysNeededToRecover = 0
+        )
+        val exact = AttendanceCalculator.verifyAgainstClassRegister(stats, officialAttended = 64, officialTotal = 78)
+        assertTrue(exact.isExactMatch)
+        assertEquals(0, exact.attendedDiff)
+        assertEquals(0, exact.totalDiff)
+
+        val mismatch = AttendanceCalculator.verifyAgainstClassRegister(stats, officialAttended = 62, officialTotal = 78)
+        assertFalse(mismatch.isExactMatch)
+        assertEquals(2, mismatch.attendedDiff)
+        assertEquals(0, mismatch.totalDiff)
+    }
+
+    @Test
+    fun alJourneyTimelineAndWeeklyDigestAndPillFormatterComputeExpectedOutputs() {
+        val settings = com.example.data.AppSettings()
+        val timeline = AttendanceCalculator.calculateAlJourneyTimeline(
+            examYear = 2026,
+            settings = settings,
+            terms = com.example.data.SriLankaCalendarDefaults.defaultTerms,
+            todayKey = "2026-05-01"
+        )
+        assertTrue(timeline.daysRemaining > 0)
+        assertTrue(timeline.progressFraction in 0f..1f)
+        assertTrue(timeline.milestones.any { it.label == "100d Left" })
+        assertTrue(timeline.milestones.any { it.isExamDay })
+
+        val digestRecords = listOf(
+            AttendanceRecord(dateKey = "2026-11-09", status = AttendanceStatus.PRESENT.raw), // Mon
+            AttendanceRecord(dateKey = "2026-11-10", status = AttendanceStatus.PRESENT.raw), // Tue
+            AttendanceRecord(dateKey = "2026-11-11", status = AttendanceStatus.PRESENT.raw), // Wed
+            AttendanceRecord(dateKey = "2026-11-12", status = AttendanceStatus.ABSENT.raw),  // Thu
+            AttendanceRecord(dateKey = "2026-11-13", status = AttendanceStatus.PRESENT.raw)  // Fri
+        )
+        val overall = com.example.data.AttendanceStats(
+            percentage = 80.0, eligible = true, thresholdPercent = 80,
+            presentDays = 4, absentDays = 1, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 4, totalCountedDays = 5, safeSkipsRemaining = 0, daysNeededToRecover = 0
+        )
+        val futurePoya = CalendarEvent(
+            id = "p1", title = "Il Poya", dateKey = "2026-11-24", eventType = CalendarEventType.POYA.raw
+        )
+        val digest = AttendanceCalculator.calculateLastWeekDigest(
+            records = digestRecords,
+            calendarEvents = listOf(futurePoya),
+            overallStats = overall,
+            todayKey = "2026-11-15" // Sunday
+        )
+        assertEquals(4, digest.lastWeekAttended)
+        assertEquals(5, digest.lastWeekSchoolDays)
+        assertEquals("Il Poya", digest.nextHolidayTitle)
+        assertEquals(9, digest.nextHolidayDaysAway)
+
+        val pill = com.example.system.AttendancePillWidgetProvider.formatPillSegments(
+            com.example.system.WidgetSnapshot(
+                signedIn = true,
+                percentage = 86.4,
+                eligible = true,
+                totalCountedDays = 50,
+                safeSkipsRemaining = 4,
+                daysUntilAlExam = 214
+            )
+        )
+        assertEquals("86.4%", pill.first)
+        assertEquals("Safe (+4d)", pill.second)
+        assertEquals("214d to A/L", pill.third)
+    }
+
+    @Test
+    fun nextDayPollWindowEnforces8PmTo5AmAndSkipsWeekendsAndHolidays() {
+        val vesakPoya = CalendarEvent(
+            id = "poya_1",
+            title = "Vesak Poya",
+            dateKey = "2026-11-24", // Tuesday
+            eventType = CalendarEventType.POYA.raw
+        )
+
+        // Sunday Nov 22 at 20:00 -> open for Monday Nov 23 (school day)
+        val sunEvening = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = listOf(vesakPoya),
+            todayKey = "2026-11-22",
+            hourOfDay = 20
+        )
+        assertTrue(sunEvening.isOpen)
+        assertEquals("2026-11-23", sunEvening.targetDateKey)
+        assertTrue(sunEvening.isTomorrowTarget)
+
+        // Monday Nov 23 at 02:30 -> still open for Monday Nov 23 ("Today")
+        val monEarlyMorning = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = listOf(vesakPoya),
+            todayKey = "2026-11-23",
+            hourOfDay = 2
+        )
+        assertTrue(monEarlyMorning.isOpen)
+        assertEquals("2026-11-23", monEarlyMorning.targetDateKey)
+        assertFalse(monEarlyMorning.isTomorrowTarget)
+
+        // Monday Nov 23 at 05:00 -> closed (cutoff is 5:00 AM)
+        val monCutoff = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = listOf(vesakPoya),
+            todayKey = "2026-11-23",
+            hourOfDay = 5
+        )
+        assertFalse(monCutoff.isOpen)
+
+        // Monday Nov 23 at 21:00 -> tomorrow Nov 24 is Vesak Poya (non-school day) -> closed
+        val beforePoya = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = listOf(vesakPoya),
+            todayKey = "2026-11-23",
+            hourOfDay = 21
+        )
+        assertFalse(beforePoya.isOpen)
+        assertFalse(beforePoya.isTargetSchoolDay)
+
+        // Friday Nov 27 at 20:30 -> tomorrow Nov 28 is Saturday -> closed
+        val friEvening = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = emptyList(),
+            todayKey = "2026-11-27",
+            hourOfDay = 20
+        )
+        assertFalse(friEvening.isOpen)
+        assertFalse(friEvening.isTargetSchoolDay)
+    }
+
+    @Test
+    fun nextDayPollSummaryCalculatesComingNotComingAndClassBreakdown() {
+        val targetDate = "2026-11-23"
+        val votes = listOf(
+            com.example.data.NextDaySchoolVote(
+                id = "${targetDate}_u1", userId = "u1", targetDateKey = targetDate,
+                going = true, className = "13M2"
+            ),
+            com.example.data.NextDaySchoolVote(
+                id = "${targetDate}_u2", userId = "u2", targetDateKey = targetDate,
+                going = true, className = "13M2"
+            ),
+            com.example.data.NextDaySchoolVote(
+                id = "${targetDate}_u3", userId = "u3", targetDateKey = targetDate,
+                going = false, className = "13M2"
+            ),
+            com.example.data.NextDaySchoolVote(
+                id = "${targetDate}_u4", userId = "u4", targetDateKey = targetDate,
+                going = true, className = "13B1"
+            ),
+            // Different date should be ignored
+            com.example.data.NextDaySchoolVote(
+                id = "2026-11-25_u5", userId = "u5", targetDateKey = "2026-11-25",
+                going = false, className = "13M2"
+            )
+        )
+
+        val summary = AttendanceCalculator.calculateNextDayPollSummary(
+            votes = votes,
+            currentUserId = "u1",
+            myClassName = "13M2",
+            targetDateKey = targetDate
+        )
+        assertEquals(4, summary.totalVotes)
+        assertEquals(3, summary.goingCount)
+        assertEquals(1, summary.notGoingCount)
+        assertEquals(75.0, summary.goingPercent, 0.01)
+        assertEquals(25.0, summary.notGoingPercent, 0.01)
+        assertEquals(true, summary.myVoteGoing)
+        assertEquals(2, summary.myClassGoingCount)
+        assertEquals(3, summary.myClassTotalCount)
+        assertEquals(66.67, summary.myClassGoingPercent ?: 0.0, 0.1)
+    }
 }
+
 
 
 

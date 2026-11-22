@@ -57,6 +57,7 @@ class SundayPrepReceiver : BroadcastReceiver() {
                     SriLankaCalendarDefaults.defaultTerms,
                     todayKey
                 )
+                val periodBlocks = repository.getQuickWidgetPeriodBlocks(uid)
                 val termStats = AttendanceCalculator.calculateStats(
                     records = records,
                     thresholdPercent = activeTerm.minEligibilityPercent,
@@ -65,7 +66,15 @@ class SundayPrepReceiver : BroadcastReceiver() {
                     priorPresent = profile?.priorPresentCount ?: 0,
                     priorAbsent = profile?.priorAbsentCount ?: 0,
                     termFilter = activeTerm,
-                    lockedRange = profile?.lockedBaselineRange
+                    lockedRange = profile?.lockedBaselineRange,
+                    periodBlocks = periodBlocks
+                )
+                val digest = AttendanceCalculator.calculateLastWeekDigest(
+                    records = records,
+                    calendarEvents = events,
+                    overallStats = termStats,
+                    periodBlocks = periodBlocks,
+                    todayKey = todayKey
                 )
                 val prep = AttendanceCalculator.calculateUpcomingWeekPrep(
                     calendarEvents = events,
@@ -73,37 +82,37 @@ class SundayPrepReceiver : BroadcastReceiver() {
                     referenceDateKey = todayKey
                 )
 
-                val offDayText = if (prep.offDays.isEmpty()) {
-                    "Full 5-day school week ahead."
+                val deltaStr = digest.weekOverWeekDelta?.let { d ->
+                    val sign = if (d >= 0) "+" else ""
+                    String.format(Locale.US, " (%s%.1f%%)", sign, d)
+                } ?: ""
+                val lastWeekSegment = if (digest.lastWeekSchoolDays > 0) {
+                    "Last week: ${digest.lastWeekAttended}/${digest.lastWeekSchoolDays}"
                 } else {
+                    "Last week: School break"
+                }
+                val overallSegment = if (termStats.totalCountedDays == 0) {
+                    "Overall: Ready to track"
+                } else {
+                    String.format(Locale.US, "Overall: %.1f%%%s", digest.overallPercent, deltaStr)
+                }
+                val holidaySegment = digest.nextHolidayDaysAway?.let { days ->
+                    "Next holiday in ${days}d"
+                } ?: "${prep.schoolDaysCount} school days next week"
+
+                val topLine = "$lastWeekSegment · $overallSegment · $holidaySegment"
+                val extraLine = if (prep.offDays.isNotEmpty()) {
                     val labels = prep.offDays.take(2).joinToString(", ") { ev ->
-                        val dayShort = DateUtils.formatWeekdayName(ev.dateKey).take(3)
-                        "$dayShort: ${ev.title}"
+                        "${DateUtils.formatWeekdayName(ev.dateKey).take(3)}: ${ev.title}"
                     }
-                    "${prep.schoolDaysCount} school day${if (prep.schoolDaysCount == 1) "" else "s"} ahead ($labels)."
-                }
-
-                val standingText = if (termStats.totalCountedDays == 0) {
-                    "Ready to track your ${activeTerm.name} attendance."
+                    "Coming up: ${prep.schoolDaysCount} school days ($labels)."
                 } else if (prep.eligible) {
-                    String.format(
-                        Locale.US,
-                        "Term: %.1f%% — %d safe skip%s left.",
-                        prep.termPercentage,
-                        prep.safeSkipsRemaining,
-                        if (prep.safeSkipsRemaining == 1) "" else "s"
-                    )
+                    "Coming up: Full 5-day week (${prep.safeSkipsRemaining} safe skip${if (prep.safeSkipsRemaining == 1) "" else "s"} left)."
                 } else {
-                    String.format(
-                        Locale.US,
-                        "Term: %.1f%% — attend next %d day%s to recover.",
-                        prep.termPercentage,
-                        prep.daysNeededToRecover,
-                        if (prep.daysNeededToRecover == 1) "" else "s"
-                    )
+                    "Coming up: Attend next ${prep.daysNeededToRecover} day${if (prep.daysNeededToRecover == 1) "" else "s"} to climb back above ${termStats.thresholdPercent}%."
                 }
 
-                val body = "$offDayText $standingText"
+                val body = "$topLine\n$extraLine"
                 ReminderScheduler.ensureNotificationChannel(appCtx)
 
                 val openIntent = Intent(appCtx, MainActivity::class.java).apply {
@@ -118,8 +127,8 @@ class SundayPrepReceiver : BroadcastReceiver() {
 
                 val notif = NotificationCompat.Builder(appCtx, ReminderScheduler.CHANNEL_ID)
                     .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle("Sunday Week-Ahead Prep")
-                    .setContentText(body)
+                    .setContentTitle("Sunday Weekly Digest")
+                    .setContentText(topLine)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                     .setAutoCancel(true)

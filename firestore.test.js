@@ -576,3 +576,111 @@ test("Academic catalog, targeted multi-audience calendar events, and catalog_req
   await assertSucceeds(studentA.collection("feedback").where("userId", "==", STUDENT_A_UID).get());
 });
 
+test("Next-day school poll votes and AppSettings.nextDayPollEnabled follow zero-trust rules", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+  const studentB = testEnv.authenticatedContext(STUDENT_B_UID, {
+    email: "b@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+  const later = new Date(Date.now() - 500);
+  const targetDate = "2026-11-23";
+  const voteIdA = `${targetDate}_${STUDENT_A_UID}`;
+  const voteIdB = `${targetDate}_${STUDENT_B_UID}`;
+
+  // Global app_settings.nextDayPollEnabled: admin only
+  const baseSettings = {
+    defaultEligibilityPercent: 80,
+    defaultReminderHour: 14,
+    defaultReminderMinute: 0,
+    currentAcademicYear: 2026,
+    al2026ExamDate: "2026-11-25",
+    al2027ExamDate: "2027-08-09",
+    al2028ExamDate: "2028-08-07",
+    nextDayPollEnabled: false,
+    updatedAt: now,
+  };
+  await assertSucceeds(adminDb.collection("app_settings").doc("global").set(baseSettings));
+  await assertFails(
+    studentA.collection("app_settings").doc("global").update({ nextDayPollEnabled: true, updatedAt: later })
+  );
+  await assertSucceeds(
+    adminDb.collection("app_settings").doc("global").update({ nextDayPollEnabled: true, updatedAt: later })
+  );
+
+  // Unauthenticated denied
+  await assertFails(unauthDb.collection("next_day_votes").doc(voteIdA).get());
+  await assertFails(unauthDb.collection("next_day_votes").where("targetDateKey", "==", targetDate).get());
+
+  const validVoteA = {
+    userId: STUDENT_A_UID,
+    targetDateKey: targetDate,
+    going: true,
+    grade: "Grade 13",
+    alStream: "Physical Science",
+    className: "13M2",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Spoofed userId, mismatched docId, or extra PII/ghost field denied
+  await assertFails(
+    studentA.collection("next_day_votes").doc(voteIdA).set({ ...validVoteA, userId: STUDENT_B_UID })
+  );
+  await assertFails(
+    studentA.collection("next_day_votes").doc("arbitrary_id").set(validVoteA)
+  );
+  await assertFails(
+    studentA.collection("next_day_votes").doc(voteIdA).set({ ...validVoteA, firstName: "Kavindu" })
+  );
+
+  // Valid create by studentA and studentB
+  await assertSucceeds(studentA.collection("next_day_votes").doc(voteIdA).set(validVoteA));
+  await assertSucceeds(
+    studentB.collection("next_day_votes").doc(voteIdB).set({
+      userId: STUDENT_B_UID,
+      targetDateKey: targetDate,
+      going: false,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Signed-in date-scoped query succeeds
+  await assertSucceeds(
+    studentA.collection("next_day_votes").where("targetDateKey", "==", targetDate).get()
+  );
+
+  // StudentA can flip their own vote (partial update) while preserving createdAt/userId/targetDateKey
+  await assertSucceeds(
+    studentA.collection("next_day_votes").doc(voteIdA).update({
+      going: false,
+      updatedAt: later,
+    })
+  );
+
+  // StudentA cannot mutate immutable fields or flip StudentB's vote
+  await assertFails(
+    studentA.collection("next_day_votes").doc(voteIdA).update({
+      targetDateKey: "2026-11-24",
+      updatedAt: later,
+    })
+  );
+  await assertFails(
+    studentA.collection("next_day_votes").doc(voteIdB).update({
+      going: true,
+      updatedAt: later,
+    })
+  );
+});
+
+

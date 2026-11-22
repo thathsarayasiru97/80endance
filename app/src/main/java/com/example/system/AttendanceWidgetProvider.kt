@@ -159,6 +159,8 @@ object AttendanceWidgetStore {
             .putString(KEY_NEXT_HOLIDAY_DATE, snapshot.nextHolidayDateShort)
             .apply()
         AttendanceWidgetProvider.refreshAll(context.applicationContext)
+        AttendancePillWidgetProvider.refreshAll(context.applicationContext)
+        AttendanceQuickTileService.requestListeningUpdate(context.applicationContext)
     }
 
     fun load(context: Context): WidgetSnapshot {

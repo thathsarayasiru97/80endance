@@ -46,7 +46,17 @@ data class LocalReminderPrefs(
     val cachedGrade: String = "",
     val cachedStream: String = "",
     val cachedClassName: String = "",
-    val cachedSetupCompleted: Boolean = false
+    val cachedSetupCompleted: Boolean = false,
+    /** Fires the daily check-in reminder the first time the user unlocks their phone after 1:45 PM on a school day. */
+    val afterSchoolUnlockPromptEnabled: Boolean = false,
+    /** Fires a calm once-a-day nudge when attendance sits right on the 80% edge (80%-82% or <=1 safe skip). */
+    val dangerZoneNudgeEnabled: Boolean = true,
+    val lastUnlockPromptDate: String = "",
+    val lastDangerNudgeDate: String = "",
+    val lastCelebratedWeekKey: String = "",
+    val lastCelebratedStreak: Int = 0,
+    val wasBelowThreshold: Boolean = false,
+    val cachedNextDayPollEnabled: Boolean = false
 ) {
     val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
     val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
@@ -85,6 +95,14 @@ class LocalPreferencesStore(private val context: Context) {
     private val keyCachedStream = stringPreferencesKey("cached_student_stream")
     private val keyCachedClassName = stringPreferencesKey("cached_student_class")
     private val keyCachedSetupCompleted = booleanPreferencesKey("cached_setup_completed")
+    private val keyAfterSchoolUnlockPrompt = booleanPreferencesKey("after_school_unlock_prompt_enabled")
+    private val keyDangerZoneNudge = booleanPreferencesKey("danger_zone_nudge_enabled")
+    private val keyLastUnlockPromptDate = stringPreferencesKey("last_unlock_prompt_date")
+    private val keyLastDangerNudgeDate = stringPreferencesKey("last_danger_nudge_date")
+    private val keyLastCelebratedWeekKey = stringPreferencesKey("last_celebrated_week_key")
+    private val keyLastCelebratedStreak = intPreferencesKey("last_celebrated_streak")
+    private val keyWasBelowThreshold = booleanPreferencesKey("was_below_threshold")
+    private val keyCachedNextDayPollEnabled = booleanPreferencesKey("cached_next_day_poll_enabled")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -107,7 +125,15 @@ class LocalPreferencesStore(private val context: Context) {
             cachedGrade = prefs[keyCachedGrade] ?: "",
             cachedStream = prefs[keyCachedStream] ?: "",
             cachedClassName = prefs[keyCachedClassName] ?: "",
-            cachedSetupCompleted = prefs[keyCachedSetupCompleted] ?: false
+            cachedSetupCompleted = prefs[keyCachedSetupCompleted] ?: false,
+            afterSchoolUnlockPromptEnabled = prefs[keyAfterSchoolUnlockPrompt] ?: false,
+            dangerZoneNudgeEnabled = prefs[keyDangerZoneNudge] ?: true,
+            lastUnlockPromptDate = prefs[keyLastUnlockPromptDate] ?: "",
+            lastDangerNudgeDate = prefs[keyLastDangerNudgeDate] ?: "",
+            lastCelebratedWeekKey = prefs[keyLastCelebratedWeekKey] ?: "",
+            lastCelebratedStreak = prefs[keyLastCelebratedStreak] ?: 0,
+            wasBelowThreshold = prefs[keyWasBelowThreshold] ?: false,
+            cachedNextDayPollEnabled = prefs[keyCachedNextDayPollEnabled] ?: false
         )
     }
 
@@ -231,4 +257,53 @@ class LocalPreferencesStore(private val context: Context) {
             prefs[keyCachedSetupCompleted] = false
         }
     }
+
+    suspend fun saveAfterSchoolUnlockPromptEnabled(enabled: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyAfterSchoolUnlockPrompt] = enabled
+        }
+    }
+
+    suspend fun saveDangerZoneNudgeEnabled(enabled: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyDangerZoneNudge] = enabled
+        }
+    }
+
+    suspend fun markUnlockPromptFiredForDate(dateKey: String) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastUnlockPromptDate] = dateKey
+        }
+    }
+
+    suspend fun markDangerNudgeFiredForDate(dateKey: String) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastDangerNudgeDate] = dateKey
+        }
+    }
+
+    suspend fun markCelebratedWeek(weekKey: String) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastCelebratedWeekKey] = weekKey
+        }
+    }
+
+    suspend fun markCelebratedStreak(streak: Int) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyLastCelebratedStreak] = streak
+        }
+    }
+
+    suspend fun saveWasBelowThreshold(below: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyWasBelowThreshold] = below
+        }
+    }
+
+    suspend fun saveCachedNextDayPollEnabled(enabled: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyCachedNextDayPollEnabled] = enabled
+        }
+    }
 }
+

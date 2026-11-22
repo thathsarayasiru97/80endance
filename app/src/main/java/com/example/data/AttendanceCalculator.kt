@@ -113,6 +113,97 @@ data class UpcomingWeekPrep(
     val daysNeededToRecover: Int
 )
 
+data class CohortAverageItem(
+    val scope: String,
+    val label: String,
+    val percentage: Double,
+    val contributorCount: Int
+)
+
+data class CohortPulseSummary(
+    val classItem: CohortAverageItem?,
+    val streamItem: CohortAverageItem?,
+    val gradeItem: CohortAverageItem?,
+    val schoolItem: CohortAverageItem?
+) {
+    val items: List<CohortAverageItem>
+        get() = listOfNotNull(classItem, streamItem, gradeItem, schoolItem)
+}
+
+data class CheckInImpactPreview(
+    val currentPercent: Double,
+    val projectedPercent: Double,
+    val percentDelta: Double,
+    val remainingSafeSkips: Int,
+    val daysNeededToRecover: Int,
+    val willStayEligible: Boolean
+)
+
+data class RegisterVerificationResult(
+    val officialAttended: Int,
+    val officialTotal: Int,
+    val officialPercent: Double,
+    val appAttended: Int,
+    val appTotal: Int,
+    val appPercent: Double,
+    val attendedDiff: Int,
+    val totalDiff: Int,
+    val isExactMatch: Boolean,
+    val summaryText: String
+)
+
+data class AlJourneyMilestone(
+    val label: String,
+    val dateKey: String,
+    val daysFromStart: Int,
+    val fraction: Float,
+    val reached: Boolean,
+    val isExamDay: Boolean = false,
+    val isTermTest: Boolean = false
+)
+
+data class AlJourneyTimeline(
+    val examYear: Int,
+    val examDateKey: String,
+    val startDateKey: String,
+    val daysRemaining: Int,
+    val totalJourneyDays: Int,
+    val elapsedDays: Int,
+    val progressFraction: Float,
+    val milestones: List<AlJourneyMilestone>
+)
+
+data class WeeklyDigestSummary(
+    val lastWeekAttended: Int,
+    val lastWeekSchoolDays: Int,
+    val overallPercent: Double,
+    val weekOverWeekDelta: Double?,
+    val nextHolidayTitle: String?,
+    val nextHolidayDaysAway: Int?
+)
+
+data class NextDayPollWindow(
+    val isOpen: Boolean = false,
+    val targetDateKey: String = "",
+    val isTomorrowTarget: Boolean = true,
+    val isTargetSchoolDay: Boolean = false,
+    val opensAtLabel: String = "8:00 PM",
+    val closesAtLabel: String = "5:00 AM"
+)
+
+data class NextDayPollSummary(
+    val targetDateKey: String = "",
+    val totalVotes: Int = 0,
+    val goingCount: Int = 0,
+    val notGoingCount: Int = 0,
+    val goingPercent: Double = 0.0,
+    val notGoingPercent: Double = 0.0,
+    val myVoteGoing: Boolean? = null,
+    val myClassGoingCount: Int = 0,
+    val myClassTotalCount: Int = 0,
+    val myClassGoingPercent: Double? = null
+)
+
 object AttendanceCalculator {
 
     fun resolveActiveTerm(terms: List<AcademicTerm>, todayKey: String = DateUtils.todayKey()): AcademicTerm {
@@ -990,7 +1081,10 @@ object AttendanceCalculator {
         records: List<AttendanceRecord>,
         periodBlocks: List<AttendancePeriodBlock> = emptyList(),
         priorPresent: Int = 0,
-        priorAbsent: Int = 0
+        priorAbsent: Int = 0,
+        grade: String? = null,
+        alStream: String? = null,
+        className: String? = null
     ): StudentTrendSummary {
         val validRecords = records.filter { rec ->
             rec.dateKey.length == 10 &&
@@ -1064,7 +1158,10 @@ object AttendanceCalculator {
             allTimeWeekdayAttended = allWeekdayAtt.map { it.coerceIn(0, 1000) },
             allTimeWeekdayAbsent = allWeekdayAbs.map { it.coerceIn(0, 1000) },
             totalAttended = totalAtt,
-            totalAbsent = totalAbs
+            totalAbsent = totalAbs,
+            grade = grade?.trim()?.take(32)?.ifEmpty { null },
+            alStream = alStream?.trim()?.take(48)?.ifEmpty { null },
+            className = className?.trim()?.take(32)?.ifEmpty { null }
         )
     }
 
@@ -1256,4 +1353,451 @@ object AttendanceCalculator {
             )
         }
     }
+
+    /**
+     * Anonymous Cohort Pulse comparing Your Class vs. Your Stream vs. Whole Grade vs. School averages.
+     * Strictly aggregated — zero individual student scores or PII are ever exposed.
+     */
+    fun calculateCohortPulse(
+        summaries: List<StudentTrendSummary>,
+        profile: UserProfile?,
+        timeframe: TrendsTimeframe = TrendsTimeframe.ALL_TIME,
+        currentYearMonth: String = DateUtils.currentMonthPrefix().removeSuffix("-")
+    ): CohortPulseSummary {
+        fun aggregateGroup(
+            scope: String,
+            label: String,
+            subset: List<StudentTrendSummary>
+        ): CohortAverageItem? {
+            if (subset.isEmpty()) return null
+            var att = 0
+            var abs = 0
+            var contributors = 0
+            subset.forEach { s ->
+                if (timeframe == TrendsTimeframe.MONTHLY) {
+                    val pair = extractMonthCounts(s.monthlyTotalsJson, currentYearMonth)
+                    if (pair.first + pair.second > 0) {
+                        att += pair.first
+                        abs += pair.second
+                        contributors++
+                    }
+                } else {
+                    if (s.totalAttended + s.totalAbsent > 0) {
+                        att += max(0, s.totalAttended)
+                        abs += max(0, s.totalAbsent)
+                        contributors++
+                    }
+                }
+            }
+            val tot = att + abs
+            if (tot <= 0 || contributors <= 0) return null
+            return CohortAverageItem(
+                scope = scope,
+                label = label,
+                percentage = (att.toDouble() / tot.toDouble()) * 100.0,
+                contributorCount = contributors
+            )
+        }
+
+        val userClass = profile?.className?.trim().orEmpty()
+        val userStream = profile?.alStream?.trim().orEmpty()
+        val userGrade = profile?.grade?.trim().orEmpty()
+
+        val classItem = if (userClass.isNotEmpty()) {
+            aggregateGroup(
+                scope = "class",
+                label = "Your Class ($userClass)",
+                subset = summaries.filter { it.className.orEmpty().trim().equals(userClass, ignoreCase = true) }
+            )
+        } else null
+
+        val streamItem = if (userStream.isNotEmpty()) {
+            aggregateGroup(
+                scope = "stream",
+                label = "Your Stream ($userStream)",
+                subset = summaries.filter { it.alStream.orEmpty().trim().equals(userStream, ignoreCase = true) }
+            )
+        } else null
+
+        val gradeItem = if (userGrade.isNotEmpty()) {
+            aggregateGroup(
+                scope = "grade",
+                label = "Whole $userGrade",
+                subset = summaries.filter { it.grade.orEmpty().trim().equals(userGrade, ignoreCase = true) }
+            )
+        } else null
+
+        val schoolItem = aggregateGroup(
+            scope = "school",
+            label = "All Students",
+            subset = summaries
+        )
+
+        return CohortPulseSummary(
+            classItem = classItem,
+            streamItem = streamItem,
+            gradeItem = gradeItem,
+            schoolItem = schoolItem
+        )
+    }
+
+    private fun extractMonthCounts(monthlyTotalsJson: String, targetYearMonth: String): Pair<Int, Int> {
+        return runCatching {
+            val obj = org.json.JSONObject(monthlyTotalsJson.ifBlank { "{}" })
+            val arr = obj.optJSONArray(targetYearMonth) ?: return 0 to 0
+            max(0, arr.optInt(0, 0)) to max(0, arr.optInt(1, 0))
+        }.getOrDefault(0 to 0)
+    }
+
+    /**
+     * Computes live before-and-after attendance impact for a proposed status on [dateKey]
+     * inside the Daily Check-In dialog so the student sees exact consequences before confirming.
+     */
+    fun previewCheckInImpact(
+        records: List<AttendanceRecord>,
+        dateKey: String,
+        proposedStatus: AttendanceStatus,
+        activeTerm: AcademicTerm?,
+        thresholdPercent: Int,
+        profile: UserProfile?,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList()
+    ): CheckInImpactPreview {
+        val current = calculateStats(
+            records = records,
+            thresholdPercent = thresholdPercent,
+            countExcusedAsPresent = profile?.countExcusedAsPresent ?: true,
+            includePriorBalance = true,
+            priorPresent = profile?.priorPresentCount ?: 0,
+            priorAbsent = profile?.priorAbsentCount ?: 0,
+            termFilter = activeTerm,
+            lockedRange = profile?.lockedBaselineRange,
+            periodBlocks = periodBlocks
+        )
+        val withoutTarget = records.filterNot { it.dateKey == dateKey }
+        val simulatedRecord = AttendanceRecord(
+            id = dateKey,
+            userId = profile?.userId.orEmpty(),
+            dateKey = dateKey,
+            termId = activeTerm?.id.orEmpty(),
+            status = proposedStatus.raw
+        )
+        val projected = calculateStats(
+            records = withoutTarget + simulatedRecord,
+            thresholdPercent = thresholdPercent,
+            countExcusedAsPresent = profile?.countExcusedAsPresent ?: true,
+            includePriorBalance = true,
+            priorPresent = profile?.priorPresentCount ?: 0,
+            priorAbsent = profile?.priorAbsentCount ?: 0,
+            termFilter = activeTerm,
+            lockedRange = profile?.lockedBaselineRange,
+            periodBlocks = periodBlocks
+        )
+        return CheckInImpactPreview(
+            currentPercent = current.percentage,
+            projectedPercent = projected.percentage,
+            percentDelta = projected.percentage - current.percentage,
+            remainingSafeSkips = projected.safeSkipsRemaining,
+            daysNeededToRecover = projected.daysNeededToRecover,
+            willStayEligible = projected.eligible
+        )
+    }
+
+    /**
+     * Returns true when the student is eligible but sitting on the danger-zone edge
+     * (80%–82% or <= 1 safe skip remaining with at least 5 counted days).
+     */
+    fun isDangerZone(stats: AttendanceStats): Boolean {
+        if (stats.totalCountedDays < 5) return false
+        if (!stats.eligible) return false
+        return stats.safeSkipsRemaining <= 1 || stats.percentage <= (stats.thresholdPercent + 2.0)
+    }
+
+    /**
+     * Returns true if the current Mon–Fri week has all 5 school days logged as Present/Medical/Excused.
+     */
+    fun isPerfectFiveOfFiveWeek(weekDays: List<WeekDaySummary>): Boolean {
+        if (weekDays.size < 5) return false
+        val attendedCount = weekDays.count {
+            it.status == AttendanceStatus.PRESENT ||
+                it.status == AttendanceStatus.MEDICAL ||
+                it.status == AttendanceStatus.SCHOOL_EVENT
+        }
+        return attendedCount == 5
+    }
+
+    /**
+     * Compares the official class register numbers (e.g. 64 attended out of 78 school days)
+     * against the app's tracked totals and flags any ±day mismatch.
+     */
+    fun verifyAgainstClassRegister(
+        stats: AttendanceStats,
+        officialAttended: Int,
+        officialTotal: Int
+    ): RegisterVerificationResult {
+        val cleanTotal = officialTotal.coerceAtLeast(1)
+        val cleanAttended = officialAttended.coerceIn(0, cleanTotal)
+        val officialPct = (cleanAttended.toDouble() / cleanTotal.toDouble()) * 100.0
+        val appAtt = stats.effectiveAttended
+        val appTot = stats.totalCountedDays
+        val attDiff = appAtt - cleanAttended
+        val totDiff = appTot - cleanTotal
+        val exact = attDiff == 0 && totDiff == 0
+        val summary = when {
+            exact -> "Exact match! Your records match the official class register to the day."
+            attDiff == 0 && totDiff != 0 -> {
+                val sign = if (totDiff > 0) "+$totDiff" else "$totDiff"
+                "Attended days match ($cleanAttended), but total school days differ by $sign day(s). Check holidays or unlogged absences."
+            }
+            attDiff > 0 -> "App shows +$attDiff more attended day(s) than the register (total diff: ${if (totDiff >= 0) "+$totDiff" else "$totDiff"}d). Double-check recent Present/Excused days or register errors."
+            else -> "Register shows ${-attDiff} more attended day(s) than the app (total diff: ${if (totDiff >= 0) "+$totDiff" else "$totDiff"}d). Check unlogged school days or baseline total."
+        }
+        return RegisterVerificationResult(
+            officialAttended = cleanAttended,
+            officialTotal = cleanTotal,
+            officialPercent = officialPct,
+            appAttended = appAtt,
+            appTotal = appTot,
+            appPercent = stats.percentage,
+            attendedDiff = attDiff,
+            totalDiff = totDiff,
+            isExactMatch = exact,
+            summaryText = summary
+        )
+    }
+
+    /**
+     * Builds the A/L Journey Timeline from Grade 12 Day 1 through 200d, 100d, 50d,
+     * and Term Test checkpoints to A/L Exam Day 1.
+     */
+    fun calculateAlJourneyTimeline(
+        examYear: Int,
+        settings: AppSettings,
+        terms: List<AcademicTerm>,
+        todayKey: String = DateUtils.todayKey()
+    ): AlJourneyTimeline {
+        val examDateKey = settings.examDateForYear(examYear)
+        val startYear = (examYear - 2).coerceAtLeast(2024)
+        val startDateKey = "$startYear-01-15"
+        val totalDays = max(1, DateUtils.daysBetween(startDateKey, examDateKey))
+        val daysRemaining = max(0, DateUtils.daysBetween(todayKey, examDateKey))
+        val elapsed = (totalDays - daysRemaining).coerceIn(0, totalDays)
+        val progress = (elapsed.toFloat() / totalDays.toFloat()).coerceIn(0f, 1f)
+
+        val milestones = mutableListOf<AlJourneyMilestone>()
+        milestones.add(
+            AlJourneyMilestone(
+                label = "Grade 12 Start",
+                dateKey = startDateKey,
+                daysFromStart = 0,
+                fraction = 0f,
+                reached = todayKey >= startDateKey
+            )
+        )
+
+        // Add Term Test checkpoints that fall inside the A/L journey window
+        val relevantTerms = terms
+            .filter { it.endDate > startDateKey && it.endDate < examDateKey }
+            .sortedBy { it.endDate }
+            .take(4)
+        relevantTerms.forEach { term ->
+            val dFromStart = DateUtils.daysBetween(startDateKey, term.endDate).coerceIn(1, totalDays - 1)
+            val shortTerm = term.name.substringBefore("—").substringBefore("-").trim().take(16)
+            milestones.add(
+                AlJourneyMilestone(
+                    label = "$shortTerm End",
+                    dateKey = term.endDate,
+                    daysFromStart = dFromStart,
+                    fraction = (dFromStart.toFloat() / totalDays.toFloat()).coerceIn(0.05f, 0.95f),
+                    reached = todayKey >= term.endDate,
+                    isTermTest = true
+                )
+            )
+        }
+
+        // Standard countdown checkpoints: 200d, 100d, 50d before exam
+        listOf(200, 100, 50).forEach { before ->
+            if (before < totalDays) {
+                val checkpointDate = DateUtils.addDays(examDateKey, -before)
+                val dFromStart = (totalDays - before).coerceIn(1, totalDays - 1)
+                milestones.add(
+                    AlJourneyMilestone(
+                        label = "${before}d Left",
+                        dateKey = checkpointDate,
+                        daysFromStart = dFromStart,
+                        fraction = (dFromStart.toFloat() / totalDays.toFloat()).coerceIn(0.05f, 0.96f),
+                        reached = daysRemaining <= before
+                    )
+                )
+            }
+        }
+
+        milestones.add(
+            AlJourneyMilestone(
+                label = "A/L $examYear Day 1",
+                dateKey = examDateKey,
+                daysFromStart = totalDays,
+                fraction = 1f,
+                reached = daysRemaining == 0,
+                isExamDay = true
+            )
+        )
+
+        return AlJourneyTimeline(
+            examYear = examYear,
+            examDateKey = examDateKey,
+            startDateKey = startDateKey,
+            daysRemaining = daysRemaining,
+            totalJourneyDays = totalDays,
+            elapsedDays = elapsed,
+            progressFraction = progress,
+            milestones = milestones.sortedBy { it.daysFromStart }
+        )
+    }
+
+    /**
+     * Builds the Sunday Evening Weekly Digest summary:
+     * Last week's X/5 attendance, overall %, week-over-week % delta, and next Sri Lankan holiday countdown.
+     */
+    fun calculateLastWeekDigest(
+        records: List<AttendanceRecord>,
+        calendarEvents: List<CalendarEvent>,
+        overallStats: AttendanceStats,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        todayKey: String = DateUtils.todayKey()
+    ): WeeklyDigestSummary {
+        val currentMonday = DateUtils.mondayOfWeek(todayKey)
+        // If called on Sunday, last Mon–Fri is 6 days before Sunday (i.e. currentMonday if Mon-based week starts Mon, or -7 if Sunday is start).
+        // DateUtils.mondayOfWeek(sunday) returns the Monday of the week that just finished!
+        val dow = DateUtils.dayOfWeekNumber(todayKey) // 1=Sun .. 7=Sat
+        val lastWeekMonday = if (dow == 1 || dow == 7) currentMonday else DateUtils.addDays(currentMonday, -7)
+        val lastWeekFriday = DateUtils.addDays(lastWeekMonday, 4)
+
+        val recordMap = records.associateBy { it.dateKey }
+        val offDaySet = calendarEvents
+            .filter { it.nonSchoolDay }
+            .map { it.dateKey }
+            .toSet()
+
+        var schoolDays = 0
+        var attended = 0
+        for (offset in 0..4) {
+            val d = DateUtils.addDays(lastWeekMonday, offset)
+            val rec = recordMap[d]
+            val isOff = d in offDaySet || rec?.statusEnum == AttendanceStatus.HOLIDAY
+            if (!isOff) {
+                schoolDays++
+                if (rec != null && (
+                        rec.statusEnum == AttendanceStatus.PRESENT ||
+                            rec.statusEnum == AttendanceStatus.MEDICAL ||
+                            rec.statusEnum == AttendanceStatus.SCHOOL_EVENT
+                        )
+                ) {
+                    attended++
+                }
+            }
+        }
+
+        // Compute week-over-week percentage delta by comparing overallStats vs stats excluding last week
+        val beforeLastWeekRecords = records.filter { it.dateKey < lastWeekMonday }
+        val priorAttended = overallStats.effectiveAttended - attended
+        val priorAbsentInLastWeek = (0..4).count { offset ->
+            val d = DateUtils.addDays(lastWeekMonday, offset)
+            recordMap[d]?.statusEnum == AttendanceStatus.ABSENT
+        }
+        val priorTotal = overallStats.totalCountedDays - (attended + priorAbsentInLastWeek)
+        val delta = if (priorTotal > 0 && (attended + priorAbsentInLastWeek) > 0 && beforeLastWeekRecords.size <= records.size) {
+            val priorPct = (priorAttended.toDouble() / priorTotal.toDouble()) * 100.0
+            overallStats.percentage - priorPct
+        } else null
+
+        val nextHoliday = calendarEvents
+            .filter { it.nonSchoolDay && it.dateKey > todayKey }
+            .minByOrNull { it.dateKey }
+        val daysToHoliday = nextHoliday?.let { DateUtils.daysBetween(todayKey, it.dateKey) }
+
+        return WeeklyDigestSummary(
+            lastWeekAttended = attended,
+            lastWeekSchoolDays = schoolDays,
+            overallPercent = overallStats.percentage,
+            weekOverWeekDelta = delta,
+            nextHolidayTitle = nextHoliday?.title,
+            nextHolidayDaysAway = daysToHoliday
+        )
+    }
+
+    /**
+     * Resolves the daily 8:00 PM – 5:00 AM "Going to school tomorrow?" poll window.
+     * - 20:00..23:59 on day D opens the poll for school day D+1.
+     * - 00:00..04:59 on day D+1 keeps the poll open for school day D+1 ("Today").
+     * - Weekends and published non-school days (Poya / holidays / term breaks) are automatically skipped.
+     */
+    fun resolveNextDayPollWindow(
+        calendarEvents: List<CalendarEvent>,
+        todayKey: String = DateUtils.todayKey(),
+        hourOfDay: Int = DateUtils.currentHourMinute().first
+    ): NextDayPollWindow {
+        val inEarlyMorning = hourOfDay in 0..4
+        val targetDateKey = if (inEarlyMorning) {
+            todayKey
+        } else {
+            DateUtils.addDays(todayKey, 1)
+        }
+        val isTargetSchoolDay = !DateUtils.isWeekend(targetDateKey) &&
+            calendarEvents.none { it.dateKey == targetDateKey && it.nonSchoolDay }
+        val inTimeWindow = hourOfDay >= 20 || inEarlyMorning
+        return NextDayPollWindow(
+            isOpen = inTimeWindow && isTargetSchoolDay,
+            targetDateKey = targetDateKey,
+            isTomorrowTarget = !inEarlyMorning,
+            isTargetSchoolDay = isTargetSchoolDay,
+            opensAtLabel = "8:00 PM",
+            closesAtLabel = "5:00 AM"
+        )
+    }
+
+    /**
+     * Aggregates live Coming vs. Not Coming percentages and classmate counts for [targetDateKey].
+     */
+    fun calculateNextDayPollSummary(
+        votes: List<NextDaySchoolVote>,
+        currentUserId: String,
+        myClassName: String?,
+        targetDateKey: String
+    ): NextDayPollSummary {
+        val scopedVotes = votes
+            .filter { it.targetDateKey == targetDateKey && it.userId.isNotBlank() }
+            .associateBy { it.userId }
+            .values
+            .toList()
+        val total = scopedVotes.size
+        val going = scopedVotes.count { it.going }
+        val notGoing = (total - going).coerceAtLeast(0)
+        val goingPct = if (total > 0) (going * 100.0) / total else 0.0
+        val notGoingPct = if (total > 0) 100.0 - goingPct else 0.0
+        val myVote = scopedVotes.firstOrNull { it.userId == currentUserId }?.going
+
+        val cleanClass = myClassName?.trim()?.takeIf { it.isNotEmpty() }
+        val classVotes = if (cleanClass != null) {
+            scopedVotes.filter { it.className?.trim()?.equals(cleanClass, ignoreCase = true) == true }
+        } else {
+            emptyList()
+        }
+        val classTotal = classVotes.size
+        val classGoing = classVotes.count { it.going }
+        val classPct = if (classTotal > 0) (classGoing * 100.0) / classTotal else null
+
+        return NextDayPollSummary(
+            targetDateKey = targetDateKey,
+            totalVotes = total,
+            goingCount = going,
+            notGoingCount = notGoing,
+            goingPercent = goingPct,
+            notGoingPercent = notGoingPct,
+            myVoteGoing = myVote,
+            myClassGoingCount = classGoing,
+            myClassTotalCount = classTotal,
+            myClassGoingPercent = classPct
+        )
+    }
 }
+

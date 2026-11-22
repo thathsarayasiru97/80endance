@@ -22,6 +22,8 @@ import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventTargetType
 import com.example.data.CalendarEventType
+import com.example.data.CelebrationEvent
+import com.example.data.CelebrationType
 import com.example.data.CommunityStats
 import com.example.data.DateUtils
 import com.example.data.FeedbackReport
@@ -29,10 +31,16 @@ import com.example.data.FeedbackStatus
 import com.example.data.FeedbackType
 import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
+import com.example.data.NextDayPollSummary
+import com.example.data.NextDayPollWindow
+import com.example.data.NextDaySchoolVote
 import com.example.data.Notice
+import com.example.data.PersonalAcademicMarker
+import com.example.data.PersonalMarkerCategory
 import com.example.data.SriLankaCalendarDefaults
 import com.example.data.StudentTrendSummary
 import com.example.data.SyncStatus
+import com.example.data.UndoableCheckInAction
 import com.example.data.UserProfile
 import com.example.data.WeekDaySummary
 import com.example.system.AttendanceWidgetStore
@@ -40,8 +48,10 @@ import com.example.system.BackgroundBroadcastChecker
 import com.example.system.ReminderScheduler
 import com.example.system.SyncScheduler
 import com.example.system.WidgetSnapshot
+import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,9 +59,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 enum class DashboardScopeMode {
     CURRENT_MONTH,
@@ -109,7 +122,13 @@ data class StudentAppState(
     val instantBackgroundAlertsEnabled: Boolean = true,
     val lastBackgroundCheckMillis: Long = 0L,
     val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
-    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList(),
+    val personalMarkers: List<PersonalAcademicMarker> = emptyList(),
+    val afterSchoolUnlockPromptEnabled: Boolean = false,
+    val dangerZoneNudgeEnabled: Boolean = true,
+    val isInDangerZone: Boolean = false,
+    val pollWindow: NextDayPollWindow = NextDayPollWindow(),
+    val nextDayPollSummary: NextDayPollSummary = NextDayPollSummary()
 ) {
     fun lockingPeriodFor(dateKey: String): AttendancePeriodBlock? =
         periodBlocks.firstOrNull { it.containsDate(dateKey) }
@@ -137,7 +156,8 @@ private data class StudentExtraData(
     val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
     val userFeedback: List<FeedbackReport> = emptyList(),
     val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
-    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList(),
+    val personalMarkers: List<PersonalAcademicMarker> = emptyList()
 )
 
 private data class CommunityExtrasBundle(
@@ -148,7 +168,9 @@ private data class CommunityExtrasBundle(
     val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
     val userFeedback: List<FeedbackReport> = emptyList(),
     val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
-    val communityTrendSummaries: List<StudentTrendSummary> = emptyList()
+    val communityTrendSummaries: List<StudentTrendSummary> = emptyList(),
+    val personalMarkers: List<PersonalAcademicMarker> = emptyList(),
+    val nextDayVotes: List<NextDaySchoolVote> = emptyList()
 )
 
 private data class LocalSessionState(
@@ -184,6 +206,12 @@ class AttendanceViewModel(
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
+    private val _undoableCheckIn = MutableStateFlow<UndoableCheckInAction?>(null)
+    val undoableCheckIn: StateFlow<UndoableCheckInAction?> = _undoableCheckIn.asStateFlow()
+
+    private val _celebrationEvent = MutableStateFlow<CelebrationEvent?>(null)
+    val celebrationEvent: StateFlow<CelebrationEvent?> = _celebrationEvent.asStateFlow()
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
 
@@ -192,6 +220,8 @@ class AttendanceViewModel(
 
     private var lastCachedAudienceSignature: String = ""
     private var lastSyncedTrendSignature: String = ""
+    private var lastDangerNudgeTriggeredDate: String = ""
+    private var lastSyncedPollEnabled: Boolean? = null
 
     private fun <T> Flow<T>.safeFirestoreFlow(fallback: T, tag: String): Flow<Pair<T, String?>> =
         this.combine(MutableStateFlow(Unit)) { value, _ -> value to (null as String?) }
@@ -256,14 +286,43 @@ class AttendanceViewModel(
         repository.observeAcademicCatalog().safeFirestoreFlow(AcademicCatalog.defaultCatalog(), "catalog"),
         repository.observeUserFeedbackReports(currentUserId).safeFirestoreFlow(emptyList(), "userFeedback"),
         repository.observePeriodBlocks(currentUserId).safeFirestoreFlow(emptyList(), "periodBlocks"),
-        repository.observeAllStudentTrendSummaries().safeFirestoreFlow(emptyList(), "communityTrends")
-    ) { catalogPair, feedbackPair, periodsPair, trendsPair ->
+        repository.observeAllStudentTrendSummaries().safeFirestoreFlow(emptyList(), "communityTrends"),
+        repository.observePersonalMarkers(currentUserId).safeFirestoreFlow(emptyList(), "personalMarkers")
+    ) { catalogPair, feedbackPair, periodsPair, trendsPair, markersPair ->
         StudentExtraData(
             academicCatalog = catalogPair.first,
             userFeedback = feedbackPair.first,
             periodBlocks = periodsPair.first,
-            communityTrendSummaries = trendsPair.first
+            communityTrendSummaries = trendsPair.first,
+            personalMarkers = markersPair.first
         )
+    }
+
+    private val pollClockTickFlow: Flow<Pair<String, Int>> = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(DateUtils.todayKey() to DateUtils.currentHourMinute().first)
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }.distinctUntilChanged()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val nextDayVotesFlow: Flow<List<NextDaySchoolVote>> = combine(
+        repository.observeAppSettings().safeFirestoreFlow(AppSettings(), "pollSettings"),
+        pollClockTickFlow
+    ) { settingsPair, (todayKey, hourNow) ->
+        if (!settingsPair.first.nextDayPollEnabled || (hourNow in 5..19)) {
+            null
+        } else {
+            if (hourNow < 5) todayKey else DateUtils.addDays(todayKey, 1)
+        }
+    }.distinctUntilChanged().flatMapLatest { targetDate ->
+        if (targetDate == null) {
+            kotlinx.coroutines.flow.flowOf(emptyList())
+        } else {
+            repository.observeNextDayVotesForDate(targetDate)
+                .safeFirestoreFlow(emptyList(), "nextDayVotes")
+                .map { it.first }
+        }
     }
 
     private val extrasBundleFlow: Flow<CommunityExtrasBundle> = combine(
@@ -271,8 +330,11 @@ class AttendanceViewModel(
         repository.observeCommunityStats().safeFirestoreFlow(CommunityStats(), "communityStats"),
         repository.observeBroadcastNotifications().safeFirestoreFlow(emptyList(), "broadcasts"),
         adminStreamFlow,
-        studentExtraDataFlow
-    ) { settingsPair, statsPair, broadcastsPair, adminBundle, studentExtras ->
+        combine(studentExtraDataFlow, nextDayVotesFlow) { studentExtras, votes ->
+            studentExtras to votes
+        }
+    ) { settingsPair, statsPair, broadcastsPair, adminBundle, extrasWithVotes ->
+        val (studentExtras, votes) = extrasWithVotes
         CommunityExtrasBundle(
             settings = settingsPair.first,
             communityStats = statsPair.first,
@@ -281,7 +343,9 @@ class AttendanceViewModel(
             academicCatalog = studentExtras.academicCatalog,
             userFeedback = studentExtras.userFeedback,
             periodBlocks = studentExtras.periodBlocks,
-            communityTrendSummaries = studentExtras.communityTrendSummaries
+            communityTrendSummaries = studentExtras.communityTrendSummaries,
+            personalMarkers = studentExtras.personalMarkers,
+            nextDayVotes = votes
         )
     }
 
@@ -450,20 +514,23 @@ class AttendanceViewModel(
             )
         }
 
-        // Compute & deduplicate-sync anonymous numeric trend summary for school-wide analytics
+        // Compute & deduplicate-sync anonymous numeric trend summary for school-wide & cohort analytics
         val localTrendSummary = if (bundle.profileLoaded && profile?.setupCompleted == true) {
             AttendanceCalculator.buildStudentTrendSummary(
                 userId = currentUserId,
                 records = bundle.records,
                 periodBlocks = periodBlocks,
                 priorPresent = profile.priorPresentCount,
-                priorAbsent = profile.priorAbsentCount
+                priorAbsent = profile.priorAbsentCount,
+                grade = profile.grade,
+                alStream = profile.alStream,
+                className = profile.className
             )
         } else {
             null
         }
         if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
-            val trendSig = "${localTrendSummary.totalAttended}|${localTrendSummary.totalAbsent}|${localTrendSummary.monthlyTotalsJson}|${localTrendSummary.monthlyWeekdayJson}|${localTrendSummary.allTimeWeekdayAttended.joinToString(",")}|${localTrendSummary.allTimeWeekdayAbsent.joinToString(",")}"
+            val trendSig = "${localTrendSummary.totalAttended}|${localTrendSummary.totalAbsent}|${localTrendSummary.grade}|${localTrendSummary.alStream}|${localTrendSummary.className}|${localTrendSummary.monthlyTotalsJson}|${localTrendSummary.monthlyWeekdayJson}|${localTrendSummary.allTimeWeekdayAttended.joinToString(",")}|${localTrendSummary.allTimeWeekdayAbsent.joinToString(",")}"
             if (trendSig != lastSyncedTrendSignature) {
                 lastSyncedTrendSignature = trendSig
                 viewModelScope.launch {
@@ -475,6 +542,28 @@ class AttendanceViewModel(
             extras.communityTrendSummaries.filterNot { it.userId == currentUserId } + localTrendSummary
         } else {
             extras.communityTrendSummaries
+        }
+
+        val inDangerZone = AttendanceCalculator.isDangerZone(termStats)
+        if (localState.prefsLoaded &&
+            profile?.setupCompleted == true &&
+            prefs.dangerZoneNudgeEnabled &&
+            inDangerZone &&
+            prefs.lastDangerNudgeDate != todayKey &&
+            lastDangerNudgeTriggeredDate != todayKey
+        ) {
+            lastDangerNudgeTriggeredDate = todayKey
+            viewModelScope.launch {
+                val posted = ReminderScheduler.showDangerZoneNudgeNotification(
+                    context = appContext,
+                    percentage = termStats.percentage,
+                    thresholdPercent = termStats.thresholdPercent,
+                    safeSkipsRemaining = termStats.safeSkipsRemaining
+                )
+                if (posted) {
+                    localPrefs.markDangerNudgeFiredForDate(todayKey)
+                }
+            }
         }
 
         val milestones = AttendanceCalculator.calculateMilestones(
@@ -554,6 +643,25 @@ class AttendanceViewModel(
             if (profile?.setupCompleted == true) 1 else 0
         )
 
+        val pollWindow = AttendanceCalculator.resolveNextDayPollWindow(
+            calendarEvents = effectiveEvents,
+            todayKey = todayKey,
+            hourOfDay = nowHour
+        )
+        val pollSummary = AttendanceCalculator.calculateNextDayPollSummary(
+            votes = extras.nextDayVotes,
+            currentUserId = currentUserId,
+            myClassName = profile?.className,
+            targetDateKey = pollWindow.targetDateKey
+        )
+        if (lastSyncedPollEnabled != settings.nextDayPollEnabled) {
+            lastSyncedPollEnabled = settings.nextDayPollEnabled
+            viewModelScope.launch {
+                localPrefs.saveCachedNextDayPollEnabled(settings.nextDayPollEnabled)
+                ReminderScheduler.scheduleNextDayPollAlarm(appContext, settings.nextDayPollEnabled)
+            }
+        }
+
         StudentAppState(
             isLoading = !bundle.profileLoaded,
             errorMessage = bundle.streamError,
@@ -598,7 +706,13 @@ class AttendanceViewModel(
             instantBackgroundAlertsEnabled = prefs.instantBackgroundAlertsEnabled,
             lastBackgroundCheckMillis = prefs.lastBackgroundCheckMillis,
             periodBlocks = periodBlocks,
-            communityTrendSummaries = mergedCommunitySummaries
+            communityTrendSummaries = mergedCommunitySummaries,
+            personalMarkers = extras.personalMarkers,
+            afterSchoolUnlockPromptEnabled = prefs.afterSchoolUnlockPromptEnabled,
+            dangerZoneNudgeEnabled = prefs.dangerZoneNudgeEnabled,
+            isInDangerZone = inDangerZone,
+            pollWindow = pollWindow,
+            nextDayPollSummary = pollSummary
         )
     }.stateIn(
         scope = viewModelScope,
@@ -962,6 +1076,9 @@ class AttendanceViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             val current = uiState.value
+            val previousRecord = current.attendanceRecords.firstOrNull { it.dateKey == dateKey }
+            val wasEligibleBefore = current.currentTermStats.eligible
+            val hadCountedDaysBefore = current.currentTermStats.totalCountedDays > 0
             val termId = AttendanceCalculator.resolveTermIdForDate(dateKey, current.terms)
             val result = repository.upsertAttendance(
                 targetUserId = currentUserId,
@@ -981,9 +1098,271 @@ class AttendanceViewModel(
                     _sessionDismissedCheckIn.value = true
                 }
                 val offlineHint = if (current.syncStatus == SyncStatus.OFFLINE_CACHED) " (saved offline)" else ""
-                _snackbarMessage.value = "Marked ${status.label} for ${DateUtils.formatReadableShort(dateKey)}$offlineHint"
+                val msg = "Marked ${status.label} for ${DateUtils.formatReadableShort(dateKey)}$offlineHint"
+                _undoableCheckIn.value = UndoableCheckInAction(
+                    message = msg,
+                    dateKey = dateKey,
+                    previousRecord = previousRecord
+                )
+                evaluateCelebrationsAfterLog(
+                    previousState = current,
+                    loggedDateKey = dateKey,
+                    loggedStatus = status,
+                    termId = termId,
+                    wasEligibleBefore = wasEligibleBefore,
+                    hadCountedDaysBefore = hadCountedDaysBefore
+                )
             }.onFailure { err ->
                 _snackbarMessage.value = err.message ?: "Failed to save attendance"
+            }
+        }
+    }
+
+    private suspend fun evaluateCelebrationsAfterLog(
+        previousState: StudentAppState,
+        loggedDateKey: String,
+        loggedStatus: AttendanceStatus,
+        termId: String,
+        wasEligibleBefore: Boolean,
+        hadCountedDaysBefore: Boolean
+    ) {
+        if (loggedStatus == AttendanceStatus.ABSENT || loggedStatus == AttendanceStatus.HOLIDAY) {
+            // Track if student dropped below 80% so future climb-back triggers Recovery celebration
+            val simulated = previousState.attendanceRecords.filterNot { it.dateKey == loggedDateKey } +
+                AttendanceRecord(userId = currentUserId, dateKey = loggedDateKey, termId = termId, status = loggedStatus.raw)
+            val afterStats = AttendanceCalculator.calculateStats(
+                records = simulated,
+                thresholdPercent = previousState.activeTerm.minEligibilityPercent,
+                countExcusedAsPresent = true,
+                includePriorBalance = true,
+                priorPresent = previousState.profile?.priorPresentCount ?: 0,
+                priorAbsent = previousState.profile?.priorAbsentCount ?: 0,
+                termFilter = previousState.activeTerm,
+                lockedRange = previousState.profile?.lockedBaselineRange,
+                periodBlocks = previousState.periodBlocks
+            )
+            if (!afterStats.eligible) {
+                localPrefs.saveWasBelowThreshold(true)
+            }
+            return
+        }
+
+        val prefs = localPrefs.getSnapshot()
+        val todayKey = DateUtils.todayKey()
+        val simulatedRecords = previousState.attendanceRecords.filterNot { it.dateKey == loggedDateKey } +
+            AttendanceRecord(userId = currentUserId, dateKey = loggedDateKey, termId = termId, status = loggedStatus.raw)
+        val afterStats = AttendanceCalculator.calculateStats(
+            records = simulatedRecords,
+            thresholdPercent = previousState.activeTerm.minEligibilityPercent,
+            countExcusedAsPresent = true,
+            includePriorBalance = true,
+            priorPresent = previousState.profile?.priorPresentCount ?: 0,
+            priorAbsent = previousState.profile?.priorAbsentCount ?: 0,
+            termFilter = previousState.activeTerm,
+            lockedRange = previousState.profile?.lockedBaselineRange,
+            periodBlocks = previousState.periodBlocks
+        )
+        val afterStreak = AttendanceCalculator.calculateCurrentStreak(
+            records = simulatedRecords,
+            calendarEvents = previousState.calendarEvents,
+            countExcusedAsPresent = true,
+            todayKey = todayKey
+        )
+        val afterWeek = AttendanceCalculator.calculateWeeklySummary(
+            records = simulatedRecords,
+            calendarEvents = previousState.calendarEvents,
+            todayKey = todayKey,
+            lockedRange = previousState.profile?.lockedBaselineRange,
+            periodBlocks = previousState.periodBlocks
+        )
+
+        // 1. Recovery celebration: climbed back above 80%!
+        if ((prefs.wasBelowThreshold || (hadCountedDaysBefore && !wasEligibleBefore)) && afterStats.eligible) {
+            localPrefs.saveWasBelowThreshold(false)
+            _celebrationEvent.value = CelebrationEvent(
+                type = CelebrationType.ELIGIBILITY_RECOVERY,
+                title = "Back Above ${afterStats.thresholdPercent}%!",
+                subtitle = String.format(java.util.Locale.US, "You climbed back to %.1f%% — A/L eligibility restored!", afterStats.percentage),
+                badgeLabel = "COMEBACK"
+            )
+            return
+        }
+
+        // 2. Streak milestones: 10, 20, 50 school days
+        val milestoneTarget = listOf(50, 20, 10).firstOrNull { afterStreak >= it && prefs.lastCelebratedStreak < it }
+        if (milestoneTarget != null) {
+            localPrefs.markCelebratedStreak(milestoneTarget)
+            _celebrationEvent.value = CelebrationEvent(
+                type = CelebrationType.STREAK_MILESTONE,
+                title = "${milestoneTarget}-Day Streak Unlocked!",
+                subtitle = "Incredible consistency — $afterStreak straight school days logged.",
+                badgeLabel = "${milestoneTarget}D STREAK"
+            )
+            return
+        }
+
+        // 3. Perfect 5/5 Week (Mon-Fri)
+        val weekKey = DateUtils.mondayOfWeek(todayKey)
+        if (AttendanceCalculator.isPerfectFiveOfFiveWeek(afterWeek) && prefs.lastCelebratedWeekKey != weekKey) {
+            localPrefs.markCelebratedWeek(weekKey)
+            _celebrationEvent.value = CelebrationEvent(
+                type = CelebrationType.PERFECT_WEEK,
+                title = "Perfect 5/5 Week!",
+                subtitle = "Full Mon–Fri attendance locked in. Keep that momentum rolling!",
+                badgeLabel = "5 / 5 WEEK"
+            )
+        }
+    }
+
+    fun clearUndoableCheckIn() {
+        _undoableCheckIn.value = null
+    }
+
+    fun dismissCelebration() {
+        _celebrationEvent.value = null
+    }
+
+    fun undoLastCheckIn() {
+        val action = _undoableCheckIn.value ?: return
+        _undoableCheckIn.value = null
+        viewModelScope.launch {
+            _isSaving.value = true
+            val current = uiState.value
+            val prev = action.previousRecord
+            val result = if (prev != null) {
+                repository.upsertAttendance(
+                    targetUserId = currentUserId,
+                    dateKey = action.dateKey,
+                    termId = prev.termId.ifBlank { AttendanceCalculator.resolveTermIdForDate(action.dateKey, current.terms) },
+                    status = prev.statusEnum,
+                    subjectTags = prev.subjectTags,
+                    note = prev.note,
+                    markedBy = "student",
+                    existingRecords = current.attendanceRecords
+                )
+            } else {
+                repository.deleteAttendance(
+                    targetUserId = currentUserId,
+                    dateKey = action.dateKey,
+                    existingRecords = current.attendanceRecords
+                )
+            }
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = if (prev != null) {
+                    "Reverted ${DateUtils.formatReadableShort(action.dateKey)} back to ${prev.statusEnum.label}"
+                } else {
+                    "Undid entry for ${DateUtils.formatReadableShort(action.dateKey)}"
+                }
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not undo check-in"
+            }
+        }
+    }
+
+    fun bulkLogAttendance(
+        dateKeys: List<String>,
+        status: AttendanceStatus,
+        note: String? = null,
+        onComplete: () -> Unit = {}
+    ) {
+        val current = uiState.value
+        val today = DateUtils.todayKey()
+        val eligibleDates = dateKeys.filter { key ->
+            key <= today && !DateUtils.isWeekend(key) && !current.isDateLocked(key)
+        }.distinct()
+        if (eligibleDates.isEmpty()) {
+            _snackbarMessage.value = "No editable school days selected"
+            return
+        }
+        viewModelScope.launch {
+            _isSaving.value = true
+            val result = repository.bulkUpsertAttendance(
+                targetUserId = currentUserId,
+                dateKeys = eligibleDates,
+                status = status,
+                note = note,
+                terms = current.terms,
+                existingRecords = current.attendanceRecords
+            )
+            _isSaving.value = false
+            result.onSuccess { count ->
+                _snackbarMessage.value = "Marked $count day${if (count == 1) "" else "s"} as ${status.label}"
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not bulk-update selected days"
+            }
+        }
+    }
+
+    fun savePersonalMarker(
+        dateKey: String,
+        title: String,
+        category: PersonalMarkerCategory,
+        note: String?,
+        existingMarkerId: String? = null,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            val result = repository.savePersonalMarker(
+                userId = currentUserId,
+                dateKey = dateKey,
+                title = title,
+                category = category,
+                note = note,
+                existingMarkerId = existingMarkerId
+            )
+            _isSaving.value = false
+            result.onSuccess {
+                _snackbarMessage.value = if (existingMarkerId == null) {
+                    "Pinned \"$title\" to ${DateUtils.formatReadableShort(dateKey)}"
+                } else {
+                    "Updated marker \"$title\""
+                }
+                onComplete()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not save personal marker"
+            }
+        }
+    }
+
+    fun deletePersonalMarker(markerId: String) {
+        viewModelScope.launch {
+            val result = repository.deletePersonalMarker(currentUserId, markerId)
+            result.onSuccess {
+                _snackbarMessage.value = "Removed personal calendar marker"
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not remove marker"
+            }
+        }
+    }
+
+    fun setAfterSchoolUnlockPromptEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            localPrefs.saveAfterSchoolUnlockPromptEnabled(enabled)
+            if (enabled) {
+                SyncScheduler.ensureAllBackgroundChecksScheduled(
+                    context = appContext,
+                    instantListenerEnabled = true,
+                    allowStartForegroundService = true
+                )
+            }
+            _snackbarMessage.value = if (enabled) {
+                "After-School Unlock Prompt on — reminds you on first unlock after 1:45 PM"
+            } else {
+                "After-School Unlock Prompt paused"
+            }
+        }
+    }
+
+    fun setDangerZoneNudgeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            localPrefs.saveDangerZoneNudgeEnabled(enabled)
+            _snackbarMessage.value = if (enabled) {
+                "80% Edge Smart Nudge enabled"
+            } else {
+                "80% Edge Smart Nudge muted"
             }
         }
     }
@@ -1201,6 +1580,56 @@ class AttendanceViewModel(
                 onComplete()
             }.onFailure { err ->
                 _snackbarMessage.value = err.message ?: "Could not send feedback"
+            }
+        }
+    }
+
+    fun submitNextDayVote(going: Boolean) {
+        val snapshot = uiState.value
+        if (!snapshot.appSettings.nextDayPollEnabled) return
+        val window = snapshot.pollWindow
+        if (!window.isOpen) {
+            _snackbarMessage.value = "Poll is only open from 8:00 PM to 5:00 AM before a school day"
+            return
+        }
+        viewModelScope.launch {
+            val res = repository.submitNextDayVote(
+                userId = currentUserId,
+                targetDateKey = window.targetDateKey,
+                going = going,
+                profile = snapshot.profile
+            )
+            res.onSuccess {
+                runCatching {
+                    NotificationManagerCompat.from(appContext).cancel(ReminderScheduler.POLL_NOTIFICATION_ID)
+                }
+                val fetchedVotes = repository.getNextDayVotesForDate(window.targetDateKey)
+                val myVoteEntry = NextDaySchoolVote(
+                    id = "${window.targetDateKey}_$currentUserId",
+                    userId = currentUserId,
+                    targetDateKey = window.targetDateKey,
+                    going = going,
+                    grade = snapshot.profile?.grade,
+                    alStream = snapshot.profile?.alStream,
+                    className = snapshot.profile?.className
+                )
+                val merged = fetchedVotes.filterNot { it.userId == currentUserId } + myVoteEntry
+                val summary = AttendanceCalculator.calculateNextDayPollSummary(
+                    votes = merged,
+                    currentUserId = currentUserId,
+                    myClassName = snapshot.profile?.className,
+                    targetDateKey = window.targetDateKey
+                )
+                ReminderScheduler.showNextDayPollAnalysisNotification(
+                    context = appContext,
+                    summary = summary,
+                    userVotedGoing = going
+                )
+                val comingPct = summary.goingPercent.roundToInt()
+                _snackbarMessage.value =
+                    "Voted ${if (going) "Coming" else "Not Coming"} • $comingPct% coming (${summary.totalVotes} voted)"
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not save your vote"
             }
         }
     }

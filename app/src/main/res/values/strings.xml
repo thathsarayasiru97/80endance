@@ -34,4 +34,23 @@
     <string name="bg_service_channel_desc">Silent status notification that keeps school and class announcements arriving even after closing the app.</string>
     <string name="bg_service_notif_title">80endance • Active in background</string>
     <string name="bg_service_notif_body">Listening for school &amp; class announcements</string>
+    <string name="notif_action_snooze_1h">Snooze 1h</string>
+    <string name="notif_action_undo">Undo</string>
+    <string name="pill_widget_label">80endance Glass Pill</string>
+    <string name="pill_widget_description">Ultra-slim 4×1 pill showing live %, safe skips, and A/L countdown.</string>
+    <string name="quick_tile_label">80endance Check-In</string>
+    <string name="shortcut_mark_present_short">Mark Present</string>
+    <string name="shortcut_mark_present_long">Mark Present Today</string>
+    <string name="shortcut_mark_absent_short">Mark Absent</string>
+    <string name="shortcut_mark_absent_long">Mark Absent Today</string>
+    <string name="shortcut_open_calendar_short">Calendar</string>
+    <string name="shortcut_open_calendar_long">Open Attendance Calendar</string>
+    <string name="shortcut_open_reports_short">View Trends</string>
+    <string name="shortcut_open_reports_long">View Trends &amp; Reports</string>
+    <string name="danger_nudge_channel_name">80% Safety Edge Alerts</string>
+    <string name="danger_nudge_channel_desc">Heads-up alert only when 1 more absence could drop you below 80%.</string>
+    <string name="poll_channel_name">Next-Day School Poll</string>
+    <string name="poll_channel_desc">Daily 8:00 PM roll-call asking if you plan to attend tomorrow and showing live turnout.</string>
+    <string name="notif_poll_yes">Yes, Coming</string>
+    <string name="notif_poll_no">No, Not Coming</string>
 </resources>

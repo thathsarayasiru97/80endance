@@ -235,6 +235,28 @@ object DateUtils {
         }
     }
 
+    /** Returns Calendar.DAY_OF_WEEK (1=Sunday, 2=Monday .. 7=Saturday) for [dateKey]. */
+    fun dayOfWeekNumber(dateKey: String): Int {
+        val cal = parseDateKey(dateKey) ?: Calendar.getInstance()
+        return cal.get(Calendar.DAY_OF_WEEK)
+    }
+
+    /** Returns the ISO date key for the Monday of the week containing [dateKey] (Mon..Sun week). */
+    fun mondayOfWeek(dateKey: String): String {
+        val cal = parseDateKey(dateKey) ?: Calendar.getInstance()
+        val offsetToMon = when (cal.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> 0
+            Calendar.TUESDAY -> -1
+            Calendar.WEDNESDAY -> -2
+            Calendar.THURSDAY -> -3
+            Calendar.FRIDAY -> -4
+            Calendar.SATURDAY -> -5
+            else -> -6
+        }
+        cal.add(Calendar.DAY_OF_YEAR, offsetToMon)
+        return formatDateKey(cal)
+    }
+
     fun formatTime12Hour(hour: Int, minute: Int): String {
         val amPm = if (hour < 12) "AM" else "PM"
         val displayHour = when {

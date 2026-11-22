@@ -81,9 +81,11 @@ import com.example.data.AttendancePatternInsights
 import com.example.data.AttendancePeriodBlock
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStats
+import com.example.data.CohortPulseSummary
 import com.example.data.MonthlyAttendancePoint
 import com.example.data.StudentTrendSummary
 import com.example.data.TrendsTimeframe
+import com.example.data.UserProfile
 import com.example.ui.theme.LocalAttendanceColors
 import java.util.Locale
 import kotlin.math.abs
@@ -344,6 +346,7 @@ fun AttendancePatternsAndChartCard(
     thresholdPercent: Int,
     periodBlocks: List<AttendancePeriodBlock> = emptyList(),
     communitySummaries: List<StudentTrendSummary> = emptyList(),
+    profile: UserProfile? = null,
     modifier: Modifier = Modifier
 ) {
     // Page 0 = Everyone's Trends & Patterns (DEFAULT tile, defaulting to All Time)
@@ -359,6 +362,13 @@ fun AttendancePatternsAndChartCard(
             summaries = communitySummaries,
             timeframe = everyoneTimeframe,
             maxMonths = 6
+        )
+    }
+    val cohortPulse = remember(communitySummaries, profile, everyoneTimeframe) {
+        AttendanceCalculator.calculateCohortPulse(
+            summaries = communitySummaries,
+            profile = profile,
+            timeframe = everyoneTimeframe
         )
     }
     val personalInsights = remember(records, periodBlocks, personalTimeframe) {
@@ -507,6 +517,7 @@ fun AttendancePatternsAndChartCard(
                         timeframe = everyoneTimeframe,
                         onTimeframeChange = { everyoneTimeframe = it },
                         insights = everyoneInsights,
+                        cohortPulse = cohortPulse,
                         thresholdPercent = thresholdPercent,
                         pageTag = "trends_page_everyone",
                         allTimeTag = "trends_everyone_all_time",
@@ -518,6 +529,7 @@ fun AttendancePatternsAndChartCard(
                         timeframe = personalTimeframe,
                         onTimeframeChange = { personalTimeframe = it },
                         insights = personalInsights,
+                        cohortPulse = null,
                         thresholdPercent = thresholdPercent,
                         pageTag = "trends_page_personal",
                         allTimeTag = "trends_personal_all_time",
@@ -557,6 +569,7 @@ private fun TrendsInsightSlideContent(
     timeframe: TrendsTimeframe,
     onTimeframeChange: (TrendsTimeframe) -> Unit,
     insights: AttendancePatternInsights,
+    cohortPulse: CohortPulseSummary?,
     thresholdPercent: Int,
     pageTag: String,
     allTimeTag: String,
@@ -687,6 +700,98 @@ private fun TrendsInsightSlideContent(
                                 fontWeight = FontWeight.SemiBold,
                                 color = headlineFg
                             )
+                        }
+                    }
+                }
+            }
+
+            // 0. Anonymous Stream & Class Average Pulse (Everyone tab only)
+            if (isCommunity && cohortPulse != null && cohortPulse.items.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("cohort_pulse_section")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Class · Stream · Grade Pulse",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "100% anonymous",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        cohortPulse.items.forEachIndexed { idx, item ->
+                            val targetFrac = (item.percentage / 100.0).toFloat().coerceIn(0f, 1f)
+                            var pulseRevealed by remember(timeframe, item.scope, targetFrac) { mutableStateOf(false) }
+                            LaunchedEffect(timeframe, item.scope, targetFrac) {
+                                delay(idx * 55L)
+                                pulseRevealed = true
+                            }
+                            val animatedFrac by animateFloatAsState(
+                                targetValue = if (pulseRevealed) targetFrac else 0f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioLowBouncy,
+                                    stiffness = Spring.StiffnessLow
+                                ),
+                                label = "cohort_pulse_${item.scope}"
+                            )
+                            val barTint = when {
+                                item.percentage >= thresholdPercent -> semantic.present
+                                else -> semantic.absent
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${item.label} (${item.contributorCount})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = String.format(Locale.US, "%.1f%%", item.percentage),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = barTint
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(animatedFrac)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(barTint)
+                                    )
+                                }
+                            }
                         }
                     }
                 }

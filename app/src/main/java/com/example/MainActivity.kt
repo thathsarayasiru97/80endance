@@ -78,7 +78,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import com.example.data.AttendanceCalculator
+import com.example.data.AttendanceStatus
 import com.example.data.ReleaseNotesCatalog
+import com.example.system.AppShortcutsHelper
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
 import com.example.system.AttendanceWidgetStore
@@ -125,15 +130,15 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var openCheckInTrigger by mutableStateOf(false)
+    private var pendingShortcutAction by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ReminderScheduler.ensureNotificationChannel(this)
         SyncScheduler.schedulePeriodicNotificationSync(this)
-        if (intent?.getBooleanExtra(AppConstants.EXTRA_OPEN_CHECKIN, false) == true) {
-            openCheckInTrigger = true
-        }
+        AppShortcutsHelper.publishDynamicShortcuts(this)
+        consumeLaunchIntent(intent)
         setContent {
             val prefsStore = remember { LocalPreferencesStore(applicationContext) }
             val localPrefs by prefsStore.prefsFlow.collectAsStateWithLifecycle(initialValue = LocalReminderPrefs())
@@ -148,7 +153,9 @@ class MainActivity : ComponentActivity() {
             ) {
                 AppRoot(
                     openCheckInFromNotification = openCheckInTrigger,
-                    onConsumeNotificationTrigger = { openCheckInTrigger = false }
+                    onConsumeNotificationTrigger = { openCheckInTrigger = false },
+                    pendingShortcutAction = pendingShortcutAction,
+                    onConsumeShortcutAction = { pendingShortcutAction = null }
                 )
             }
         }
@@ -156,8 +163,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        consumeLaunchIntent(intent)
+    }
+
+    private fun consumeLaunchIntent(intent: Intent?) {
+        if (intent == null) return
         if (intent.getBooleanExtra(AppConstants.EXTRA_OPEN_CHECKIN, false)) {
             openCheckInTrigger = true
+        }
+        val shortcut = intent.getStringExtra(AppConstants.EXTRA_SHORTCUT_ACTION)
+        if (!shortcut.isNullOrBlank()) {
+            pendingShortcutAction = shortcut
         }
     }
 }
@@ -177,7 +193,9 @@ private enum class AppTab(
 @Composable
 private fun AppRoot(
     openCheckInFromNotification: Boolean,
-    onConsumeNotificationTrigger: () -> Unit
+    onConsumeNotificationTrigger: () -> Unit,
+    pendingShortcutAction: String?,
+    onConsumeShortcutAction: () -> Unit
 ) {
     val context = LocalContext.current
     val appScope = rememberCoroutineScope()
@@ -320,6 +338,8 @@ private fun AppRoot(
                         user = user,
                         openCheckInFromNotification = openCheckInFromNotification,
                         onConsumeNotificationTrigger = onConsumeNotificationTrigger,
+                        pendingShortcutAction = pendingShortcutAction,
+                        onConsumeShortcutAction = onConsumeShortcutAction,
                         isCheckingUpdates = isCheckingUpdates,
                         updateStatusSummary = updateStatusSummary,
                         updateFeedbackMessage = updateFeedbackMessage,
@@ -352,6 +372,8 @@ private fun AuthenticatedAppShell(
     user: FirebaseUser,
     openCheckInFromNotification: Boolean,
     onConsumeNotificationTrigger: () -> Unit,
+    pendingShortcutAction: String?,
+    onConsumeShortcutAction: () -> Unit,
     isCheckingUpdates: Boolean,
     updateStatusSummary: UpdateCheckStatusSummary?,
     updateFeedbackMessage: String?,
@@ -416,6 +438,8 @@ private fun AuthenticatedAppShell(
     val scopeMode by attendanceViewModel.scopeMode.collectAsStateWithLifecycle()
     val manualCheckInDate by attendanceViewModel.manualCheckInDate.collectAsStateWithLifecycle()
     val snackbarMessage by attendanceViewModel.snackbarMessage.collectAsStateWithLifecycle()
+    val undoableCheckIn by attendanceViewModel.undoableCheckIn.collectAsStateWithLifecycle()
+    val celebrationEvent by attendanceViewModel.celebrationEvent.collectAsStateWithLifecycle()
     val isSaving by attendanceViewModel.isSaving.collectAsStateWithLifecycle()
     val isCheckingBackgroundAlerts by attendanceViewModel.isCheckingBackgroundAlerts.collectAsStateWithLifecycle()
 
@@ -470,6 +494,22 @@ private fun AuthenticatedAppShell(
     var feedbackPromptIsAfterUpdate by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
+    LaunchedEffect(undoableCheckIn) {
+        undoableCheckIn?.let { action ->
+            val result = snackbarHostState.showSnackbar(
+                message = action.message,
+                actionLabel = "Undo",
+                withDismissAction = true,
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                attendanceViewModel.undoLastCheckIn()
+            } else {
+                attendanceViewModel.clearUndoableCheckIn()
+            }
+        }
+    }
+
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let {
             snackbarHostState.showSnackbar(it)
@@ -488,6 +528,28 @@ private fun AuthenticatedAppShell(
         if (openCheckInFromNotification && state.profile?.setupCompleted == true) {
             attendanceViewModel.openCheckInPopup(DateUtils.todayKey())
             onConsumeNotificationTrigger()
+        }
+    }
+
+    LaunchedEffect(pendingShortcutAction, state.profile?.setupCompleted) {
+        if (pendingShortcutAction != null && state.profile?.setupCompleted == true) {
+            when (pendingShortcutAction) {
+                AppConstants.SHORTCUT_MARK_PRESENT -> {
+                    currentTab = AppTab.HOME
+                    attendanceViewModel.quickLogAttendance(DateUtils.todayKey(), AttendanceStatus.PRESENT)
+                }
+                AppConstants.SHORTCUT_MARK_ABSENT -> {
+                    currentTab = AppTab.HOME
+                    attendanceViewModel.quickLogAttendance(DateUtils.todayKey(), AttendanceStatus.ABSENT)
+                }
+                AppConstants.SHORTCUT_OPEN_CALENDAR -> {
+                    currentTab = AppTab.CALENDAR
+                }
+                AppConstants.SHORTCUT_OPEN_REPORTS -> {
+                    currentTab = AppTab.REPORTS
+                }
+            }
+            onConsumeShortcutAction()
         }
     }
 
@@ -622,9 +684,12 @@ private fun AuthenticatedAppShell(
                             onOpenCheckIn = { dateKey -> attendanceViewModel.openCheckInPopup(dateKey) },
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
                             onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
+                            onVoteNextDay = { going -> attendanceViewModel.submitNextDayVote(going) },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onDismissBroadcast = { id -> attendanceViewModel.dismissBroadcastAlert(id) },
                             onDismissResolvedFeedback = { id -> attendanceViewModel.dismissResolvedFeedbackAlert(id) },
+                            celebrationEvent = celebrationEvent,
+                            onDismissCelebration = { attendanceViewModel.dismissCelebration() },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -635,6 +700,15 @@ private fun AuthenticatedAppShell(
                             onOpenBaselineImport = { showBaselineImportDialog = true },
                             onOpenPeriodEntry = { showPeriodAttendanceDialog = true },
                             onDeletePeriodBlock = { periodId -> attendanceViewModel.deletePeriodBlock(periodId) },
+                            onBulkLogAttendance = { dateKeys, status, note ->
+                                attendanceViewModel.bulkLogAttendance(dateKeys, status, note)
+                            },
+                            onSavePersonalMarker = { dk, title, cat, note, existingId ->
+                                attendanceViewModel.savePersonalMarker(dk, title, cat, note, existingId)
+                            },
+                            onDeletePersonalMarker = { markerId ->
+                                attendanceViewModel.deletePersonalMarker(markerId)
+                            },
                             isVerifiedAdmin = isAdmin,
                             isSaving = isSaving,
                             onAdminSaveCalendarEvent = { eventId, title, dk, type, desc, targetAll, grades, streams, classes, userIds, summary, notify ->
@@ -692,6 +766,12 @@ private fun AuthenticatedAppShell(
                             onClearBaseline = { attendanceViewModel.clearAttendancePercentageBaseline() },
                             onOpenPeriodEntry = { showPeriodAttendanceDialog = true },
                             onToggleSundayPrep = { enabled -> attendanceViewModel.setSundayPrepEnabled(enabled) },
+                            onToggleAfterSchoolUnlockPrompt = { enabled ->
+                                attendanceViewModel.setAfterSchoolUnlockPromptEnabled(enabled)
+                            },
+                            onToggleDangerZoneNudge = { enabled ->
+                                attendanceViewModel.setDangerZoneNudgeEnabled(enabled)
+                            },
                             onToggleInstantBackgroundAlerts = { enabled ->
                                 attendanceViewModel.setInstantBackgroundAlertsEnabled(enabled)
                             },
@@ -759,6 +839,17 @@ private fun AuthenticatedAppShell(
             existingRecord = existingRec,
             subjects = state.profile?.subjects.orEmpty(),
             isSaving = isSaving,
+            previewForStatus = { proposed ->
+                AttendanceCalculator.previewCheckInImpact(
+                    records = state.attendanceRecords,
+                    dateKey = activeCheckInDate,
+                    proposedStatus = proposed,
+                    activeTerm = state.activeTerm,
+                    thresholdPercent = state.activeTerm.minEligibilityPercent,
+                    profile = state.profile,
+                    periodBlocks = state.periodBlocks
+                )
+            },
             onDismiss = {
                 attendanceViewModel.dismissCheckInPopup(
                     markDismissedToday = (manualCheckInDate == null)

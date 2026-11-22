@@ -56,6 +56,7 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FactCheck
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -119,6 +120,7 @@ import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.SyncStatusPill
+import com.example.ui.reports.RegisterVerificationDialog
 import com.example.ui.theme.accentSwatchColor
 import com.example.viewmodel.StudentAppState
 
@@ -138,6 +140,8 @@ fun SettingsScreen(
     onClearBaseline: () -> Unit = {},
     onOpenPeriodEntry: (() -> Unit)? = null,
     onToggleSundayPrep: (Boolean) -> Unit = {},
+    onToggleAfterSchoolUnlockPrompt: (Boolean) -> Unit = {},
+    onToggleDangerZoneNudge: (Boolean) -> Unit = {},
     onToggleInstantBackgroundAlerts: (Boolean) -> Unit = {},
     onCheckBackgroundNotificationsNow: () -> Unit = {},
     isCheckingBackgroundAlerts: Boolean = false,
@@ -162,6 +166,7 @@ fun SettingsScreen(
     var showNoticeSheet by remember { mutableStateOf(false) }
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showPhotoDialog by remember { mutableStateOf(false) }
+    var showRegisterVerify by remember { mutableStateOf(false) }
     var feedbackDialogInitialType by remember { mutableStateOf<FeedbackType?>(null) }
 
     var notificationsPermitted by remember {
@@ -415,6 +420,19 @@ fun SettingsScreen(
                                 )
                             }
                         }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        OutlinedButton(
+                            onClick = { showRegisterVerify = true },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_verify_register_button")
+                        ) {
+                            Icon(Icons.Rounded.FactCheck, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Verify Against Class Register")
+                        }
                     }
                 }
             }
@@ -499,11 +517,11 @@ fun SettingsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Sunday Evening Prep",
+                                    text = "Sunday Evening Weekly Digest",
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    text = "7:00 PM briefing of upcoming school days, Poya holidays & safe skips",
+                                    text = "Sunday 7:00 PM recap: last week's X/5, overall % trend, and next holiday",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -518,6 +536,68 @@ fun SettingsScreen(
                                     onToggleSundayPrep(enabled)
                                 },
                                 modifier = Modifier.testTag("settings_sunday_prep_switch")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "After-School Unlock Prompt",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Remind me on my first phone unlock after 1:45 PM on school days (instead of buzzing during class)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = state.afterSchoolUnlockPromptEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    onToggleAfterSchoolUnlockPrompt(enabled)
+                                },
+                                modifier = Modifier.testTag("settings_unlock_prompt_switch")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "80% Edge Smart Nudge",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Only nudges you when sitting right on the edge (80%–82% or 1 safe skip left)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = state.dangerZoneNudgeEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    onToggleDangerZoneNudge(enabled)
+                                },
+                                modifier = Modifier.testTag("settings_danger_nudge_switch")
                             )
                         }
                     }
@@ -1309,6 +1389,14 @@ fun SettingsScreen(
             googlePhotoUrl = state.googlePhotoUrl,
             onSaveCustomAvatar = onSaveCustomAvatar,
             onDismiss = { showPhotoDialog = false }
+        )
+    }
+
+    if (showRegisterVerify) {
+        RegisterVerificationDialog(
+            termName = state.activeTerm.name,
+            stats = state.overallStats,
+            onDismiss = { showRegisterVerify = false }
         )
     }
 

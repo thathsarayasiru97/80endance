@@ -136,6 +136,7 @@
         "al2026ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2026 A/L exam start." },
         "al2027ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2027 A/L exam start." },
         "al2028ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2028 A/L exam start." },
+        "nextDayPollEnabled": { "type": "boolean", "description": "Whether the 8:00 PM - 5:00 AM Next-Day School Poll feature is enabled globally." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
       },
       "required": [
@@ -200,6 +201,22 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
       },
       "required": ["streamSubjectBucketsJson", "gradeStreamClassesJson", "updatedAt"]
+    },
+    "NextDaySchoolVote": {
+      "title": "NextDaySchoolVote",
+      "description": "Time-windowed (8:00 PM - 5:00 AM) student vote indicating whether they plan to attend the upcoming school day.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the voting student." },
+        "targetDateKey": { "type": "string", "description": "ISO date YYYY-MM-DD of the upcoming school day." },
+        "going": { "type": "boolean", "description": "true = Coming to school, false = Not coming." },
+        "grade": { "type": "string", "description": "Optional A/L grade for aggregated class pulse." },
+        "alStream": { "type": "string", "description": "Optional A/L stream for aggregated pulse." },
+        "className": { "type": "string", "description": "Optional class code (e.g., 13M2) for classmate summary." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["userId", "targetDateKey", "going", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -242,6 +259,10 @@
     "/app_config/{configId}": {
       "schema": { "$ref": "#/entities/AcademicCatalog" },
       "description": "Admin-editable structured subject buckets and grade/stream class catalog (academic_catalog)."
+    },
+    "/next_day_votes/{voteId}": {
+      "schema": { "$ref": "#/entities/NextDaySchoolVote" },
+      "description": "Zero-PII daily roll-call votes keyed deterministically by {targetDateKey}_{userId}."
     }
   }
 }

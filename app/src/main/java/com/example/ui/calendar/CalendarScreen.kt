@@ -73,15 +73,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckBox
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.FilterChip
 import com.example.data.AttendanceStatus
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventType
 import com.example.data.DateUtils
+import com.example.data.PersonalAcademicMarker
+import com.example.data.PersonalMarkerCategory
 import com.example.ui.admin.AdminCalendarEventEditorDialog
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.PersonalMarkerDialog
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.bouncyClickable
 import com.example.ui.theme.LocalAttendanceColors
+import com.example.ui.theme.RoyalGold
 import com.example.viewmodel.StudentAppState
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -95,6 +108,9 @@ fun CalendarScreen(
     onOpenBaselineImport: (() -> Unit)? = null,
     onOpenPeriodEntry: (() -> Unit)? = null,
     onDeletePeriodBlock: ((String) -> Unit)? = null,
+    onBulkLogAttendance: ((dateKeys: List<String>, status: AttendanceStatus, note: String?) -> Unit)? = null,
+    onSavePersonalMarker: ((dateKey: String, title: String, category: PersonalMarkerCategory, note: String?, existingId: String?) -> Unit)? = null,
+    onDeletePersonalMarker: ((String) -> Unit)? = null,
     isVerifiedAdmin: Boolean = false,
     isSaving: Boolean = false,
     onAdminSaveCalendarEvent: ((
@@ -122,6 +138,14 @@ fun CalendarScreen(
     var adminEventDialogDate by remember { mutableStateOf<String?>(null) }
     var editingCalendarEvent by remember { mutableStateOf<CalendarEvent?>(null) }
 
+    // Multi-Day Bulk Select state
+    var bulkSelectMode by remember { mutableStateOf(false) }
+    var selectedBulkDates by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Personal Academic Marker dialog state
+    var markerDialogDate by remember { mutableStateOf<String?>(null) }
+    var editingPersonalMarker by remember { mutableStateOf<PersonalAcademicMarker?>(null) }
+
     val profile = state.profile
     val displayedEvents = remember(isVerifiedAdmin, state.allCalendarEventsForAdmin, state.calendarEvents) {
         if (isVerifiedAdmin && state.allCalendarEventsForAdmin.isNotEmpty()) {
@@ -136,12 +160,18 @@ fun CalendarScreen(
     val eventMap = remember(displayedEvents) {
         displayedEvents.groupBy { it.dateKey }
     }
+    val personalMarkerMap = remember(state.personalMarkers) {
+        state.personalMarkers.groupBy { it.dateKey }
+    }
     val todayKey = remember { DateUtils.todayKey() }
     val monthPrefix = remember(displayYear, displayMonth) {
         String.format("%04d-%02d-", displayYear, displayMonth)
     }
     val monthEvents = remember(displayedEvents, monthPrefix) {
         displayedEvents.filter { it.dateKey.startsWith(monthPrefix) }
+    }
+    val monthPersonalMarkers = remember(state.personalMarkers, monthPrefix) {
+        state.personalMarkers.filter { it.dateKey.startsWith(monthPrefix) }.sortedBy { it.dateKey }
     }
 
     Box(
@@ -435,6 +465,122 @@ fun CalendarScreen(
                             }
                         }
 
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Multi-Day Bulk Select toggle & action toolbar
+                        if (onBulkLogAttendance != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = bulkSelectMode,
+                                    onClick = {
+                                        bulkSelectMode = !bulkSelectMode
+                                        if (!bulkSelectMode) selectedBulkDates = emptySet()
+                                    },
+                                    label = {
+                                        Text(
+                                            text = if (bulkSelectMode) "Selecting Multiple (${selectedBulkDates.size})" else "Select Multiple",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (bulkSelectMode) Icons.Rounded.Close else Icons.Rounded.CheckBox,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("calendar_bulk_select_toggle")
+                                )
+                                if (bulkSelectMode && selectedBulkDates.isNotEmpty()) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        shape = RoundedCornerShape(999.dp),
+                                        modifier = Modifier.clickable { selectedBulkDates = emptySet() }
+                                    ) {
+                                        Text(
+                                            text = "Clear",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(
+                                visible = bulkSelectMode,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 6.dp, bottom = 4.dp)
+                                        .testTag("calendar_bulk_action_bar")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (selectedBulkDates.isEmpty()) {
+                                                "Tap multiple school days below (up to today) to mark them all at once."
+                                            } else {
+                                                "Mark ${selectedBulkDates.size} selected day${if (selectedBulkDates.size == 1) "" else "s"} as:"
+                                            },
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        if (selectedBulkDates.isNotEmpty()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                listOf(
+                                                    Triple("Present", AttendanceStatus.PRESENT, semantic.presentContainer to semantic.onPresentContainer),
+                                                    Triple("Medical", AttendanceStatus.MEDICAL, semantic.medicalContainer to semantic.onMedicalContainer),
+                                                    Triple("Excused", AttendanceStatus.SCHOOL_EVENT, semantic.schoolEventContainer to semantic.onSchoolEventContainer),
+                                                    Triple("Absent", AttendanceStatus.ABSENT, semantic.absentContainer to semantic.onAbsentContainer)
+                                                ).forEach { (label, status, colors) ->
+                                                    Surface(
+                                                        color = colors.first,
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .clickable(enabled = !isSaving) {
+                                                                onBulkLogAttendance(
+                                                                    selectedBulkDates.sorted(),
+                                                                    status,
+                                                                    null
+                                                                )
+                                                                selectedBulkDates = emptySet()
+                                                                bulkSelectMode = false
+                                                            }
+                                                            .testTag("calendar_bulk_apply_${status.raw}")
+                                                    ) {
+                                                        Text(
+                                                            text = label,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = colors.second,
+                                                            textAlign = TextAlign.Center,
+                                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(8.dp))
 
                         // Weekday headers
@@ -486,12 +632,20 @@ fun CalendarScreen(
                                             val isLocked = !isWeekend && state.isDateLocked(dateKey)
                                             val rec = if (isWeekend || isFuture || isLocked) null else recordMap[dateKey]
                                             val dayEvents = eventMap[dateKey].orEmpty()
+                                            val dayPersonalMarkers = personalMarkerMap[dateKey].orEmpty()
                                             val isSlHoliday = dayEvents.any { it.isSriLankanHoliday }
                                             val isSchoolOff = dayEvents.any { !it.isSriLankanHoliday && it.nonSchoolDay }
                                             val isToday = dateKey == todayKey
-                                            val isInteractive = isVerifiedAdmin || (!isWeekend && (!isFuture || dayEvents.isNotEmpty())) || (isWeekend && dayEvents.isNotEmpty())
+                                            val isBulkEligible = !isWeekend && !isFuture && !isLocked && !isSlHoliday && !isSchoolOff
+                                            val isBulkSelected = bulkSelectMode && dateKey in selectedBulkDates
+                                            val isInteractive = if (bulkSelectMode) {
+                                                isBulkEligible
+                                            } else {
+                                                isVerifiedAdmin || (!isWeekend && (!isFuture || dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty() || onSavePersonalMarker != null)) || (isWeekend && (dayEvents.isNotEmpty() || dayPersonalMarkers.isNotEmpty()))
+                                            }
 
                                             val targetCellBg = when {
+                                                isBulkSelected -> MaterialTheme.colorScheme.primaryContainer
                                                 isWeekend -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
                                                 isSlHoliday -> semantic.poyaContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
                                                 isSchoolOff -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = if (isFuture) 0.52f else 0.78f)
@@ -508,6 +662,7 @@ fun CalendarScreen(
                                                 label = "cal_bg_$dateKey"
                                             )
                                             val textColor = when {
+                                                isBulkSelected -> MaterialTheme.colorScheme.onPrimaryContainer
                                                 isWeekend -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
                                                 isSlHoliday -> semantic.onPoyaContainer.copy(alpha = if (isFuture) 0.72f else 1f)
                                                 isSchoolOff -> MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = if (isFuture) 0.72f else 1f)
@@ -528,19 +683,33 @@ fun CalendarScreen(
                                                     .clip(RoundedCornerShape(12.dp))
                                                     .background(cellBg)
                                                     .then(
-                                                        if (isToday) {
-                                                            Modifier.border(
+                                                        when {
+                                                            isBulkSelected -> Modifier.border(
+                                                                width = 2.dp,
+                                                                color = MaterialTheme.colorScheme.primary,
+                                                                shape = RoundedCornerShape(12.dp)
+                                                            )
+                                                            isToday -> Modifier.border(
                                                                 width = 2.dp,
                                                                 color = if (isWeekend) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
                                                                 shape = RoundedCornerShape(12.dp)
                                                             )
-                                                        } else {
-                                                            Modifier
+                                                            else -> Modifier
                                                         }
                                                     )
                                                     .then(
                                                         if (isInteractive) {
-                                                            Modifier.bouncyClickable(pressedScale = 0.88f) { selectedDateKey = dateKey }
+                                                            Modifier.bouncyClickable(pressedScale = 0.88f) {
+                                                                if (bulkSelectMode) {
+                                                                    selectedBulkDates = if (dateKey in selectedBulkDates) {
+                                                                        selectedBulkDates - dateKey
+                                                                    } else {
+                                                                        selectedBulkDates + dateKey
+                                                                    }
+                                                                } else {
+                                                                    selectedDateKey = dateKey
+                                                                }
+                                                            }
                                                         } else {
                                                             Modifier
                                                         }
@@ -552,9 +721,41 @@ fun CalendarScreen(
                                                         text = dayNum.toString(),
                                                         style = MaterialTheme.typography.labelLarge,
                                                         color = textColor,
-                                                        fontWeight = if (!isWeekend && !isFuture && (isToday || rec != null || isLocked)) FontWeight.Bold else FontWeight.Medium
+                                                        fontWeight = if (isBulkSelected || (!isWeekend && !isFuture && (isToday || rec != null || isLocked))) FontWeight.Bold else FontWeight.Medium
                                                     )
                                                     when {
+                                                        isBulkSelected -> {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Check,
+                                                                contentDescription = "Selected for bulk update",
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(11.dp)
+                                                            )
+                                                        }
+                                                        dayPersonalMarkers.isNotEmpty() -> {
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .size(5.dp)
+                                                                        .clip(CircleShape)
+                                                                        .background(RoyalGold)
+                                                                )
+                                                                if (dayEvents.isNotEmpty()) {
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .size(5.dp)
+                                                                            .clip(CircleShape)
+                                                                            .background(
+                                                                                when {
+                                                                                    isSlHoliday -> semantic.poya
+                                                                                    isSchoolOff -> MaterialTheme.colorScheme.tertiary
+                                                                                    else -> MaterialTheme.colorScheme.primary
+                                                                                }
+                                                                            )
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
                                                         dayEvents.size > 1 -> {
                                                             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                                                 Box(
@@ -638,6 +839,139 @@ fun CalendarScreen(
                         }
                     }
                 }
+                }
+            }
+
+            // Section 0: Personal Academic Markers (Pinned Deadlines, Practicals & Term Tests)
+            if (onSavePersonalMarker != null || monthPersonalMarkers.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("calendar_personal_markers_section"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "My Academic Markers",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        if (onSavePersonalMarker != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        editingPersonalMarker = null
+                                        markerDialogDate = todayKey
+                                    }
+                                    .testTag("calendar_add_personal_marker_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.BookmarkAdd,
+                                        contentDescription = "Pin personal academic date",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "Pin Date",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (monthPersonalMarkers.isEmpty()) {
+                    item {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Pin Physics Practicals, Term Test dates, or SBA deadlines on any calendar day.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(14.dp)
+                            )
+                        }
+                    }
+                } else {
+                    items(monthPersonalMarkers, key = { "pm_${it.id}" }) { marker ->
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedDateKey = marker.dateKey }
+                                .testTag("calendar_personal_marker_${marker.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = RoyalGold.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Bookmark,
+                                            contentDescription = marker.title,
+                                            tint = RoyalGold,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = marker.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "${DateUtils.formatReadableShort(marker.dateKey)} • ${marker.categoryEnum.label}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (!marker.note.isNullOrBlank()) {
+                                        Text(
+                                            text = marker.note,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                                if (onDeletePersonalMarker != null) {
+                                    IconButton(
+                                        onClick = { onDeletePersonalMarker(marker.id) },
+                                        modifier = Modifier.testTag("calendar_delete_marker_${marker.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = "Delete personal marker",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1003,6 +1337,72 @@ fun CalendarScreen(
                     }
                 }
 
+                val dayPersonalMarkers = personalMarkerMap[dateKey].orEmpty()
+                dayPersonalMarkers.forEach { marker ->
+                    Surface(
+                        color = RoyalGold.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Bookmark,
+                                contentDescription = null,
+                                tint = RoyalGold
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = marker.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Personal Marker • ${marker.categoryEnum.label}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (!marker.note.isNullOrBlank()) {
+                                    Text(
+                                        text = marker.note,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                            if (onDeletePersonalMarker != null) {
+                                IconButton(onClick = { onDeletePersonalMarker(marker.id) }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Remove personal marker",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (onSavePersonalMarker != null) {
+                    OutlinedButton(
+                        onClick = {
+                            editingPersonalMarker = null
+                            markerDialogDate = dateKey
+                            selectedDateKey = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("calendar_sheet_pin_marker_button")
+                    ) {
+                        Icon(Icons.Rounded.BookmarkAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Pin Personal Academic Date")
+                    }
+                }
+
                 if (isVerifiedAdmin && onAdminSaveCalendarEvent != null) {
                     OutlinedButton(
                         onClick = {
@@ -1245,6 +1645,22 @@ fun CalendarScreen(
                 )
                 adminEventDialogDate = null
                 editingCalendarEvent = null
+            }
+        )
+    }
+
+    if (markerDialogDate != null && onSavePersonalMarker != null) {
+        PersonalMarkerDialog(
+            dateKey = markerDialogDate!!,
+            existingMarker = editingPersonalMarker,
+            onDismiss = {
+                markerDialogDate = null
+                editingPersonalMarker = null
+            },
+            onSave = { dk, title, cat, note, existingId ->
+                onSavePersonalMarker(dk, title, cat, note, existingId)
+                markerDialogDate = null
+                editingPersonalMarker = null
             }
         )
     }

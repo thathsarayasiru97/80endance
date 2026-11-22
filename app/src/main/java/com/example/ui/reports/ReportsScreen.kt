@@ -23,7 +23,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.FactCheck
+import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Card
@@ -71,6 +75,18 @@ fun ReportsScreen(
     val profile = state.profile
 
     var selectedTerm by remember(state.terms) { mutableStateOf<AcademicTerm?>(null) } // null = Overall (G12 & 13)
+    var showMonthlyWrapped by remember { mutableStateOf(false) }
+    var showParentSummary by remember { mutableStateOf(false) }
+    var showRegisterVerify by remember { mutableStateOf(false) }
+
+    val personalInsightsForWrapped = remember(state.attendanceRecords, state.periodBlocks) {
+        AttendanceCalculator.calculatePersonalInsightsForScope(
+            records = state.attendanceRecords,
+            periodBlocks = state.periodBlocks,
+            timeframe = com.example.data.TrendsTimeframe.MONTHLY,
+            maxMonths = 6
+        )
+    }
 
     val stats = remember(state.attendanceRecords, state.periodBlocks, selectedTerm, profile) {
         val threshold = selectedTerm?.minEligibilityPercent ?: state.appSettings.defaultEligibilityPercent
@@ -329,13 +345,141 @@ fun ReportsScreen(
                 )
             }
 
+            // Share & Verify Tools: Monthly Wrapped, Parent Summary & Class Register Verification
+            item {
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("reports_tools_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Shareable Cards & Register Check",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { showMonthlyWrapped = true }
+                                    .testTag("reports_open_wrapped_btn")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AutoAwesome,
+                                        contentDescription = "Monthly Wrapped Card",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "Monthly Wrapped",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "WhatsApp graphic",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { showParentSummary = true }
+                                    .testTag("reports_open_parent_card_btn")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.FamilyRestroom,
+                                        contentDescription = "Parent Summary Card",
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "Parent Card",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "Clean, no notes",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                        }
+
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.58f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showRegisterVerify = true }
+                                .testTag("reports_open_register_verify_btn")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FactCheck,
+                                    contentDescription = "Verify with Class Register",
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Verify Against Class Register",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Text(
+                                        text = "Compare your teacher's official register total to catch ±day mismatches early",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Slidable School-Wide & Personal Trends & Patterns Card (All-Time + Monthly)
             item {
                 AttendancePatternsAndChartCard(
                     records = state.attendanceRecords,
                     thresholdPercent = stats.thresholdPercent,
                     periodBlocks = state.periodBlocks,
-                    communitySummaries = state.communityTrendSummaries
+                    communitySummaries = state.communityTrendSummaries,
+                    profile = state.profile
                 )
             }
 
@@ -409,6 +553,35 @@ fun ReportsScreen(
 
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
+    }
+
+    if (showMonthlyWrapped) {
+        MonthlyWrappedPreviewDialog(
+            profile = profile,
+            monthLabel = state.currentMonthLabel,
+            stats = state.currentMonthStats.takeIf { it.totalCountedDays > 0 } ?: stats,
+            insights = personalInsightsForWrapped,
+            streak = state.currentStreak,
+            milestones = state.milestones,
+            onDismiss = { showMonthlyWrapped = false }
+        )
+    }
+
+    if (showParentSummary) {
+        ParentSummaryPreviewDialog(
+            profile = profile,
+            termName = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
+            stats = stats,
+            onDismiss = { showParentSummary = false }
+        )
+    }
+
+    if (showRegisterVerify) {
+        RegisterVerificationDialog(
+            termName = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
+            stats = stats,
+            onDismiss = { showRegisterVerify = false }
+        )
     }
 }
 
