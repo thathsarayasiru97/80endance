@@ -102,7 +102,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStats
 import com.example.data.AttendanceStatus
@@ -132,10 +134,12 @@ fun AnimatedEligibilityGauge(
     onDoubleTapTogglePrivacy: (() -> Unit)? = null
 ) {
     val semantic = LocalAttendanceColors.current
+    val haptic = LocalHapticFeedback.current
     val targetPercent = stats.percentage.toFloat().coerceIn(0f, 100f)
+    val totalAbsent = stats.absentDays + stats.priorAbsentDays + stats.periodAbsentDays
 
     val animatedPercent by animateFloatAsState(
-        targetValue = targetPercent,
+        targetValue = if (privacyBlurred) 50f else targetPercent,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessLow
@@ -143,8 +147,13 @@ fun AnimatedEligibilityGauge(
         label = "gauge_percent"
     )
 
+    val mutedNeutralColor = MaterialTheme.colorScheme.outlineVariant
     val accentColor by animateColorAsState(
-        targetValue = if (stats.eligible) semantic.present else semantic.absent,
+        targetValue = when {
+            privacyBlurred -> mutedNeutralColor
+            stats.eligible -> semantic.present
+            else -> semantic.absent
+        },
         animationSpec = tween(420),
         label = "gauge_color"
     )
@@ -164,11 +173,16 @@ fun AnimatedEligibilityGauge(
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(192.dp)
+            .size(198.dp)
             .then(
                 if (onDoubleTapTogglePrivacy != null) {
                     Modifier.pointerInput(Unit) {
-                        detectTapGestures(onDoubleTap = { onDoubleTapTogglePrivacy() })
+                        detectTapGestures(
+                            onDoubleTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onDoubleTapTogglePrivacy()
+                            }
+                        )
                     }
                 } else {
                     Modifier
@@ -184,8 +198,8 @@ fun AnimatedEligibilityGauge(
             val startAngle = 140f
             val totalSweep = 260f
 
-            // Subtle breathing halo behind the active progress arc
-            if (stats.totalCountedDays > 0) {
+            // Subtle breathing halo behind the active progress arc (suppressed while blurred)
+            if (stats.totalCountedDays > 0 && !privacyBlurred) {
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
@@ -225,19 +239,21 @@ fun AnimatedEligibilityGauge(
                     size = arcSize,
                     style = Stroke(width = strokePx, cap = StrokeCap.Round)
                 )
-                val tipRad = (startAngle + progressSweep) * (PI / 180.0)
-                val tipCx = size.width / 2f + (arcSize.width / 2f * cos(tipRad)).toFloat()
-                val tipCy = size.height / 2f + (arcSize.height / 2f * sin(tipRad)).toFloat()
-                drawCircle(
-                    color = accentColor.copy(alpha = 0.35f),
-                    radius = strokePx * 0.72f,
-                    center = Offset(tipCx, tipCy)
-                )
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.92f),
-                    radius = strokePx * 0.28f,
-                    center = Offset(tipCx, tipCy)
-                )
+                if (!privacyBlurred) {
+                    val tipRad = (startAngle + progressSweep) * (PI / 180.0)
+                    val tipCx = size.width / 2f + (arcSize.width / 2f * cos(tipRad)).toFloat()
+                    val tipCy = size.height / 2f + (arcSize.height / 2f * sin(tipRad)).toFloat()
+                    drawCircle(
+                        color = accentColor.copy(alpha = 0.35f),
+                        radius = strokePx * 0.72f,
+                        center = Offset(tipCx, tipCy)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.92f),
+                        radius = strokePx * 0.28f,
+                        center = Offset(tipCx, tipCy)
+                    )
+                }
             }
 
             // 80% threshold marker tick
@@ -259,30 +275,43 @@ fun AnimatedEligibilityGauge(
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = if (privacyBlurred) Modifier.blur(12.dp) else Modifier
+            modifier = if (privacyBlurred) Modifier.blur(10.dp) else Modifier
         ) {
             Text(
                 text = if (privacyBlurred) "••.•%" else String.format(Locale.US, "%.1f%%", animatedPercent),
                 style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("gauge_percent_text")
             )
             Spacer(modifier = Modifier.height(2.dp))
             AnimatedContent(
-                targetState = stats.eligible,
+                targetState = privacyBlurred to stats.eligible,
                 transitionSpec = {
                     (fadeIn(tween(240)) + scaleIn(initialScale = 0.9f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)))
                         .togetherWith(fadeOut(tween(180)))
                 },
                 label = "eligibility_pill_transition"
-            ) { eligible ->
+            ) { (blurred, eligible) ->
                 Surface(
-                    color = if (eligible) semantic.presentContainer else semantic.absentContainer,
+                    color = when {
+                        blurred -> MaterialTheme.colorScheme.surfaceContainerHigh
+                        eligible -> semantic.presentContainer
+                        else -> semantic.absentContainer
+                    },
                     shape = RoundedCornerShape(50)
                 ) {
                     Text(
-                        text = if (eligible) "Eligible (≥${stats.thresholdPercent}%)" else "At Risk (<${stats.thresholdPercent}%)",
+                        text = when {
+                            blurred -> "Hidden"
+                            eligible -> "Eligible (≥${stats.thresholdPercent}%)"
+                            else -> "At Risk (<${stats.thresholdPercent}%)"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (eligible) semantic.onPresentContainer else semantic.onAbsentContainer,
+                        color = when {
+                            blurred -> MaterialTheme.colorScheme.onSurfaceVariant
+                            eligible -> semantic.onPresentContainer
+                            else -> semantic.onAbsentContainer
+                        },
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
@@ -290,9 +319,14 @@ fun AnimatedEligibilityGauge(
             if (stats.totalCountedDays > 0) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "${stats.effectiveAttended} / ${stats.totalCountedDays} days",
+                    text = if (privacyBlurred) {
+                        "•• / •• days • •• absent"
+                    } else {
+                        "${stats.effectiveAttended}/${stats.totalCountedDays}d • $totalAbsent absent"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("gauge_counts_text")
                 )
             }
         }

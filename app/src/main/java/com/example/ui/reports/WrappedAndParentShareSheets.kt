@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,6 +31,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -277,10 +282,14 @@ fun ParentSummaryPreviewDialog(
     profile: UserProfile?,
     termName: String,
     stats: AttendanceStats,
+    overallStats: AttendanceStats? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val badgeColor = if (stats.eligible) StatusGreen else StatusRed
+    var showOverall by remember { mutableStateOf(false) }
+    val activeStats = if (showOverall && overallStats != null) overallStats else stats
+    val activeScopeLabel = if (showOverall && overallStats != null) "Overall (Grade 12 & 13)" else termName
+    val badgeColor = if (activeStats.eligible) StatusGreen else StatusRed
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -314,6 +323,23 @@ fun ParentSummaryPreviewDialog(
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = "Close")
+                    }
+                }
+
+                if (overallStats != null && termName != "Overall (Grade 12 & 13)") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !showOverall,
+                            onClick = { showOverall = false },
+                            label = { Text("Current Term") },
+                            modifier = Modifier.testTag("parent_summary_term_chip")
+                        )
+                        FilterChip(
+                            selected = showOverall,
+                            onClick = { showOverall = true },
+                            label = { Text("Overall G12 & 13") },
+                            modifier = Modifier.testTag("parent_summary_overall_chip")
+                        )
                     }
                 }
 
@@ -365,14 +391,19 @@ fun ParentSummaryPreviewDialog(
                             ) {
                                 Column {
                                     Text(
-                                        text = termName,
+                                        text = activeScopeLabel,
                                         style = MaterialTheme.typography.labelMedium,
                                         color = Color(0xFF64748B)
                                     )
                                     Text(
-                                        text = if (stats.totalCountedDays == 0) "--%" else String.format(Locale.US, "%.1f%%", stats.percentage),
+                                        text = if (activeStats.totalCountedDays == 0) "--%" else String.format(Locale.US, "%.1f%%", activeStats.percentage),
                                         style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Black),
                                         color = Color(0xFF0F172A)
+                                    )
+                                    Text(
+                                        text = "${activeStats.effectiveAttended} of ${activeStats.totalCountedDays} school days counted",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF475569)
                                     )
                                 }
                                 Surface(
@@ -386,7 +417,7 @@ fun ParentSummaryPreviewDialog(
                                     ) {
                                         Icon(Icons.Rounded.Verified, contentDescription = null, tint = badgeColor, modifier = Modifier.size(16.dp))
                                         Text(
-                                            text = if (stats.eligible) "${stats.thresholdPercent}% Eligible" else "Below ${stats.thresholdPercent}%",
+                                            text = if (activeStats.eligible) "${activeStats.thresholdPercent}% Eligible" else "Below ${activeStats.thresholdPercent}%",
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                             color = badgeColor
                                         )
@@ -397,10 +428,10 @@ fun ParentSummaryPreviewDialog(
                             HorizontalDivider(color = Color(0xFFE2E8F0))
 
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                ParentMetricCol("Attended", "${stats.effectiveAttended}d", StatusGreen)
-                                ParentMetricCol("Absent", "${stats.absentDays + stats.priorAbsentDays + stats.periodAbsentDays}d", StatusRed)
-                                ParentMetricCol("Medical", "${stats.medicalDays}d", StatusOrange)
-                                ParentMetricCol("Excused", "${stats.schoolEventDays}d", StatusBlue)
+                                ParentMetricCol("Attended", "${activeStats.effectiveAttended}d", StatusGreen)
+                                ParentMetricCol("Absent", "${activeStats.absentDays + activeStats.priorAbsentDays + activeStats.periodAbsentDays}d", StatusRed)
+                                ParentMetricCol("Medical", "${activeStats.medicalDays}d", StatusOrange)
+                                ParentMetricCol("Excused", "${activeStats.schoolEventDays}d", StatusBlue)
                             }
 
                             Text(
@@ -416,10 +447,10 @@ fun ParentSummaryPreviewDialog(
                     onClick = {
                         val bmp = ShareableCardRenderer.renderParentSummaryBitmap(
                             profile = profile,
-                            termName = termName,
-                            stats = stats
+                            termName = activeScopeLabel,
+                            stats = activeStats
                         )
-                        val caption = "${profile?.fullName ?: "Student"} — $termName Attendance: ${String.format(Locale.US, "%.1f%%", stats.percentage)}"
+                        val caption = "${profile?.fullName ?: "Student"} — $activeScopeLabel Attendance: ${String.format(Locale.US, "%.1f%%", activeStats.percentage)}"
                         ShareableCardRenderer.shareBitmapViaChooser(
                             context = context,
                             bitmap = bmp,

@@ -572,6 +572,7 @@ fun ReportsScreen(
             profile = profile,
             termName = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
             stats = stats,
+            overallStats = state.overallStats,
             onDismiss = { showParentSummary = false }
         )
     }

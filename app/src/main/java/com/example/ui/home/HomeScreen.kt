@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.HowToVote
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Visibility
@@ -84,7 +85,6 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
@@ -114,6 +114,7 @@ import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SwipeCatchUpDeckDialog
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.components.bouncyClickable
+import com.example.ui.reports.ParentSummaryPreviewDialog
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.DashboardScopeMode
 import com.example.viewmodel.StudentAppState
@@ -157,6 +158,7 @@ fun HomeScreen(
     var showSwipeCatchUpDeck by remember { mutableStateOf(false) }
     var autoOfferedSwipeDeck by remember { mutableStateOf(false) }
     var privacyBlurred by remember { mutableStateOf(false) }
+    var showParentSummary by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
 
@@ -514,33 +516,66 @@ fun HomeScreen(
                             )
 
                             Spacer(modifier = Modifier.height(6.dp))
-                            Surface(
-                                color = if (privacyBlurred) {
-                                    MaterialTheme.colorScheme.secondaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainerLow
-                                },
-                                shape = RoundedCornerShape(999.dp),
-                                modifier = Modifier
-                                    .clickable { privacyBlurred = !privacyBlurred }
-                                    .testTag("privacy_blur_toggle")
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                Surface(
+                                    color = if (privacyBlurred) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerLow
+                                    },
+                                    shape = RoundedCornerShape(999.dp),
+                                    modifier = Modifier
+                                        .clickable { privacyBlurred = !privacyBlurred }
+                                        .testTag("privacy_blur_toggle")
                                 ) {
-                                    Icon(
-                                        imageVector = if (privacyBlurred) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                        contentDescription = "Toggle privacy blur",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Text(
-                                        text = if (privacyBlurred) "Privacy Blur On • Tap to reveal" else "Double-tap ring to blur",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (privacyBlurred) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                            contentDescription = "Toggle privacy blur",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (privacyBlurred) "Blur On • Reveal" else "Double-tap to blur",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(999.dp),
+                                    modifier = Modifier
+                                        .clickable { showParentSummary = true }
+                                        .testTag("home_parent_summary_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.FamilyRestroom,
+                                            contentDescription = "Open parent-friendly summary card",
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "Parent Card",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
                                 }
                             }
 
@@ -548,25 +583,29 @@ fun HomeScreen(
 
                             // Actionable Safe-Skip / Recovery Forecast Banner
                             AnimatedContent(
-                                targetState = Triple(scopeMode, activeStats.eligible, activeStats.totalCountedDays to activeStats.safeSkipsRemaining),
+                                targetState = Triple(
+                                    privacyBlurred,
+                                    scopeMode,
+                                    Triple(activeStats.eligible, activeStats.totalCountedDays, activeStats.safeSkipsRemaining)
+                                ),
                                 transitionSpec = {
                                     (fadeIn(tween(240)) + slideInVertically { 12 })
                                         .togetherWith(fadeOut(tween(180)) + slideOutVertically { -12 })
                                 },
                                 label = "forecast_banner_anim"
                             ) { _ ->
-                                val forecastBg = if (activeStats.eligible) {
-                                    semantic.presentContainer.copy(alpha = 0.7f)
-                                } else {
-                                    semantic.absentContainer.copy(alpha = 0.85f)
+                                val forecastBg = when {
+                                    privacyBlurred -> MaterialTheme.colorScheme.surfaceContainerLow
+                                    activeStats.eligible -> semantic.presentContainer.copy(alpha = 0.7f)
+                                    else -> semantic.absentContainer.copy(alpha = 0.85f)
                                 }
-                                val forecastFg = if (activeStats.eligible) {
-                                    semantic.onPresentContainer
-                                } else {
-                                    semantic.onAbsentContainer
+                                val forecastFg = when {
+                                    privacyBlurred -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    activeStats.eligible -> semantic.onPresentContainer
+                                    else -> semantic.onAbsentContainer
                                 }
                                 val forecastText = when {
-                                    privacyBlurred -> "Privacy Mode active — tap above or double-tap the ring to view your attendance numbers."
+                                    privacyBlurred -> "Privacy Mode active — % and absent count are hidden. Double-tap the ring or tap Reveal above."
                                     activeStats.totalCountedDays == 0 ->
                                         "Log your first school day below to start tracking your ${activeStats.thresholdPercent}% eligibility."
                                     activeStats.eligible && activeStats.safeSkipsRemaining > 0 ->
@@ -586,9 +625,7 @@ fun HomeScreen(
                                         text = forecastText,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = forecastFg,
-                                        modifier = Modifier
-                                            .padding(14.dp)
-                                            .then(if (privacyBlurred) Modifier.blur(4.dp) else Modifier)
+                                        modifier = Modifier.padding(14.dp)
                                     )
                                 }
                             }
@@ -1192,6 +1229,16 @@ fun HomeScreen(
         NoticeBoardSheet(
             notices = state.visibleNotices,
             onDismiss = { showNoticeSheet = false }
+        )
+    }
+
+    if (showParentSummary) {
+        ParentSummaryPreviewDialog(
+            profile = profile,
+            termName = state.activeTerm.name,
+            stats = state.currentTermStats,
+            overallStats = state.overallStats,
+            onDismiss = { showParentSummary = false }
         )
     }
 

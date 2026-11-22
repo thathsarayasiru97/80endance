@@ -1517,6 +1517,90 @@ class ScreensRenderRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("home_next_day_poll_card").assertDoesNotExist()
     }
+
+    @Test
+    fun homeScreenPrivacyBlurMasksPercentAndAbsentCountAndOpensParentSummaryCard() {
+        val termStats = com.example.data.AttendanceStats(
+            percentage = 80.0, eligible = true, thresholdPercent = 80,
+            presentDays = 8, absentDays = 2, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 8, totalCountedDays = 10, safeSkipsRemaining = 0, daysNeededToRecover = 0
+        )
+        val overallStats = com.example.data.AttendanceStats(
+            percentage = 86.0, eligible = true, thresholdPercent = 80,
+            presentDays = 43, absentDays = 7, medicalDays = 0, schoolEventDays = 0, holidayDays = 0,
+            priorPresentDays = 0, priorAbsentDays = 0,
+            effectiveAttended = 43, totalCountedDays = 50, safeSkipsRemaining = 3, daysNeededToRecover = 0
+        )
+        val todayKey = DateUtils.todayKey()
+        val privateNoteText = "Private doctor visit note"
+        val todayPrivateRecord = AttendanceRecord(
+            dateKey = todayKey,
+            status = AttendanceStatus.ABSENT.raw,
+            note = privateNoteText
+        )
+        val homeState = sampleState.copy(
+            currentTermStats = termStats,
+            overallStats = overallStats,
+            attendanceRecords = listOf(todayPrivateRecord),
+            todayRecord = todayPrivateRecord
+        )
+        composeTestRule.setContent {
+            EightyEndanceTheme {
+                LiquidGlassBackdropHost {
+                    HomeScreen(
+                        state = homeState,
+                        scopeMode = DashboardScopeMode.CURRENT_TERM,
+                        onScopeModeChange = {},
+                        onOpenCheckIn = {},
+                        onSyncClick = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.mainClock.advanceTimeBy(500)
+        composeTestRule.waitForIdle()
+
+        // Unblurred state shows actual attended/counted days and absent count
+        composeTestRule.onNodeWithTag("home_lazy_column")
+            .performScrollToNode(hasTestTag("privacy_blur_toggle"))
+        composeTestRule.onNodeWithTag("gauge_counts_text").assertIsDisplayed()
+        composeTestRule.onNodeWithText("8/10d • 2 absent").assertIsDisplayed()
+
+        // Toggle Privacy Mode ON -> masks %, absent count, and status pill
+        composeTestRule.onNodeWithTag("privacy_blur_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("••.•%").assertIsDisplayed()
+        composeTestRule.onNodeWithText("•• / •• days • •• absent").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Hidden").assertIsDisplayed()
+
+        // Toggle Privacy Mode OFF -> reveals actual counts again
+        composeTestRule.onNodeWithTag("privacy_blur_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("8/10d • 2 absent").assertIsDisplayed()
+
+        // 1-tap Parent Card button opens Parent-Friendly Clean Summary Card
+        composeTestRule.onNodeWithTag("home_parent_summary_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_parent_summary_btn").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("parent_summary_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("parent_summary_term_chip").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("parent_summary_overall_chip").assertIsDisplayed()
+        composeTestRule.onNodeWithText("80% Eligible").assertIsDisplayed()
+        composeTestRule.onNodeWithText("8 of 10 school days counted").assertIsDisplayed()
+        composeTestRule.onNodeWithText(privateNoteText, substring = true).assertDoesNotExist()
+
+        // Switch scope inside Parent Summary Card to Overall G12 & 13
+        composeTestRule.onNodeWithTag("parent_summary_overall_chip").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("43 of 50 school days counted").assertIsDisplayed()
+
+        // Scroll to the Share button at the bottom of the dialog
+        composeTestRule.onNodeWithTag("share_parent_summary_btn")
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
 }
 
 
