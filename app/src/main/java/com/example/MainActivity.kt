@@ -936,8 +936,20 @@ private fun AuthenticatedAppShell(
         state.lastFeedbackPromptVersion != installedVersion
 
     if (showWhatsNewDialog) {
+        var resolvedReleaseNotes by remember(installedVersion) {
+            mutableStateOf(ReleaseNotesCatalog.forVersion(installedVersion))
+        }
+        LaunchedEffect(installedVersion) {
+            val remoteBody = AppUpdateChecker.fetchReleaseNotesForVersion(context, installedVersion)
+            if (!remoteBody.isNullOrBlank()) {
+                resolvedReleaseNotes = ReleaseNotesCatalog.forVersion(
+                    installedVersion = installedVersion,
+                    remoteMarkdown = remoteBody
+                )
+            }
+        }
         WhatsNewDialog(
-            releaseNotes = ReleaseNotesCatalog.forVersion(installedVersion),
+            releaseNotes = resolvedReleaseNotes,
             onContinue = {
                 feedbackPromptIsAfterUpdate = true
                 attendanceViewModel.markAppVersionSeen(installedVersion)

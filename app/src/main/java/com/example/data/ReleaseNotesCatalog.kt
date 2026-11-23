@@ -1,5 +1,7 @@
 package com.example.data
 
+import com.example.BuildConfig
+
 data class ReleaseNoteEntry(
     val version: String,
     val headline: String,
@@ -8,32 +10,175 @@ data class ReleaseNoteEntry(
 )
 
 /**
- * Structured in-app release notes shown automatically in the "What's New" modal
- * whenever a user updates 80endance to a newer version.
- * Keep in sync with /RELEASE_NOTES.md used by the GitHub Release workflow.
+ * Dynamic release notes resolver for the post-update "What's New" modal.
+ *
+ * Resolution priority:
+ * 1. Live GitHub Release notes matching the installed version tag (if available).
+ * 2. Build-time bundled notes from /RELEASE_NOTES.md (or CI customReleaseNotes).
+ * 3. Concise built-in fallback.
  */
 object ReleaseNotesCatalog {
-    val latest: ReleaseNoteEntry = ReleaseNoteEntry(
-        version = "1.5",
-        headline = "Smarter Notifications, Structured Subjects & Calendar Upgrades",
+
+    private const val DEFAULT_HEADLINE = "Here's what's new in this update."
+
+    private val fallbackEntry = ReleaseNoteEntry(
+        version = BuildConfig.VERSION_NAME.ifBlank { "1.7" },
+        headline = DEFAULT_HEADLINE,
         whatsNew = listOf(
-            "Background Notification Delivery: Receive custom school & class announcements even when the app is closed.",
-            "Hero A/L Exam Countdown: Opening the app highlights your days left until GCE A/L before smoothly docking into the header.",
-            "Structured Subject Buckets & Class Lists: Pick subjects by Stream & Bucket and choose classes matching your Grade & Stream — with custom entry fallback.",
-            "Smart Grade-to-Exam-Year Matching: Selecting Grade 12 auto-selects 28 A/L and Grade 13 auto-selects 26 A/L (still editable anytime).",
-            "Targeted Multi-Event School Calendar: View multiple events and teaching advisories on any calendar day tailored to your class or stream.",
-            "In-App Feedback Resolution Alerts: Get notified right inside the app whenever a bug report or idea you submitted is addressed."
+            "Next-Day Attendance Poll: Vote whether you're going to school tomorrow (8 PM–5 AM) and see live turnout.",
+            "Faster Logging & Catch-Up: Swipe missed days on launch, bulk-select dates on the Calendar, and undo mistaps in 5 seconds.",
+            "Widgets, Quick Tile & Shortcuts: Added the 4×1 pill widget, 1-tap Quick Settings tile, and launcher icon shortcuts.",
+            "Monthly Wrapped & Privacy Blur: Double-tap your ring to blur your %, share Monthly Wrapped or Parent cards, and unlock milestones.",
+            "Calendar Markers & Stream Pulse: Pin personal exam/SBA dates and compare Class, Stream, and Grade averages."
         ),
         bugFixes = listOf(
-            "Fixed custom announcements re-triggering device notifications every time the app was reopened.",
-            "Fixed the Settings 'Test Daily Check-In Popup' button so it works on weekends too.",
-            "Fixed APK version syncing so installed updates always display the true version in About & Update Checker.",
-            "Polished motion transitions, micro-animations, and compact pulsing community counter."
+            "Attendance ring now defaults to Overall, with Trends and What-If Simulator moved to the top of Reports.",
+            "Calendar enforces the school start date and supports Tip ✨ notices.",
+            "Smoother animations, uniform header pills, and general stability fixes."
         )
     )
 
-    fun forVersion(installedVersion: String): ReleaseNoteEntry {
-        val clean = installedVersion.trim().removePrefix("v").removePrefix("V")
-        return if (clean.isBlank()) latest else latest.copy(version = clean)
+    val latest: ReleaseNoteEntry
+        get() = forVersion(BuildConfig.VERSION_NAME)
+
+    fun forVersion(
+        installedVersion: String,
+        remoteMarkdown: String? = null
+    ): ReleaseNoteEntry {
+        val cleanVersion = installedVersion.trim()
+            .removePrefix("v")
+            .removePrefix("V")
+            .ifBlank { BuildConfig.VERSION_NAME.ifBlank { "1.7" } }
+
+        remoteMarkdown?.let { md ->
+            parseMarkdown(version = cleanVersion, markdown = md)?.let { return it }
+        }
+
+        val bundled = BuildConfig.BUNDLED_RELEASE_NOTES
+        if (bundled.isNotBlank()) {
+            parseMarkdown(version = cleanVersion, markdown = bundled)?.let { return it }
+        }
+
+        return fallbackEntry.copy(version = cleanVersion)
+    }
+
+    /**
+     * Parses concise Markdown release notes (from RELEASE_NOTES.md or GitHub Release body)
+     * into structured [ReleaseNoteEntry] sections, stripping release boilerplate such as
+     * "How to Install" instructions, app version headers, and GitHub changelog footers.
+     */
+    fun parseMarkdown(
+        version: String,
+        markdown: String,
+        maxNewItems: Int = 6,
+        maxFixItems: Int = 4
+    ): ReleaseNoteEntry? {
+        val cleanVersion = version.trim().removePrefix("v").removePrefix("V").ifBlank { "1.7" }
+        val lines = markdown.lines()
+
+        var section = Section.NONE
+        val whatsNew = mutableListOf<String>()
+        val bugFixes = mutableListOf<String>()
+        var customHeadline: String? = null
+
+        for (rawLine in lines) {
+            val trimmed = rawLine.trim()
+            if (trimmed.isEmpty()) continue
+
+            // Section headings (## / ###)
+            if (trimmed.startsWith("#")) {
+                val headingText = trimmed.trimStart('#').trim()
+                val lower = headingText.lowercase()
+                section = when {
+                    lower.contains("how to install") ||
+                        lower.contains("installation") ||
+                        lower.contains("full changelog") ||
+                        lower.contains("checksum") -> Section.IGNORE
+                    lower.contains("bug") ||
+                        lower.contains("fix") ||
+                        lower.contains("polish") -> Section.BUG_FIXES
+                    lower.contains("what's new") ||
+                        lower.contains("whats new") ||
+                        lower.contains("new") ||
+                        lower.contains("feature") ||
+                        lower.contains("highlight") ||
+                        lower.contains("change") ||
+                        lower.contains("update") -> Section.WHATS_NEW
+                    // Top-level release title like "## 80endance v1.7" — skip as metadata
+                    lower.startsWith("80endance") -> Section.META
+                    else -> Section.WHATS_NEW
+                }
+                continue
+            }
+
+            if (section == Section.IGNORE) continue
+
+            val isBullet = trimmed.startsWith("- ") ||
+                trimmed.startsWith("* ") ||
+                trimmed.startsWith("• ") ||
+                trimmed.matches(Regex("^\\d+\\.\\s+.*"))
+
+            val normalizedText = if (isBullet) {
+                cleanMarkdownInline(trimmed.replaceFirst(Regex("^([-*•]|\\d+\\.)\\s+"), ""))
+            } else {
+                cleanMarkdownInline(trimmed)
+            }
+            if (normalizedText.isEmpty()) continue
+
+            val lowerNormalized = normalizedText.lowercase()
+            // Ignore GitHub Release auto-generated boilerplate lines
+            if (lowerNormalized.startsWith("app version:") ||
+                lowerNormalized.startsWith("full changelog:") ||
+                lowerNormalized.startsWith("new contributors")
+            ) {
+                continue
+            }
+
+            if (isBullet) {
+                when (section) {
+                    Section.BUG_FIXES -> if (bugFixes.size < maxFixItems) bugFixes.add(normalizedText)
+                    Section.META, Section.IGNORE -> Unit
+                    Section.NONE, Section.WHATS_NEW -> if (whatsNew.size < maxNewItems) whatsNew.add(normalizedText)
+                }
+            } else if (section == Section.NONE || section == Section.META) {
+                if (customHeadline == null && normalizedText.length in 10..120) {
+                    customHeadline = normalizedText
+                }
+            } else {
+                // Plain short paragraph inside a section (e.g., user typed quick plain text in workflow_dispatch)
+                when (section) {
+                    Section.BUG_FIXES -> if (bugFixes.size < maxFixItems) bugFixes.add(normalizedText)
+                    Section.WHATS_NEW -> if (whatsNew.size < maxNewItems) whatsNew.add(normalizedText)
+                    Section.NONE, Section.META, Section.IGNORE -> Unit
+                }
+            }
+        }
+
+        if (whatsNew.isEmpty() && bugFixes.isEmpty()) return null
+
+        return ReleaseNoteEntry(
+            version = cleanVersion,
+            headline = customHeadline ?: DEFAULT_HEADLINE,
+            whatsNew = whatsNew,
+            bugFixes = bugFixes
+        )
+    }
+
+    private fun cleanMarkdownInline(text: String): String {
+        return text
+            .replace(Regex("\\[([^\\]]+)]\\([^)]+\\)"), "$1") // [label](url) -> label
+            .replace("**", "")
+            .replace("__", "")
+            .replace("`", "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    private enum class Section {
+        NONE,
+        META,
+        WHATS_NEW,
+        BUG_FIXES,
+        IGNORE
     }
 }

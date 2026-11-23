@@ -147,4 +147,46 @@ class AppUpdateCheckerTest {
         assertTrue(upToDateResult is UpdateCheckResult.UpToDate)
         assertEquals("v1.3.0-beta1", (upToDateResult as UpdateCheckResult.UpToDate).latestFoundTag)
     }
+
+    @Test
+    fun releaseNotesCatalog_parsesDynamicGitHubReleaseMarkdownAndStripsBoilerplate() {
+        val githubBody = """
+            ## 80endance v1.8
+
+            - **App Version:** `1.8` (versionCode `10800`)
+
+            ### What's New
+            - **Dark Theme Polish:** Sharper contrast across widgets.
+            - **Quick Export:** Share term PDFs in one tap.
+
+            ### Bug Fixes
+            - Fixed streak counter reset on Sunday nights.
+
+            ### How to Install
+            1. Download `80endance-v1.8.apk` from Assets.
+            2. Open the `.apk` file.
+
+            **Full Changelog**: https://github.com/thathsarayasiru97/80endence/compare/v1.7...v1.8
+        """.trimIndent()
+
+        val parsed = com.example.data.ReleaseNotesCatalog.forVersion(
+            installedVersion = "v1.8",
+            remoteMarkdown = githubBody
+        )
+        assertEquals("1.8", parsed.version)
+        assertEquals(2, parsed.whatsNew.size)
+        assertEquals("Dark Theme Polish: Sharper contrast across widgets.", parsed.whatsNew[0])
+        assertEquals("Quick Export: Share term PDFs in one tap.", parsed.whatsNew[1])
+        assertEquals(1, parsed.bugFixes.size)
+        assertEquals("Fixed streak counter reset on Sunday nights.", parsed.bugFixes[0])
+    }
+
+    @Test
+    fun releaseNotesCatalog_bundlesCurrentReleaseNotesInsteadOfStaleV15Copy() {
+        val current = com.example.data.ReleaseNotesCatalog.forVersion("1.7")
+        assertEquals("1.7", current.version)
+        assertTrue(current.whatsNew.isNotEmpty())
+        assertTrue(current.whatsNew.size <= 6)
+        assertFalse(current.headline.contains("Structured Subjects"))
+    }
 }

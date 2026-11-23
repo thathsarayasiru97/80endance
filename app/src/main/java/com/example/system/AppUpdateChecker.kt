@@ -55,6 +55,8 @@ object AppUpdateChecker {
     const val GITHUB_RELEASES_REPO_PREFIX = "https://github.com/thathsarayasiru97/80endence"
     const val GITHUB_LATEST_RELEASE_API =
         "https://api.github.com/repos/thathsarayasiru97/80endence/releases/latest"
+    const val GITHUB_RELEASE_BY_TAG_API_PREFIX =
+        "https://api.github.com/repos/thathsarayasiru97/80endence/releases/tags/"
     const val GITHUB_RELEASES_LIST_API =
         "https://api.github.com/repos/thathsarayasiru97/80endence/releases?per_page=10"
     const val GITHUB_LATEST_RELEASE_WEB =
@@ -193,6 +195,38 @@ object AppUpdateChecker {
             Log.w(TAG, "Unexpected error checking updates: ${e.message}")
             UpdateCheckResult.Error("Could not parse GitHub release info right now.")
         }
+    }
+
+    /**
+     * Fetches the GitHub Release markdown body matching [installedVersion] (e.g., tag `v1.7` or `1.7`).
+     * Returns null when offline, on dev builds without a matching release tag, or if unavailable.
+     */
+    suspend fun fetchReleaseNotesForVersion(
+        context: Context,
+        installedVersion: String = getInstalledVersionName(context)
+    ): String? = withContext(Dispatchers.IO) {
+        if (!isInternetAvailable(context)) return@withContext null
+        val clean = installedVersion.trim().removePrefix("v").removePrefix("V")
+        if (clean.isBlank()) return@withContext null
+
+        val candidateTags = buildList {
+            add("v$clean")
+            add(clean)
+        }.distinct()
+
+        for (tag in candidateTags) {
+            val encodedTag = Uri.encode(tag)
+            val result = runCatching {
+                val (code, body) = fetchJson("$GITHUB_RELEASE_BY_TAG_API_PREFIX$encodedTag", clean)
+                if (code == HttpURLConnection.HTTP_OK && !body.isNullOrBlank()) {
+                    JSONObject(body).optString("body", "").trim().takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+            }.getOrNull()
+            if (result != null) return@withContext result
+        }
+        null
     }
 
     private fun fetchJson(endpointUrl: String, currentVersion: String): Pair<Int, String?> {

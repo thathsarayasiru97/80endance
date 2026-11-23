@@ -757,13 +757,14 @@ class ScreensRenderRobolectricTest {
         composeTestRule.setContent {
             EightyEndanceTheme {
                 WhatsNewDialog(
-                    releaseNotes = ReleaseNotesCatalog.forVersion("1.6"),
+                    releaseNotes = ReleaseNotesCatalog.forVersion("1.7"),
                     onContinue = {}
                 )
             }
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("whats_new_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Updated to v1.7").assertIsDisplayed()
         composeTestRule.onNodeWithTag("whats_new_continue_button").assertIsDisplayed()
     }
 

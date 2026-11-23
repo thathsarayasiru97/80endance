@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -207,6 +208,12 @@ fun WhatsNewDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .animateContentSize(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    )
                     .padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -250,11 +257,13 @@ fun WhatsNewDialog(
                     }
                 }
 
-                Text(
-                    text = releaseNotes.headline,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (releaseNotes.headline.isNotBlank()) {
+                    Text(
+                        text = releaseNotes.headline,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Column(
                     modifier = Modifier

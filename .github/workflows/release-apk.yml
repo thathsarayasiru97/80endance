@@ -125,17 +125,20 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          CUSTOM_NOTES: ${{ inputs.release_notes }}
         run: |
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "${KEYSTORE_PATH}"
           gradle :app:assembleRelease \
             -PappVersionName="${{ steps.meta.outputs.clean_version }}" \
             -PappVersionCode="${{ steps.meta.outputs.version_code }}" \
+            ${CUSTOM_NOTES:+-PcustomReleaseNotes="$CUSTOM_NOTES"} \
             --no-daemon --stacktrace
 
       - name: Build APK with bundled signing key (fallback if release secrets are not configured)
         if: steps.meta.outputs.build_mode == 'debug'
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          CUSTOM_NOTES: ${{ inputs.release_notes }}
         run: |
           if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
             printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > debug.keystore
@@ -150,6 +153,7 @@ jobs:
           gradle :app:assembleDebug \
             -PappVersionName="${{ steps.meta.outputs.clean_version }}" \
             -PappVersionCode="${{ steps.meta.outputs.version_code }}" \
+            ${CUSTOM_NOTES:+-PcustomReleaseNotes="$CUSTOM_NOTES"} \
             --no-daemon --stacktrace
 
       - name: Prepare & verify Release APK artifact

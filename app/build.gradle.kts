@@ -24,7 +24,7 @@ android {
     manifestPlaceholders["appName"] = if (isDevLabel) "80endance-dev" else "@string/app_name"
     manifestPlaceholders["appIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev" else "@mipmap/ic_launcher"
     manifestPlaceholders["appRoundIcon"] = if (isDevLabel) "@mipmap/ic_launcher_dev_round" else "@mipmap/ic_launcher_round"
-    val defaultAppVersionName = "1.6"
+    val defaultAppVersionName = "1.7"
     val resolvedVersionName = providers.gradleProperty("appVersionName").orNull
       ?.trim()
       ?.removePrefix("v")
@@ -44,6 +44,20 @@ android {
         (major * 10_000 + minor * 100 + patch).coerceAtLeast(1)
       }
     }
+
+    val bundledReleaseNotesText = providers.gradleProperty("customReleaseNotes").orNull
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: providers.fileContents(rootProject.layout.projectDirectory.file("RELEASE_NOTES.md")).asText.orNull
+        ?.trim()
+        .orEmpty()
+    val escapedReleaseNotes = bundledReleaseNotesText
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\r\n", "\\n")
+      .replace("\n", "\\n")
+      .replace("\r", "\\n")
+    buildConfigField("String", "BUNDLED_RELEASE_NOTES", "\"$escapedReleaseNotes\"")
 
     minSdk = 24
     targetSdk = 36
