@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
+import com.example.data.DateUtils
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.RollingCounterText
 import com.example.ui.components.StaggeredReveal
@@ -78,16 +79,32 @@ fun ReportsScreen(
     var showMonthlyWrapped by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
 
-    val personalInsightsForWrapped = remember(state.attendanceRecords, state.periodBlocks) {
+    val personalInsightsForWrapped = remember(
+        state.attendanceRecords,
+        state.periodBlocks,
+        profile,
+        state.calendarEvents,
+        state.effectiveSchoolStartDateKey
+    ) {
         AttendanceCalculator.calculatePersonalInsightsForScope(
             records = state.attendanceRecords,
             periodBlocks = state.periodBlocks,
             timeframe = com.example.data.TrendsTimeframe.MONTHLY,
-            maxMonths = 6
+            maxMonths = 6,
+            lockedRange = profile?.lockedBaselineRange,
+            calendarEvents = state.calendarEvents,
+            schoolStartDate = state.effectiveSchoolStartDateKey
         )
     }
 
-    val stats = remember(state.attendanceRecords, state.periodBlocks, selectedTerm, profile) {
+    val stats = remember(
+        state.attendanceRecords,
+        state.periodBlocks,
+        selectedTerm,
+        profile,
+        state.calendarEvents,
+        state.effectiveSchoolStartDateKey
+    ) {
         val threshold = selectedTerm?.minEligibilityPercent ?: state.appSettings.defaultEligibilityPercent
         AttendanceCalculator.calculateStats(
             records = state.attendanceRecords,
@@ -98,19 +115,47 @@ fun ReportsScreen(
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = selectedTerm,
             lockedRange = profile?.lockedBaselineRange,
-            periodBlocks = state.periodBlocks
+            periodBlocks = state.periodBlocks,
+            calendarEvents = state.calendarEvents,
+            schoolStartDate = state.effectiveSchoolStartDateKey
         )
     }
 
-    val subjectCounts = remember(state.attendanceRecords, selectedTerm) {
+    val subjectCounts = remember(
+        state.attendanceRecords,
+        state.periodBlocks,
+        state.calendarEvents,
+        state.effectiveSchoolStartDateKey,
+        profile,
+        selectedTerm
+    ) {
         val term = selectedTerm
+        val lockedRange = profile?.lockedBaselineRange
+        val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(state.periodBlocks, lockedRange)
+        val nonSchoolDates = state.calendarEvents
+            .filter { it.nonSchoolDay }
+            .map { it.dateKey }
+            .toSet()
+        val startBound = state.effectiveSchoolStartDateKey
+        val uniqueRecords = AttendanceCalculator.deduplicateRecords(state.attendanceRecords)
+            .filter { rec ->
+                if (DateUtils.isWeekend(rec.dateKey)) return@filter false
+                if (rec.dateKey in nonSchoolDates) return@filter false
+                if (startBound.isNotBlank() && rec.dateKey < startBound) return@filter false
+                if (lockedRange != null && rec.dateKey <= lockedRange.second) return@filter false
+                if (cleanBlocks.any { it.containsDate(rec.dateKey) }) return@filter false
+                true
+            }
         val scoped = if (term != null) {
-            state.attendanceRecords.filter {
-                it.termId == term.id ||
-                    (it.dateKey >= term.startDate && it.dateKey <= term.endDate)
+            uniqueRecords.filter { rec ->
+                if (term.startDate.isNotBlank() && term.endDate.isNotBlank()) {
+                    rec.dateKey >= term.startDate && rec.dateKey <= term.endDate
+                } else {
+                    rec.termId == term.id
+                }
             }
         } else {
-            state.attendanceRecords
+            uniqueRecords
         }
         val map = mutableMapOf<String, Pair<Int, Int>>() // subject -> (present, missed)
         scoped.forEach { rec ->
@@ -168,7 +213,9 @@ fun ReportsScreen(
                         thresholdPercent = stats.thresholdPercent,
                         periodBlocks = state.periodBlocks,
                         communitySummaries = state.communityTrendSummaries,
-                        profile = state.profile
+                        profile = state.profile,
+                        calendarEvents = state.calendarEvents,
+                        schoolStartDate = state.effectiveSchoolStartDateKey
                     )
                 }
             }

@@ -858,7 +858,9 @@ private fun AuthenticatedAppShell(
                     activeTerm = state.activeTerm,
                     thresholdPercent = state.activeTerm.minEligibilityPercent,
                     profile = state.profile,
-                    periodBlocks = state.periodBlocks
+                    periodBlocks = state.periodBlocks,
+                    calendarEvents = state.calendarEvents,
+                    schoolStartDate = state.effectiveSchoolStartDateKey
                 )
             },
             onDismiss = {

@@ -219,6 +219,63 @@ object AttendanceCalculator {
             ?: resolveActiveTerm(effectiveTerms, dateKey).id
     }
 
+    /**
+     * Deduplicates attendance records by [AttendanceRecord.dateKey], keeping the most recently
+     * updated record if duplicate entries ever exist for the same calendar date.
+     */
+    fun deduplicateRecords(records: List<AttendanceRecord>): List<AttendanceRecord> {
+        if (records.size <= 1) return records.filter { it.dateKey.length == 10 }
+        val byDate = LinkedHashMap<String, AttendanceRecord>(records.size)
+        for (rec in records) {
+            if (rec.dateKey.length != 10) continue
+            val existing = byDate[rec.dateKey]
+            if (existing == null) {
+                byDate[rec.dateKey] = rec
+            } else {
+                val existingTs = existing.updatedAt?.seconds ?: existing.createdAt?.seconds ?: Long.MIN_VALUE
+                val candidateTs = rec.updatedAt?.seconds ?: rec.createdAt?.seconds ?: Long.MIN_VALUE
+                if (candidateTs >= existingTs) {
+                    byDate[rec.dateKey] = rec
+                }
+            }
+        }
+        return byDate.values.toList()
+    }
+
+    /**
+     * Removes any [AttendancePeriodBlock] that overlaps an active locked baseline
+     * (dates `<= lockedRange.second`) and resolves any overlapping period blocks against each other
+     * deterministically so no calendar day is ever counted twice across blocks or baseline.
+     */
+    fun deduplicatePeriodBlocks(
+        periodBlocks: List<AttendancePeriodBlock>,
+        lockedRange: Pair<String, String>? = null
+    ): List<AttendancePeriodBlock> {
+        if (periodBlocks.isEmpty()) return emptyList()
+        val validBlocks = periodBlocks.filter { block ->
+            block.startDate.length == 10 &&
+                block.endDate.length == 10 &&
+                block.startDate <= block.endDate &&
+                (lockedRange == null || block.startDate > lockedRange.second)
+        }
+        if (validBlocks.size <= 1) return validBlocks
+
+        // Prefer the most recently updated block; tie-break by wider date span then stable id
+        val prioritized = validBlocks.sortedWith(
+            compareByDescending<AttendancePeriodBlock> { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+                .thenByDescending { DateUtils.daysBetween(it.startDate, it.endDate) }
+                .thenBy { it.startDate }
+                .thenBy { it.id }
+        )
+        val accepted = mutableListOf<AttendancePeriodBlock>()
+        for (block in prioritized) {
+            if (accepted.none { it.overlapsRange(block.startDate, block.endDate) }) {
+                accepted.add(block)
+            }
+        }
+        return accepted.sortedBy { it.startDate }
+    }
+
     fun calculateStats(
         records: List<AttendanceRecord>,
         thresholdPercent: Int,
@@ -229,31 +286,52 @@ object AttendanceCalculator {
         termFilter: AcademicTerm? = null,
         monthPrefixFilter: String? = null,
         lockedRange: Pair<String, String>? = null,
-        periodBlocks: List<AttendancePeriodBlock> = emptyList()
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): AttendanceStats {
+        val uniqueRecords = deduplicateRecords(records)
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
+        val nonSchoolDates = if (calendarEvents.isEmpty()) {
+            emptySet()
+        } else {
+            calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        }
+
+        val cleanPeriodBlocks = deduplicatePeriodBlocks(
+            periodBlocks = periodBlocks,
+            lockedRange = lockedRange
+        )
+
         val filtered = when {
             !monthPrefixFilter.isNullOrBlank() -> {
-                records.filter { it.dateKey.startsWith(monthPrefixFilter) }
+                uniqueRecords.filter { it.dateKey.startsWith(monthPrefixFilter) }
             }
             termFilter != null -> {
-                records.filter {
-                    it.termId == termFilter.id ||
-                        (it.dateKey >= termFilter.startDate && it.dateKey <= termFilter.endDate)
+                val hasValidTermBounds = termFilter.startDate.length == 10 &&
+                    termFilter.endDate.length == 10 &&
+                    termFilter.startDate <= termFilter.endDate
+                uniqueRecords.filter { rec ->
+                    if (hasValidTermBounds) {
+                        rec.dateKey >= termFilter.startDate && rec.dateKey <= termFilter.endDate
+                    } else {
+                        rec.termId == termFilter.id
+                    }
                 }
             }
-            else -> records
+            else -> uniqueRecords
         }
 
         val scopedPeriodBlocks = when {
             !monthPrefixFilter.isNullOrBlank() -> {
-                periodBlocks.filter {
+                cleanPeriodBlocks.filter {
                     it.startDate.startsWith(monthPrefixFilter) && it.endDate.startsWith(monthPrefixFilter)
                 }
             }
             termFilter != null -> {
-                periodBlocks.filter { it.overlapsRange(termFilter.startDate, termFilter.endDate) }
+                cleanPeriodBlocks.filter { it.overlapsRange(termFilter.startDate, termFilter.endDate) }
             }
-            else -> periodBlocks
+            else -> cleanPeriodBlocks
         }
 
         var present = 0
@@ -264,12 +342,12 @@ object AttendanceCalculator {
 
         for (record in filtered) {
             if (DateUtils.isWeekend(record.dateKey)) continue
-            if (includePriorBalance && lockedRange != null &&
-                record.dateKey <= lockedRange.second
-            ) {
+            if (record.dateKey in nonSchoolDates) continue
+            if (validSchoolStart != null && record.dateKey < validSchoolStart) continue
+            if (lockedRange != null && record.dateKey <= lockedRange.second) {
                 continue
             }
-            if (periodBlocks.any { it.containsDate(record.dateKey) }) {
+            if (cleanPeriodBlocks.any { it.containsDate(record.dateKey) }) {
                 continue
             }
             when (record.statusEnum) {
@@ -281,8 +359,17 @@ object AttendanceCalculator {
             }
         }
 
-        val addedPriorPresent = if (includePriorBalance) max(0, priorPresent) else 0
-        val addedPriorAbsent = if (includePriorBalance) max(0, priorAbsent) else 0
+        // Only apply prior baseline to a specific term if the baseline actually overlaps that term
+        // (when lockedRange is null, honor includePriorBalance directly for legacy/manual prior counts).
+        val effectiveIncludePrior = when {
+            !includePriorBalance -> false
+            termFilter != null && lockedRange != null ->
+                lockedRange.first <= termFilter.endDate && lockedRange.second >= termFilter.startDate
+            else -> true
+        }
+
+        val addedPriorPresent = if (effectiveIncludePrior) max(0, priorPresent) else 0
+        val addedPriorAbsent = if (effectiveIncludePrior) max(0, priorAbsent) else 0
         val addedPeriodPresent = scopedPeriodBlocks.sumOf { max(0, it.presentDays) }
         val addedPeriodAbsent = scopedPeriodBlocks.sumOf { max(0, it.absentDays) }
 
@@ -669,11 +756,21 @@ object AttendanceCalculator {
      */
     fun calculateAttendanceInsights(
         records: List<AttendanceRecord>,
-        maxMonths: Int = 6
+        maxMonths: Int = 6,
+        lockedRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): AttendancePatternInsights {
-        val validRecords = records.filter { rec ->
-            rec.dateKey.length == 10 &&
-                !DateUtils.isWeekend(rec.dateKey) &&
+        val nonSchoolDates = if (calendarEvents.isEmpty()) emptySet() else calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
+        val cleanBlocks = deduplicatePeriodBlocks(periodBlocks, lockedRange)
+        val validRecords = deduplicateRecords(records).filter { rec ->
+            !DateUtils.isWeekend(rec.dateKey) &&
+                rec.dateKey !in nonSchoolDates &&
+                (validSchoolStart == null || rec.dateKey >= validSchoolStart) &&
+                (lockedRange == null || rec.dateKey > lockedRange.second) &&
+                cleanBlocks.none { it.containsDate(rec.dateKey) } &&
                 rec.statusEnum != AttendanceStatus.HOLIDAY
         }
 
@@ -823,11 +920,30 @@ object AttendanceCalculator {
         records: List<AttendanceRecord>,
         currentStreak: Int,
         termStats: AttendanceStats,
-        overallStats: AttendanceStats
+        overallStats: AttendanceStats,
+        lockedRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): List<AttendanceMilestone> {
-        val insights = calculateAttendanceInsights(records, maxMonths = 24)
-        val loggedCount = records.count {
-            !DateUtils.isWeekend(it.dateKey) && it.statusEnum != AttendanceStatus.HOLIDAY
+        val insights = calculateAttendanceInsights(
+            records = records,
+            maxMonths = 24,
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks,
+            calendarEvents = calendarEvents,
+            schoolStartDate = schoolStartDate
+        )
+        val nonSchoolDates = if (calendarEvents.isEmpty()) emptySet() else calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
+        val cleanBlocks = deduplicatePeriodBlocks(periodBlocks, lockedRange)
+        val loggedCount = deduplicateRecords(records).count { rec ->
+            !DateUtils.isWeekend(rec.dateKey) &&
+                rec.dateKey !in nonSchoolDates &&
+                (validSchoolStart == null || rec.dateKey >= validSchoolStart) &&
+                (lockedRange == null || rec.dateKey > lockedRange.second) &&
+                cleanBlocks.none { it.containsDate(rec.dateKey) } &&
+                rec.statusEnum != AttendanceStatus.HOLIDAY
         }
         val bestPerfectMonth = insights.monthlyPoints
             .filter { it.totalDays >= 5 }
@@ -836,7 +952,7 @@ object AttendanceCalculator {
 
         val safeZoneUnlocked = termStats.totalCountedDays >= 5 && termStats.eligible
         val cleanSheetDays = overallStats.totalCountedDays
-        val totalUnexcusedAbsent = overallStats.absentDays + overallStats.priorAbsentDays
+        val totalUnexcusedAbsent = overallStats.absentDays + overallStats.priorAbsentDays + overallStats.periodAbsentDays
         val cleanSheetUnlocked = cleanSheetDays >= 10 && totalUnexcusedAbsent == 0
 
         return listOf(
@@ -963,13 +1079,21 @@ object AttendanceCalculator {
         periodBlocks: List<AttendancePeriodBlock> = emptyList(),
         timeframe: TrendsTimeframe = TrendsTimeframe.ALL_TIME,
         currentYearMonth: String = DateUtils.currentMonthPrefix().removeSuffix("-"),
-        maxMonths: Int = 6
+        maxMonths: Int = 6,
+        lockedRange: Pair<String, String>? = null,
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): AttendancePatternInsights {
-        val validRecords = records.filter { rec ->
-            rec.dateKey.length == 10 &&
-                !DateUtils.isWeekend(rec.dateKey) &&
+        val nonSchoolDates = if (calendarEvents.isEmpty()) emptySet() else calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
+        val cleanBlocks = deduplicatePeriodBlocks(periodBlocks, lockedRange)
+        val validRecords = deduplicateRecords(records).filter { rec ->
+            !DateUtils.isWeekend(rec.dateKey) &&
+                rec.dateKey !in nonSchoolDates &&
+                (validSchoolStart == null || rec.dateKey >= validSchoolStart) &&
+                (lockedRange == null || rec.dateKey > lockedRange.second) &&
                 rec.statusEnum != AttendanceStatus.HOLIDAY &&
-                periodBlocks.none { it.containsDate(rec.dateKey) }
+                cleanBlocks.none { it.containsDate(rec.dateKey) }
         }
 
         val monthlyMap = sortedMapOf<String, Pair<Int, Int>>() // ym -> (attended, absent)
@@ -984,7 +1108,7 @@ object AttendanceCalculator {
                 AttendanceStatus.HOLIDAY -> Unit
             }
         }
-        periodBlocks.forEach { block ->
+        cleanBlocks.forEach { block ->
             if (block.endDate.length == 10 && (block.presentDays > 0 || block.absentDays > 0)) {
                 val ym = block.endDate.substring(0, 7)
                 val prev = monthlyMap[ym] ?: (0 to 0)
@@ -1084,13 +1208,21 @@ object AttendanceCalculator {
         priorAbsent: Int = 0,
         grade: String? = null,
         alStream: String? = null,
-        className: String? = null
+        className: String? = null,
+        lockedRange: Pair<String, String>? = null,
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): StudentTrendSummary {
-        val validRecords = records.filter { rec ->
-            rec.dateKey.length == 10 &&
-                !DateUtils.isWeekend(rec.dateKey) &&
+        val nonSchoolDates = if (calendarEvents.isEmpty()) emptySet() else calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
+        val cleanBlocks = deduplicatePeriodBlocks(periodBlocks, lockedRange)
+        val validRecords = deduplicateRecords(records).filter { rec ->
+            !DateUtils.isWeekend(rec.dateKey) &&
+                rec.dateKey !in nonSchoolDates &&
+                (validSchoolStart == null || rec.dateKey >= validSchoolStart) &&
+                (lockedRange == null || rec.dateKey > lockedRange.second) &&
                 rec.statusEnum != AttendanceStatus.HOLIDAY &&
-                periodBlocks.none { it.containsDate(rec.dateKey) }
+                cleanBlocks.none { it.containsDate(rec.dateKey) }
         }
 
         val monthlyTotals = sortedMapOf<String, IntArray>() // ym -> [attended, absent]
@@ -1124,7 +1256,7 @@ object AttendanceCalculator {
             }
         }
 
-        periodBlocks.forEach { block ->
+        cleanBlocks.forEach { block ->
             if (block.endDate.length == 10 && (block.presentDays > 0 || block.absentDays > 0)) {
                 val ym = block.endDate.substring(0, 7)
                 val tot = monthlyTotals.getOrPut(ym) { IntArray(2) }
@@ -1133,16 +1265,20 @@ object AttendanceCalculator {
             }
         }
 
-        val totalsObj = org.json.JSONObject()
-        monthlyTotals.entries.toList().takeLast(24).forEach { (ym, arr) ->
-            totalsObj.put(ym, org.json.JSONArray().put(arr[0]).put(arr[1]))
-        }
+        val totalsJson = monthlyTotals.entries.toList().takeLast(24).joinToString(
+            prefix = "{",
+            postfix = "}",
+            separator = ","
+        ) { (ym, arr) -> "\"$ym\":[${arr[0]},${arr[1]}]" }
 
-        val weekdaysObj = org.json.JSONObject()
-        monthlyWeekdays.entries.toList().takeLast(12).forEach { (ym, pair) ->
-            val aArr = org.json.JSONArray().apply { pair.first.forEach { put(it) } }
-            val mArr = org.json.JSONArray().apply { pair.second.forEach { put(it) } }
-            weekdaysObj.put(ym, org.json.JSONObject().put("a", aArr).put("m", mArr))
+        val weekdaysJson = monthlyWeekdays.entries.toList().takeLast(12).joinToString(
+            prefix = "{",
+            postfix = "}",
+            separator = ","
+        ) { (ym, pair) ->
+            val aStr = pair.first.joinToString(prefix = "[", postfix = "]", separator = ",")
+            val mStr = pair.second.joinToString(prefix = "[", postfix = "]", separator = ",")
+            "\"$ym\":{\"a\":$aStr,\"m\":$mStr}"
         }
 
         val recAndPeriodAtt = monthlyTotals.values.sumOf { it[0] }
@@ -1153,8 +1289,8 @@ object AttendanceCalculator {
         return StudentTrendSummary(
             id = userId,
             userId = userId,
-            monthlyTotalsJson = totalsObj.toString(),
-            monthlyWeekdayJson = weekdaysObj.toString(),
+            monthlyTotalsJson = totalsJson,
+            monthlyWeekdayJson = weekdaysJson,
             allTimeWeekdayAttended = allWeekdayAtt.map { it.coerceIn(0, 1000) },
             allTimeWeekdayAbsent = allWeekdayAbs.map { it.coerceIn(0, 1000) },
             totalAttended = totalAtt,
@@ -1184,15 +1320,17 @@ object AttendanceCalculator {
         var grandTotalAbs = 0
         val contributorsByMonth = mutableMapOf<String, MutableSet<String>>()
 
-        summaries.forEach { summary ->
+        val uniqueSummaries = summaries
+            .associateBy { it.userId.ifBlank { it.id } }
+            .values
+            .toList()
+
+        uniqueSummaries.forEach { summary ->
             val hasData = summary.totalAttended > 0 || summary.totalAbsent > 0 ||
                 summary.monthlyTotalsJson.length > 2 ||
                 summary.allTimeWeekdayAttended.any { it > 0 } ||
                 summary.allTimeWeekdayAbsent.any { it > 0 }
             if (hasData) allTimeContributors++
-
-            grandTotalAtt += max(0, summary.totalAttended)
-            grandTotalAbs += max(0, summary.totalAbsent)
 
             for (i in 0..4) {
                 allWeekdayAtt[i] += max(0, summary.allTimeWeekdayAttended.getOrElse(i) { 0 })
@@ -1200,6 +1338,8 @@ object AttendanceCalculator {
             }
 
             // Parse monthly totals JSON
+            var studentMonthAtt = 0
+            var studentMonthAbs = 0
             runCatching {
                 val obj = org.json.JSONObject(summary.monthlyTotalsJson.ifBlank { "{}" })
                 val keys = obj.keys()
@@ -1209,12 +1349,23 @@ object AttendanceCalculator {
                     val att = max(0, arr.optInt(0, 0))
                     val abs = max(0, arr.optInt(1, 0))
                     if (att + abs > 0) {
+                        studentMonthAtt += att
+                        studentMonthAbs += abs
                         val acc = monthlyTotals.getOrPut(ym) { IntArray(2) }
                         acc[0] += att
                         acc[1] += abs
                         contributorsByMonth.getOrPut(ym) { mutableSetOf() }.add(summary.userId.ifBlank { summary.id })
                     }
                 }
+            }
+
+            // Use one consistent total pair per student (never mixing attended & total across sources)
+            if (summary.totalAttended + summary.totalAbsent > 0) {
+                grandTotalAtt += max(0, summary.totalAttended)
+                grandTotalAbs += max(0, summary.totalAbsent)
+            } else {
+                grandTotalAtt += studentMonthAtt
+                grandTotalAbs += studentMonthAbs
             }
 
             // Parse per-month weekday JSON
@@ -1282,10 +1433,8 @@ object AttendanceCalculator {
             weekdayAttArr = allWeekdayAtt
             weekdayAbsArr = allWeekdayAbs
             displayPoints = allMonthlyPoints.takeLast(maxMonths)
-            val sumFromMonthsAtt = allMonthlyPoints.sumOf { it.attendedDays }
-            val sumFromMonthsTot = allMonthlyPoints.sumOf { it.totalDays }
-            totalAttended = max(sumFromMonthsAtt, grandTotalAtt)
-            totalCounted = max(sumFromMonthsTot, grandTotalAtt + grandTotalAbs)
+            totalAttended = grandTotalAtt
+            totalCounted = grandTotalAtt + grandTotalAbs
             activeMonthLabel = null
             contributors = allTimeContributors
         }
@@ -1399,6 +1548,11 @@ object AttendanceCalculator {
             )
         }
 
+        val uniqueSummaries = summaries
+            .associateBy { it.userId.ifBlank { it.id } }
+            .values
+            .toList()
+
         val userClass = profile?.className?.trim().orEmpty()
         val userStream = profile?.alStream?.trim().orEmpty()
         val userGrade = profile?.grade?.trim().orEmpty()
@@ -1407,7 +1561,7 @@ object AttendanceCalculator {
             aggregateGroup(
                 scope = "class",
                 label = "Your Class ($userClass)",
-                subset = summaries.filter { it.className.orEmpty().trim().equals(userClass, ignoreCase = true) }
+                subset = uniqueSummaries.filter { it.className.orEmpty().trim().equals(userClass, ignoreCase = true) }
             )
         } else null
 
@@ -1415,7 +1569,7 @@ object AttendanceCalculator {
             aggregateGroup(
                 scope = "stream",
                 label = "Your Stream ($userStream)",
-                subset = summaries.filter { it.alStream.orEmpty().trim().equals(userStream, ignoreCase = true) }
+                subset = uniqueSummaries.filter { it.alStream.orEmpty().trim().equals(userStream, ignoreCase = true) }
             )
         } else null
 
@@ -1423,14 +1577,14 @@ object AttendanceCalculator {
             aggregateGroup(
                 scope = "grade",
                 label = "Whole $userGrade",
-                subset = summaries.filter { it.grade.orEmpty().trim().equals(userGrade, ignoreCase = true) }
+                subset = uniqueSummaries.filter { it.grade.orEmpty().trim().equals(userGrade, ignoreCase = true) }
             )
         } else null
 
         val schoolItem = aggregateGroup(
             scope = "school",
             label = "All Students",
-            subset = summaries
+            subset = uniqueSummaries
         )
 
         return CohortPulseSummary(
@@ -1460,7 +1614,9 @@ object AttendanceCalculator {
         activeTerm: AcademicTerm?,
         thresholdPercent: Int,
         profile: UserProfile?,
-        periodBlocks: List<AttendancePeriodBlock> = emptyList()
+        periodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ): CheckInImpactPreview {
         val current = calculateStats(
             records = records,
@@ -1471,7 +1627,9 @@ object AttendanceCalculator {
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = activeTerm,
             lockedRange = profile?.lockedBaselineRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = calendarEvents,
+            schoolStartDate = schoolStartDate
         )
         val withoutTarget = records.filterNot { it.dateKey == dateKey }
         val simulatedRecord = AttendanceRecord(
@@ -1490,7 +1648,9 @@ object AttendanceCalculator {
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = activeTerm,
             lockedRange = profile?.lockedBaselineRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = calendarEvents,
+            schoolStartDate = schoolStartDate
         )
         return CheckInImpactPreview(
             currentPercent = current.percentage,
@@ -1662,16 +1822,16 @@ object AttendanceCalculator {
         calendarEvents: List<CalendarEvent>,
         overallStats: AttendanceStats,
         periodBlocks: List<AttendancePeriodBlock> = emptyList(),
-        todayKey: String = DateUtils.todayKey()
+        todayKey: String = DateUtils.todayKey(),
+        lockedRange: Pair<String, String>? = null
     ): WeeklyDigestSummary {
         val currentMonday = DateUtils.mondayOfWeek(todayKey)
-        // If called on Sunday, last Mon–Fri is 6 days before Sunday (i.e. currentMonday if Mon-based week starts Mon, or -7 if Sunday is start).
-        // DateUtils.mondayOfWeek(sunday) returns the Monday of the week that just finished!
         val dow = DateUtils.dayOfWeekNumber(todayKey) // 1=Sun .. 7=Sat
         val lastWeekMonday = if (dow == 1 || dow == 7) currentMonday else DateUtils.addDays(currentMonday, -7)
-        val lastWeekFriday = DateUtils.addDays(lastWeekMonday, 4)
 
-        val recordMap = records.associateBy { it.dateKey }
+        val uniqueRecords = deduplicateRecords(records)
+        val recordMap = uniqueRecords.associateBy { it.dateKey }
+        val cleanBlocks = deduplicatePeriodBlocks(periodBlocks, lockedRange)
         val offDaySet = calendarEvents
             .filter { it.nonSchoolDay }
             .map { it.dateKey }
@@ -1679,32 +1839,31 @@ object AttendanceCalculator {
 
         var schoolDays = 0
         var attended = 0
+        var absentInLastWeek = 0
         for (offset in 0..4) {
             val d = DateUtils.addDays(lastWeekMonday, offset)
-            val rec = recordMap[d]
+            val isLocked = (lockedRange != null && d <= lockedRange.second) ||
+                cleanBlocks.any { it.containsDate(d) }
+            val rec = if (isLocked) null else recordMap[d]
             val isOff = d in offDaySet || rec?.statusEnum == AttendanceStatus.HOLIDAY
             if (!isOff) {
                 schoolDays++
-                if (rec != null && (
-                        rec.statusEnum == AttendanceStatus.PRESENT ||
-                            rec.statusEnum == AttendanceStatus.MEDICAL ||
-                            rec.statusEnum == AttendanceStatus.SCHOOL_EVENT
-                        )
-                ) {
-                    attended++
+                if (rec != null) {
+                    when (rec.statusEnum) {
+                        AttendanceStatus.PRESENT,
+                        AttendanceStatus.MEDICAL,
+                        AttendanceStatus.SCHOOL_EVENT -> attended++
+                        AttendanceStatus.ABSENT -> absentInLastWeek++
+                        AttendanceStatus.HOLIDAY -> Unit
+                    }
                 }
             }
         }
 
-        // Compute week-over-week percentage delta by comparing overallStats vs stats excluding last week
-        val beforeLastWeekRecords = records.filter { it.dateKey < lastWeekMonday }
-        val priorAttended = overallStats.effectiveAttended - attended
-        val priorAbsentInLastWeek = (0..4).count { offset ->
-            val d = DateUtils.addDays(lastWeekMonday, offset)
-            recordMap[d]?.statusEnum == AttendanceStatus.ABSENT
-        }
-        val priorTotal = overallStats.totalCountedDays - (attended + priorAbsentInLastWeek)
-        val delta = if (priorTotal > 0 && (attended + priorAbsentInLastWeek) > 0 && beforeLastWeekRecords.size <= records.size) {
+        // Compute week-over-week percentage delta by excluding last week's unlocked daily records
+        val priorAttended = (overallStats.effectiveAttended - attended).coerceAtLeast(0)
+        val priorTotal = (overallStats.totalCountedDays - (attended + absentInLastWeek)).coerceAtLeast(0)
+        val delta = if (priorTotal > 0 && (attended + absentInLastWeek) > 0) {
             val priorPct = (priorAttended.toDouble() / priorTotal.toDouble()) * 100.0
             overallStats.percentage - priorPct
         } else null

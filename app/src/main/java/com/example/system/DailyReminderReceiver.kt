@@ -197,11 +197,22 @@ class DailyReminderReceiver : BroadcastReceiver() {
         if (DateUtils.isWeekend(todayKey)) return
 
         val appCtx = context.applicationContext
-        val termId = AttendanceCalculator.resolveTermIdForDate(todayKey, SriLankaCalendarDefaults.defaultTerms)
         val repository = AttendanceRepository(appCtx)
 
-        // Capture any pre-existing record for today so Quick Undo can restore it cleanly
-        val (preProfile, preRecords, _) = repository.getQuickWidgetMetrics(uid, todayKey)
+        // Capture real terms, profile, events, and locked period blocks to prevent double-counting or logging locked/non-school days
+        val (preProfile, preRecords, preEvents) = repository.getQuickWidgetMetrics(uid, todayKey)
+        val (settings, fetchedTerms) = repository.getQuickWidgetSettingsAndTerms()
+        val periodBlocks = repository.getQuickWidgetPeriodBlocks(uid)
+        val effectiveTerms = fetchedTerms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
+        val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(preEvents, preProfile, uid)
+        val schoolStartKey = settings.effectiveSchoolStartDate(preProfile?.alExamYear)
+
+        if (todayKey < schoolStartKey) return
+        if (effectiveEvents.any { it.dateKey == todayKey && it.nonSchoolDay }) return
+        if (preProfile?.isDateInLockedBaseline(todayKey) == true) return
+        if (periodBlocks.any { it.containsDate(todayKey) }) return
+
+        val termId = AttendanceCalculator.resolveTermIdForDate(todayKey, effectiveTerms)
         val previousRecord = preRecords.firstOrNull { it.dateKey == todayKey }
         val previousStatusRaw = previousRecord?.status
         val previousNote = previousRecord?.note
@@ -259,7 +270,9 @@ class DailyReminderReceiver : BroadcastReceiver() {
 
         val uid = Firebase.auth.currentUser?.uid ?: return
         val repository = AttendanceRepository(appCtx)
-        val termId = AttendanceCalculator.resolveTermIdForDate(dateKey, SriLankaCalendarDefaults.defaultTerms)
+        val (_, fetchedTerms) = repository.getQuickWidgetSettingsAndTerms()
+        val effectiveTerms = fetchedTerms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
+        val termId = AttendanceCalculator.resolveTermIdForDate(dateKey, effectiveTerms)
         if (!previousStatusRaw.isNullOrBlank()) {
             val prevStatus = AttendanceStatus.fromRaw(previousStatusRaw)
             repository.upsertAttendance(
@@ -312,6 +325,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
             records.filterNot { it.dateKey == todayKey }
         }
         val lockedRange = profile?.lockedBaselineRange
+        val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
         val stats = AttendanceCalculator.calculateStats(
             records = mergedRecords,
             thresholdPercent = resolvedTerm.minEligibilityPercent,
@@ -321,7 +335,9 @@ class DailyReminderReceiver : BroadcastReceiver() {
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = resolvedTerm,
             lockedRange = lockedRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = effectiveEvents,
+            schoolStartDate = schoolStartKey
         )
         val streak = AttendanceCalculator.calculateCurrentStreak(
             records = mergedRecords,

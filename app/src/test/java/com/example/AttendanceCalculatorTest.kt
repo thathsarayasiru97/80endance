@@ -951,6 +951,345 @@ class AttendanceCalculatorTest {
         assertEquals("Tip ✨", com.example.data.NoticeCategory.TIP.label)
         assertEquals(com.example.data.NoticeCategory.TIP, com.example.data.NoticeCategory.fromRaw("tip"))
     }
+
+    @Test
+    fun duplicateRecordsForSameDateAreDeduplicatedKeepingLatest() {
+        val older = AttendanceRecord(
+            id = "dup1",
+            userId = "u1",
+            dateKey = "2026-05-04",
+            status = AttendanceStatus.ABSENT.raw,
+            updatedAt = com.google.firebase.Timestamp(1000L, 0)
+        )
+        val newer = AttendanceRecord(
+            id = "dup2",
+            userId = "u1",
+            dateKey = "2026-05-04",
+            status = AttendanceStatus.PRESENT.raw,
+            updatedAt = com.google.firebase.Timestamp(2000L, 0)
+        )
+        val other = AttendanceRecord(
+            id = "day2",
+            userId = "u1",
+            dateKey = "2026-05-05",
+            status = AttendanceStatus.PRESENT.raw
+        )
+
+        val stats = AttendanceCalculator.calculateStats(
+            records = listOf(older, newer, other),
+            thresholdPercent = 80,
+            includePriorBalance = false,
+            priorPresent = 0,
+            priorAbsent = 0
+        )
+        assertEquals(2, stats.totalCountedDays)
+        assertEquals(2, stats.presentDays)
+        assertEquals(0, stats.absentDays)
+        assertEquals(100.0, stats.percentage, 0.01)
+    }
+
+    @Test
+    fun baselineAndOverlappingPeriodBlocksNeverDoubleCount() {
+        // Baseline locks everything up to 2026-03-31 (40P / 10A)
+        val lockedRange = "2026-01-15" to "2026-03-31"
+        // Block 1 overlaps baseline (starts 2026-03-10 -> 2026-04-10) -> MUST be dropped
+        val overlappingBaselineBlock = com.example.data.AttendancePeriodBlock(
+            id = "blk_overlap_base",
+            userId = "u1",
+            startDate = "2026-03-10",
+            endDate = "2026-04-10",
+            totalSchoolDays = 20,
+            presentDays = 18,
+            absentDays = 2,
+            percentage = 90.0
+        )
+        // Block 2 (April 1..15) and Block 3 (April 10..20) overlap each other -> only one kept
+        val aprilBlockA = com.example.data.AttendancePeriodBlock(
+            id = "blk_apr_a",
+            userId = "u1",
+            startDate = "2026-04-01",
+            endDate = "2026-04-15",
+            totalSchoolDays = 10,
+            presentDays = 9,
+            absentDays = 1,
+            percentage = 90.0,
+            updatedAt = com.google.firebase.Timestamp(1000L, 0)
+        )
+        val aprilBlockB = com.example.data.AttendancePeriodBlock(
+            id = "blk_apr_b",
+            userId = "u1",
+            startDate = "2026-04-10",
+            endDate = "2026-04-20",
+            totalSchoolDays = 8,
+            presentDays = 7,
+            absentDays = 1,
+            percentage = 87.5,
+            updatedAt = com.google.firebase.Timestamp(2000L, 0)
+        )
+        // Daily records: one inside baseline (dropped), one inside kept April block (dropped), one clean in May (kept)
+        val records = listOf(
+            AttendanceRecord(dateKey = "2026-02-10", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-04-14", status = AttendanceStatus.ABSENT.raw),
+            AttendanceRecord(dateKey = "2026-05-04", status = AttendanceStatus.PRESENT.raw)
+        )
+
+        val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(
+            periodBlocks = listOf(overlappingBaselineBlock, aprilBlockA, aprilBlockB),
+            lockedRange = lockedRange
+        )
+        assertEquals(1, cleanBlocks.size)
+        assertEquals("blk_apr_b", cleanBlocks.first().id)
+
+        val stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 40,
+            priorAbsent = 10,
+            lockedRange = lockedRange,
+            periodBlocks = listOf(overlappingBaselineBlock, aprilBlockA, aprilBlockB)
+        )
+        // Expected: baseline (40P/10A) + blk_apr_b (7P/1A) + May 4 (1P) = 48P / 11A = 59 total
+        assertEquals(48, stats.effectiveAttended)
+        assertEquals(59, stats.totalCountedDays)
+        assertEquals(7, stats.periodPresentDays)
+        assertEquals(1, stats.periodAbsentDays)
+    }
+
+    @Test
+    fun lockedRecordsDoNotLeakIntoMonthScopeAndBaselineDoesNotInflateOtherTerms() {
+        val term1 = com.example.data.AcademicTerm(
+            id = "term_1_2026",
+            name = "Term 1",
+            academicYear = 2026,
+            startDate = "2026-01-05",
+            endDate = "2026-04-10",
+            minEligibilityPercent = 80
+        )
+        val term2 = com.example.data.AcademicTerm(
+            id = "term_2_2026",
+            name = "Term 2",
+            academicYear = 2026,
+            startDate = "2026-04-20",
+            endDate = "2026-08-14",
+            minEligibilityPercent = 80
+        )
+        // Baseline locked strictly inside Term 1 (Jan 5 -> Mar 20)
+        val lockedRange = "2026-01-05" to "2026-03-20"
+        val records = listOf(
+            // Stale record inside locked baseline in March -> must NOT leak into March Month stats
+            AttendanceRecord(dateKey = "2026-03-10", termId = "term_1_2026", status = AttendanceStatus.ABSENT.raw),
+            // Clean unlocked March record after baseline end -> MUST count in March
+            AttendanceRecord(dateKey = "2026-03-23", termId = "term_1_2026", status = AttendanceStatus.PRESENT.raw),
+            // Record on Term 1 date but wrongly stamped with term_2_2026 -> must NOT count in Term 2
+            AttendanceRecord(dateKey = "2026-03-24", termId = "term_2_2026", status = AttendanceStatus.PRESENT.raw),
+            // Clean Term 2 record
+            AttendanceRecord(dateKey = "2026-05-04", termId = "term_2_2026", status = AttendanceStatus.PRESENT.raw)
+        )
+
+        // Month scope (March 2026) with includePriorBalance = false (multi-month baseline):
+        // stale 2026-03-10 inside lockedRange must still be excluded!
+        val marchStats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = false,
+            priorPresent = 30,
+            priorAbsent = 5,
+            monthPrefixFilter = "2026-03",
+            lockedRange = lockedRange
+        )
+        assertEquals(2, marchStats.totalCountedDays) // Only 2026-03-23 and 2026-03-24
+        assertEquals(2, marchStats.presentDays)
+        assertEquals(0, marchStats.absentDays)
+
+        // Term 2 stats: must NOT include Term 1 baseline AND must NOT include mismatched-termId March record
+        val term2Stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 30,
+            priorAbsent = 5,
+            termFilter = term2,
+            lockedRange = lockedRange
+        )
+        assertEquals(1, term2Stats.totalCountedDays) // Only 2026-05-04
+        assertEquals(0, term2Stats.priorPresentDays)
+        assertEquals(0, term2Stats.priorAbsentDays)
+
+        // Overall stats: includes Term 1 baseline (30P/5A) + unlocked daily records (3P) = 33P / 5A = 38 total
+        val overallStats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 30,
+            priorAbsent = 5,
+            termFilter = null,
+            lockedRange = lockedRange
+        )
+        assertEquals(33, overallStats.effectiveAttended)
+        assertEquals(38, overallStats.totalCountedDays)
+    }
+
+    @Test
+    fun nonSchoolDayAndPreSchoolStartRecordsAreExcludedEverywhere() {
+        val vesakPoya = CalendarEvent(
+            id = "poya_vesak",
+            title = "Vesak Poya",
+            dateKey = "2026-05-20",
+            eventType = CalendarEventType.POYA.raw
+        )
+        val records = listOf(
+            // Before schoolStartDate (2026-02-09) -> excluded
+            AttendanceRecord(dateKey = "2026-01-20", status = AttendanceStatus.ABSENT.raw),
+            // On published non-school Poya day -> excluded
+            AttendanceRecord(dateKey = "2026-05-20", status = AttendanceStatus.ABSENT.raw),
+            // Valid school day -> included
+            AttendanceRecord(dateKey = "2026-05-21", status = AttendanceStatus.PRESENT.raw)
+        )
+
+        val stats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = false,
+            priorPresent = 0,
+            priorAbsent = 0,
+            calendarEvents = listOf(vesakPoya),
+            schoolStartDate = "2026-02-09"
+        )
+        assertEquals(1, stats.totalCountedDays)
+        assertEquals(1, stats.presentDays)
+        assertEquals(0, stats.absentDays)
+
+        val personalInsights = AttendanceCalculator.calculatePersonalInsightsForScope(
+            records = records,
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME,
+            calendarEvents = listOf(vesakPoya),
+            schoolStartDate = "2026-02-09"
+        )
+        assertEquals(1, personalInsights.totalCountedDays)
+        assertEquals(1, personalInsights.totalAttendedDays)
+    }
+
+    @Test
+    fun trendSummaryInsightsAndMilestonesPreventDoubleCountingWithLockedBaseline() {
+        val lockedRange = "2026-01-15" to "2026-03-31"
+        val profile = UserProfile(
+            userId = "u1",
+            grade = "Grade 12",
+            alStream = "Physical Science",
+            className = "12M1",
+            priorPresentCount = 40,
+            priorAbsentCount = 10,
+            baselineStartDate = "2026-01-15",
+            baselineEndDate = "2026-03-31",
+            baselinePercent = 80.0
+        )
+        val records = listOf(
+            // Inside locked baseline -> MUST NOT be counted on top of priorPresent/priorAbsent
+            AttendanceRecord(dateKey = "2026-02-10", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-02-11", status = AttendanceStatus.ABSENT.raw),
+            // Outside baseline -> counted once
+            AttendanceRecord(dateKey = "2026-05-04", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-05-05", status = AttendanceStatus.PRESENT.raw)
+        )
+
+        val summary = AttendanceCalculator.buildStudentTrendSummary(
+            userId = "u1",
+            records = records,
+            periodBlocks = emptyList(),
+            priorPresent = profile.priorPresentCount,
+            priorAbsent = profile.priorAbsentCount,
+            grade = profile.grade,
+            alStream = profile.alStream,
+            className = profile.className,
+            lockedRange = lockedRange
+        )
+        // Expected: prior (40P/10A) + unlocked daily (2P/0A) = 42P / 10A (NOT 43P/11A!)
+        assertEquals(42, summary.totalAttended)
+        assertEquals(10, summary.totalAbsent)
+
+        val personal = AttendanceCalculator.calculatePersonalInsightsForScope(
+            records = records,
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME,
+            lockedRange = lockedRange
+        )
+        // Personal daily trends exclude lockedRange records -> only 2 May days
+        assertEquals(2, personal.totalCountedDays)
+        assertEquals(2, personal.totalAttendedDays)
+    }
+
+    @Test
+    fun communityInsightsAndCohortPulseDeduplicateDuplicateUserSummaries() {
+        val profile = UserProfile(grade = "Grade 13", alStream = "Physical Science", className = "13M1")
+        val dup1 = com.example.data.StudentTrendSummary(
+            id = "u1",
+            userId = "u1",
+            totalAttended = 8,
+            totalAbsent = 2,
+            grade = "Grade 13",
+            alStream = "Physical Science",
+            className = "13M1",
+            monthlyTotalsJson = """{"2026-05":[8,10]}"""
+        )
+        val dup1Duplicate = dup1.copy(id = "u1_stale")
+        val user2 = com.example.data.StudentTrendSummary(
+            id = "u2",
+            userId = "u2",
+            totalAttended = 10,
+            totalAbsent = 0,
+            grade = "Grade 13",
+            alStream = "Physical Science",
+            className = "13M1",
+            monthlyTotalsJson = """{"2026-05":[10,10]}"""
+        )
+
+        val community = AttendanceCalculator.calculateCommunityInsights(
+            summaries = listOf(dup1, dup1Duplicate, user2),
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME
+        )
+        assertEquals(2, community.contributorCount)
+        assertEquals(18, community.totalAttendedDays)
+        assertEquals(20, community.totalCountedDays)
+
+        val pulse = AttendanceCalculator.calculateCohortPulse(
+            summaries = listOf(dup1, dup1Duplicate, user2),
+            profile = profile,
+            timeframe = com.example.data.TrendsTimeframe.ALL_TIME
+        )
+        assertEquals(2, pulse.classItem?.contributorCount)
+        assertEquals(90.0, pulse.classItem?.percentage ?: 0.0, 0.05) // 18/20, NOT 26/30
+    }
+
+    @Test
+    fun weeklyDigestIgnoresLockedRecordsWhenComputingDelta() {
+        val lockedRange = "2026-01-15" to "2026-11-11"
+        val records = listOf(
+            // Mon..Wed inside locked baseline -> must NOT be subtracted from overallStats again
+            AttendanceRecord(dateKey = "2026-11-09", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-11-10", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-11-11", status = AttendanceStatus.PRESENT.raw),
+            // Thu..Fri unlocked
+            AttendanceRecord(dateKey = "2026-11-12", status = AttendanceStatus.PRESENT.raw),
+            AttendanceRecord(dateKey = "2026-11-13", status = AttendanceStatus.ABSENT.raw)
+        )
+        val overallStats = AttendanceCalculator.calculateStats(
+            records = records,
+            thresholdPercent = 80,
+            includePriorBalance = true,
+            priorPresent = 40,
+            priorAbsent = 10,
+            lockedRange = lockedRange
+        ) // 41/52 = 78.85%; prior before Thu..Fri = 40/50 = 80.0%
+        val digest = AttendanceCalculator.calculateLastWeekDigest(
+            records = records,
+            calendarEvents = emptyList(),
+            overallStats = overallStats,
+            todayKey = "2026-11-15",
+            lockedRange = lockedRange
+        )
+        assertEquals(1, digest.lastWeekAttended) // Only unlocked Thu
+        assertEquals(-1.15, digest.weekOverWeekDelta ?: 0.0, 0.1) // 78.85% - 80.0%
+    }
 }
 
 

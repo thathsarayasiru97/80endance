@@ -39,8 +39,8 @@ import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Swipe
-import androidx.compose.material.icons.rounded.TrendingDown
-import androidx.compose.material.icons.rounded.TrendingUp
+import androidx.compose.material.icons.automirrored.rounded.TrendingDown
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -81,6 +81,7 @@ import com.example.data.AttendancePatternInsights
 import com.example.data.AttendancePeriodBlock
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceStats
+import com.example.data.CalendarEvent
 import com.example.data.CohortPulseSummary
 import com.example.data.MonthlyAttendancePoint
 import com.example.data.StudentTrendSummary
@@ -347,6 +348,8 @@ fun AttendancePatternsAndChartCard(
     periodBlocks: List<AttendancePeriodBlock> = emptyList(),
     communitySummaries: List<StudentTrendSummary> = emptyList(),
     profile: UserProfile? = null,
+    calendarEvents: List<CalendarEvent> = emptyList(),
+    schoolStartDate: String? = null,
     modifier: Modifier = Modifier
 ) {
     // Page 0 = Everyone's Trends & Patterns (DEFAULT tile, defaulting to All Time)
@@ -371,12 +374,15 @@ fun AttendancePatternsAndChartCard(
             timeframe = everyoneTimeframe
         )
     }
-    val personalInsights = remember(records, periodBlocks, personalTimeframe) {
+    val personalInsights = remember(records, periodBlocks, personalTimeframe, profile, calendarEvents, schoolStartDate) {
         AttendanceCalculator.calculatePersonalInsightsForScope(
             records = records,
             periodBlocks = periodBlocks,
             timeframe = personalTimeframe,
-            maxMonths = 6
+            maxMonths = 6,
+            lockedRange = profile?.lockedBaselineRange,
+            calendarEvents = calendarEvents,
+            schoolStartDate = schoolStartDate
         )
     }
 
@@ -826,7 +832,7 @@ private fun TrendsInsightSlideContent(
                         val subjectLabel = if (isCommunity) "School-wide attendance" else "Your attendance"
                         val dirWord = if (rising) "up" else "down"
                         InsightRow(
-                            icon = if (rising) Icons.Rounded.TrendingUp else Icons.Rounded.TrendingDown,
+                            icon = if (rising) Icons.AutoMirrored.Rounded.TrendingUp else Icons.AutoMirrored.Rounded.TrendingDown,
                             bg = if (rising) semantic.presentContainer.copy(alpha = 0.65f) else semantic.absentContainer.copy(alpha = 0.72f),
                             fg = if (rising) semantic.onPresentContainer else semantic.onAbsentContainer,
                             text = "$subjectLabel is $dirWord ${String.format(Locale.US, "%.1f%%", abs(delta))} compared to last month"
@@ -837,7 +843,7 @@ private fun TrendsInsightSlideContent(
                 insights.mostSkippedWeekday?.let { skipped ->
                     val subjectPhrase = if (isCommunity) "are the most skipped day across students" else "are your most skipped day"
                     InsightRow(
-                        icon = Icons.Rounded.TrendingDown,
+                        icon = Icons.AutoMirrored.Rounded.TrendingDown,
                         bg = semantic.absentContainer.copy(alpha = 0.72f),
                         fg = semantic.onAbsentContainer,
                         text = "${skipped.fullName}s $subjectPhrase (${skipped.absentDays} missed • ${String.format(Locale.US, "%.0f%%", skipped.percentage)} attended)"
@@ -847,7 +853,7 @@ private fun TrendsInsightSlideContent(
                 insights.bestWeekday?.takeIf { it.dayIndex != insights.mostSkippedWeekday?.dayIndex }?.let { bestDay ->
                     val prefix = if (isCommunity) "Most attended weekday" else "Most consistent weekday"
                     InsightRow(
-                        icon = Icons.Rounded.TrendingUp,
+                        icon = Icons.AutoMirrored.Rounded.TrendingUp,
                         bg = semantic.schoolEventContainer.copy(alpha = 0.65f),
                         fg = semantic.onSchoolEventContainer,
                         text = "$prefix: ${bestDay.fullName} (${String.format(Locale.US, "%.0f%%", bestDay.percentage)} attended)"

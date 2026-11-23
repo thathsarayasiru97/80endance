@@ -402,6 +402,7 @@ class AttendanceViewModel(
 
         val lockedRange = profile?.lockedBaselineRange
         val periodBlocks = extras.periodBlocks
+        val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
         val monthPrefix = DateUtils.currentMonthPrefix(todayKey)
         val monthLabel = DateUtils.currentMonthYearLabel(todayKey)
         val baselineWithinMonth = lockedRange != null &&
@@ -416,7 +417,9 @@ class AttendanceViewModel(
             priorAbsent = if (baselineWithinMonth) profile.priorAbsentCount else 0,
             monthPrefixFilter = monthPrefix,
             lockedRange = lockedRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = effectiveEvents,
+            schoolStartDate = schoolStartKey
         )
         val termStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -427,7 +430,9 @@ class AttendanceViewModel(
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = activeTerm,
             lockedRange = lockedRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = effectiveEvents,
+            schoolStartDate = schoolStartKey
         )
         val overallStats = AttendanceCalculator.calculateStats(
             records = bundle.records,
@@ -438,7 +443,9 @@ class AttendanceViewModel(
             priorAbsent = profile?.priorAbsentCount ?: 0,
             termFilter = null,
             lockedRange = lockedRange,
-            periodBlocks = periodBlocks
+            periodBlocks = periodBlocks,
+            calendarEvents = effectiveEvents,
+            schoolStartDate = schoolStartKey
         )
 
         val streak = AttendanceCalculator.calculateCurrentStreak(
@@ -462,7 +469,6 @@ class AttendanceViewModel(
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
         val todayIsWeekend = DateUtils.isWeekend(todayKey)
         val todayNonSchoolEvent = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
-        val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
         val todayIsLocked = profile?.isDateInLockedBaseline(todayKey) == true ||
             periodBlocks.any { it.containsDate(todayKey) }
         val todayIsSchoolDay = !todayIsWeekend && todayNonSchoolEvent == null && !todayIsLocked && todayKey >= schoolStartKey
@@ -538,7 +544,10 @@ class AttendanceViewModel(
                 priorAbsent = profile.priorAbsentCount,
                 grade = profile.grade,
                 alStream = profile.alStream,
-                className = profile.className
+                className = profile.className,
+                lockedRange = lockedRange,
+                calendarEvents = effectiveEvents,
+                schoolStartDate = schoolStartKey
             )
         } else {
             null
@@ -553,7 +562,7 @@ class AttendanceViewModel(
             }
         }
         val mergedCommunitySummaries = if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
-            extras.communityTrendSummaries.filterNot { it.userId == currentUserId } + localTrendSummary
+            extras.communityTrendSummaries.filterNot { it.userId == currentUserId || it.id == currentUserId } + localTrendSummary
         } else {
             extras.communityTrendSummaries
         }
@@ -584,7 +593,11 @@ class AttendanceViewModel(
             records = bundle.records,
             currentStreak = streak,
             termStats = termStats,
-            overallStats = overallStats
+            overallStats = overallStats,
+            lockedRange = lockedRange,
+            periodBlocks = periodBlocks,
+            calendarEvents = effectiveEvents,
+            schoolStartDate = schoolStartKey
         )
 
         val nowMs = System.currentTimeMillis()
@@ -869,22 +882,27 @@ class AttendanceViewModel(
                 updateBaselineFields = updateBaselineFields
             )
             val currentRecords = uiState.value.attendanceRecords
+            val currentPeriodBlocks = uiState.value.periodBlocks
             if (result.isSuccess &&
                 updateBaselineFields &&
                 isExisting &&
                 baselineStartDate != null &&
                 baselineEndDate != null &&
-                baselinePercent != null &&
-                currentRecords.any { it.dateKey <= baselineEndDate }
+                (priorPresentCount + priorAbsentCount > 0) &&
+                (currentRecords.any { it.dateKey <= baselineEndDate } ||
+                    currentPeriodBlocks.any { it.startDate <= baselineEndDate })
             ) {
+                val effectivePct = baselinePercent
+                    ?: ((priorPresentCount.toDouble() / (priorPresentCount + priorAbsentCount).toDouble()) * 100.0)
                 repository.saveAttendancePercentageBaseline(
                     userId = currentUserId,
                     startDateKey = baselineStartDate,
                     endDateKey = baselineEndDate,
-                    percentage = baselinePercent,
+                    percentage = effectivePct,
                     presentDays = priorPresentCount,
                     absentDays = priorAbsentCount,
-                    existingRecords = currentRecords
+                    existingRecords = currentRecords,
+                    existingPeriodBlocks = currentPeriodBlocks
                 )
             }
             _isSaving.value = false
@@ -964,7 +982,8 @@ class AttendanceViewModel(
                 percentage = percentage,
                 presentDays = presentDays,
                 absentDays = absentDays,
-                existingRecords = current.attendanceRecords
+                existingRecords = current.attendanceRecords,
+                existingPeriodBlocks = current.periodBlocks
             )
             _isSaving.value = false
             result.onSuccess { replacedCount ->
@@ -1020,7 +1039,9 @@ class AttendanceViewModel(
                 entryMode = entryMode,
                 label = label,
                 existingRecords = current.attendanceRecords,
-                existingBlockId = existingBlockId
+                existingBlockId = existingBlockId,
+                existingPeriodBlocks = current.periodBlocks,
+                lockedBaselineRange = current.profile?.lockedBaselineRange
             )
             _isSaving.value = false
             result.onSuccess { consolidatedCount ->
@@ -1096,6 +1117,11 @@ class AttendanceViewModel(
             _snackbarMessage.value = "Cannot edit days inside a locked attendance period"
             return
         }
+        val nonSchoolEv = uiState.value.calendarEvents.firstOrNull { it.dateKey == dateKey && it.nonSchoolDay }
+        if (nonSchoolEv != null && status != AttendanceStatus.HOLIDAY) {
+            _snackbarMessage.value = "${nonSchoolEv.title} is a non-school day"
+            return
+        }
         viewModelScope.launch {
             _isSaving.value = true
             val current = uiState.value
@@ -1162,7 +1188,9 @@ class AttendanceViewModel(
                 priorAbsent = previousState.profile?.priorAbsentCount ?: 0,
                 termFilter = previousState.activeTerm,
                 lockedRange = previousState.profile?.lockedBaselineRange,
-                periodBlocks = previousState.periodBlocks
+                periodBlocks = previousState.periodBlocks,
+                calendarEvents = previousState.calendarEvents,
+                schoolStartDate = previousState.effectiveSchoolStartDateKey
             )
             if (!afterStats.eligible) {
                 localPrefs.saveWasBelowThreshold(true)
@@ -1183,7 +1211,9 @@ class AttendanceViewModel(
             priorAbsent = previousState.profile?.priorAbsentCount ?: 0,
             termFilter = previousState.activeTerm,
             lockedRange = previousState.profile?.lockedBaselineRange,
-            periodBlocks = previousState.periodBlocks
+            periodBlocks = previousState.periodBlocks,
+            calendarEvents = previousState.calendarEvents,
+            schoolStartDate = previousState.effectiveSchoolStartDateKey
         )
         val afterStreak = AttendanceCalculator.calculateCurrentStreak(
             records = simulatedRecords,
@@ -1316,8 +1346,16 @@ class AttendanceViewModel(
     ) {
         val current = uiState.value
         val today = DateUtils.todayKey()
+        val nonSchoolDates = current.calendarEvents
+            .filter { it.nonSchoolDay }
+            .map { it.dateKey }
+            .toSet()
         val eligibleDates = dateKeys.filter { key ->
-            key <= today && !DateUtils.isWeekend(key) && !current.isBeforeSchoolStart(key) && !current.isDateLocked(key)
+            key <= today &&
+                !DateUtils.isWeekend(key) &&
+                key !in nonSchoolDates &&
+                !current.isBeforeSchoolStart(key) &&
+                !current.isDateLocked(key)
         }.distinct()
         if (eligibleDates.isEmpty()) {
             _snackbarMessage.value = "No editable school days selected"
@@ -1331,7 +1369,9 @@ class AttendanceViewModel(
                 status = status,
                 note = note,
                 terms = current.terms,
-                existingRecords = current.attendanceRecords
+                existingRecords = current.attendanceRecords,
+                lockedBaselineRange = current.profile?.lockedBaselineRange,
+                periodBlocks = current.periodBlocks
             )
             _isSaving.value = false
             result.onSuccess { count ->

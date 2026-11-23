@@ -329,7 +329,9 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             val periodBlocks = repo.getQuickWidgetPeriodBlocks(uid)
             val (settings, terms) = repo.getQuickWidgetSettingsAndTerms()
             val activeTerm = AttendanceCalculator.resolveActiveTerm(terms, todayKey)
+            val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(events, profile, uid)
             val lockedRange = profile?.lockedBaselineRange
+            val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
             val stats = AttendanceCalculator.calculateStats(
                 records = records,
                 thresholdPercent = activeTerm.minEligibilityPercent,
@@ -339,26 +341,28 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
                 priorAbsent = profile?.priorAbsentCount ?: 0,
                 termFilter = activeTerm,
                 lockedRange = lockedRange,
-                periodBlocks = periodBlocks
+                periodBlocks = periodBlocks,
+                calendarEvents = effectiveEvents,
+                schoolStartDate = schoolStartKey
             )
             val streak = AttendanceCalculator.calculateCurrentStreak(
                 records = records,
-                calendarEvents = events,
+                calendarEvents = effectiveEvents,
                 countExcusedAsPresent = true,
                 todayKey = todayKey
             )
             val weekly = AttendanceCalculator.calculateWeeklySummary(
                 records = records,
-                calendarEvents = events,
+                calendarEvents = effectiveEvents,
                 todayKey = todayKey,
                 lockedRange = lockedRange,
                 periodBlocks = periodBlocks
             )
-            val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(events, todayKey)
+            val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(effectiveEvents, todayKey)
             val examYear = profile?.alExamYear ?: settings.currentAcademicYear
             val daysToExam = AttendanceCalculator.daysUntilAlExam(examYear, settings, todayKey)
             val todayRec = records.firstOrNull { it.dateKey == todayKey }
-            val todayNoSchool = events.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
+            val todayNoSchool = effectiveEvents.firstOrNull { it.dateKey == todayKey && it.nonSchoolDay }
 
             AttendanceWidgetStore.saveAndRefresh(
                 context,

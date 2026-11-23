@@ -667,7 +667,8 @@ class AttendanceRepository(
         percentage: Double,
         presentDays: Int,
         absentDays: Int,
-        existingRecords: List<AttendanceRecord>
+        existingRecords: List<AttendanceRecord>,
+        existingPeriodBlocks: List<AttendancePeriodBlock> = emptyList()
     ): Result<Int> {
         val path = "users/$userId"
         return try {
@@ -684,17 +685,27 @@ class AttendanceRepository(
             require(cleanPresent + cleanAbsent > 0) { "Selected period must include at least 1 school day" }
 
             val cleanPct = percentage.coerceIn(0.0, 100.0)
-            val overlappingRecords = existingRecords.filter {
+            val uniqueRecords = AttendanceCalculator.deduplicateRecords(existingRecords)
+            val overlappingRecords = uniqueRecords.filter {
                 it.dateKey <= endDateKey
             }
-            val remainingRecords = existingRecords.filterNot {
-                it.dateKey <= endDateKey
+            val overlappingBlocks = existingPeriodBlocks.filter {
+                it.id.isNotBlank() && it.startDate <= endDateKey
+            }
+            val remainingBlocks = existingPeriodBlocks.filterNot { it.startDate <= endDateKey }
+            val remainingRecords = uniqueRecords.filterNot { rec ->
+                rec.dateKey <= endDateKey ||
+                    DateUtils.isWeekend(rec.dateKey) ||
+                    remainingBlocks.any { it.containsDate(rec.dateKey) }
             }
 
             val batch = db.batch()
             val userDocRef = db.collection("users").document(userId)
             for (rec in overlappingRecords) {
                 batch.delete(userDocRef.collection("attendance").document(rec.dateKey))
+            }
+            for (block in overlappingBlocks) {
+                batch.delete(userDocRef.collection("attendance_periods").document(block.id))
             }
 
             val present = remainingRecords.count { it.statusEnum == AttendanceStatus.PRESENT }
@@ -721,7 +732,7 @@ class AttendanceRepository(
             )
             batch.commit().awaitOfflineAware()
             scheduleSyncIfOffline()
-            Result.success(overlappingRecords.size)
+            Result.success(overlappingRecords.size + overlappingBlocks.size)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -909,7 +920,9 @@ class AttendanceRepository(
         entryMode: AttendancePeriodEntryMode,
         label: String?,
         existingRecords: List<AttendanceRecord>,
-        existingBlockId: String? = null
+        existingBlockId: String? = null,
+        existingPeriodBlocks: List<AttendancePeriodBlock> = emptyList(),
+        lockedBaselineRange: Pair<String, String>? = null
     ): Result<Int> {
         val path = "users/$userId/attendance_periods"
         return try {
@@ -920,6 +933,22 @@ class AttendanceRepository(
             }
             require(startDateKey <= endDateKey) { "End date must be on or after start date" }
             require(endDateKey <= DateUtils.todayKey()) { "End date cannot be in the future" }
+            if (lockedBaselineRange != null) {
+                require(startDateKey > lockedBaselineRange.second) {
+                    "This period overlaps your imported baseline (up to ${DateUtils.formatReadableShort(lockedBaselineRange.second)}). Pick dates after it to avoid double-counting."
+                }
+            }
+            val targetDocId = existingBlockId?.takeIf { it.isNotBlank() }
+                ?: "period_${startDateKey.replace("-", "")}_${endDateKey.replace("-", "")}"
+            val conflictingBlock = existingPeriodBlocks.firstOrNull { block ->
+                block.id != targetDocId && block.overlapsRange(startDateKey, endDateKey)
+            }
+            require(conflictingBlock == null) {
+                val rangeText = conflictingBlock?.let {
+                    "${DateUtils.formatReadableShort(it.startDate)} – ${DateUtils.formatReadableShort(it.endDate)}"
+                }.orEmpty()
+                "Overlaps existing locked period ($rangeText). Unlock it first or pick non-overlapping dates."
+            }
 
             val cleanTotal = totalSchoolDays.coerceIn(1, 600)
             val cleanPresent = presentDays.coerceIn(0, cleanTotal)
@@ -928,18 +957,15 @@ class AttendanceRepository(
             val cleanLabel = label?.trim()?.take(80)?.ifEmpty { null }
 
             val periodsCol = db.collection("users").document(userId).collection("attendance_periods")
-            val docRef = if (!existingBlockId.isNullOrBlank()) {
-                periodsCol.document(existingBlockId)
-            } else {
-                periodsCol.document("period_${startDateKey.replace("-", "")}_${endDateKey.replace("-", "")}")
-            }
+            val docRef = periodsCol.document(targetDocId)
             val alreadyExists = if (!existingBlockId.isNullOrBlank()) {
                 true
             } else {
                 runCatching { withTimeoutOrNull(2_000L) { docRef.get().await().exists() } ?: false }.getOrDefault(false)
             }
 
-            val overlapping = existingRecords.filter { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
+            val uniqueRecords = AttendanceCalculator.deduplicateRecords(existingRecords)
+            val overlapping = uniqueRecords.filter { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
             val batch = db.batch()
             if (alreadyExists) {
                 val updates = mutableMapOf<String, Any>(
@@ -983,7 +1009,12 @@ class AttendanceRepository(
                 }
             }
             if (overlapping.isNotEmpty()) {
-                val remaining = existingRecords.filterNot { it.dateKey >= startDateKey && it.dateKey <= endDateKey }
+                val remaining = uniqueRecords.filterNot { rec ->
+                    (rec.dateKey >= startDateKey && rec.dateKey <= endDateKey) ||
+                        DateUtils.isWeekend(rec.dateKey) ||
+                        (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
+                        existingPeriodBlocks.any { it.id != targetDocId && it.containsDate(rec.dateKey) }
+                }
                 val present = remaining.count { it.statusEnum == AttendanceStatus.PRESENT }
                 val absent = remaining.count { it.statusEnum == AttendanceStatus.ABSENT }
                 val medical = remaining.count { it.statusEnum == AttendanceStatus.MEDICAL }
@@ -1104,25 +1135,33 @@ class AttendanceRepository(
         status: AttendanceStatus,
         note: String?,
         terms: List<AcademicTerm>,
-        existingRecords: List<AttendanceRecord>
+        existingRecords: List<AttendanceRecord>,
+        lockedBaselineRange: Pair<String, String>? = null,
+        periodBlocks: List<AttendancePeriodBlock> = emptyList()
     ): Result<Int> {
         val path = "users/$targetUserId/attendance"
         return try {
             requireUserId()
+            val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(periodBlocks, lockedBaselineRange)
             val cleanDates = dateKeys
-                .filter { it.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) }
+                .filter { dk ->
+                    dk.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) &&
+                        !DateUtils.isWeekend(dk) &&
+                        (lockedBaselineRange == null || dk > lockedBaselineRange.second) &&
+                        cleanBlocks.none { it.containsDate(dk) }
+                }
                 .distinct()
             if (cleanDates.isEmpty()) return Result.success(0)
 
             val cleanNote = note?.trim()?.take(300)?.ifEmpty { null }
-            val existingByDate = existingRecords.associateBy { it.dateKey }
+            val existingByDate = AttendanceCalculator.deduplicateRecords(existingRecords).associateBy { it.dateKey }
             val userDocRef = db.collection("users").document(targetUserId)
             val attendanceCol = userDocRef.collection("attendance")
             val batch = db.batch()
 
             val merged = existingByDate.toMutableMap()
             cleanDates.forEach { dateKey ->
-                val termId = AttendanceCalculator.resolveActiveTerm(terms, dateKey).id
+                val termId = AttendanceCalculator.resolveTermIdForDate(dateKey, terms)
                 val docRef = attendanceCol.document(dateKey)
                 val existing = existingByDate[dateKey]
                 if (existing != null) {
@@ -1162,7 +1201,11 @@ class AttendanceRepository(
                 }
             }
 
-            val allRecs = merged.values
+            val allRecs = merged.values.filter { rec ->
+                !DateUtils.isWeekend(rec.dateKey) &&
+                    (lockedBaselineRange == null || rec.dateKey > lockedBaselineRange.second) &&
+                    cleanBlocks.none { it.containsDate(rec.dateKey) }
+            }
             batch.update(
                 userDocRef,
                 mapOf(
@@ -1437,11 +1480,13 @@ class AttendanceRepository(
         targetUserId: String,
         records: List<AttendanceRecord>
     ) {
-        val present = records.count { it.statusEnum == AttendanceStatus.PRESENT }
-        val absent = records.count { it.statusEnum == AttendanceStatus.ABSENT }
-        val medical = records.count { it.statusEnum == AttendanceStatus.MEDICAL }
-        val schoolEvent = records.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
-        val lastDate = records.maxOfOrNull { it.dateKey } ?: ""
+        val uniqueRecords = AttendanceCalculator.deduplicateRecords(records)
+            .filterNot { DateUtils.isWeekend(it.dateKey) }
+        val present = uniqueRecords.count { it.statusEnum == AttendanceStatus.PRESENT }
+        val absent = uniqueRecords.count { it.statusEnum == AttendanceStatus.ABSENT }
+        val medical = uniqueRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }
+        val schoolEvent = uniqueRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
+        val lastDate = uniqueRecords.maxOfOrNull { it.dateKey } ?: ""
         runCatching {
             db.collection("users").document(targetUserId).update(
                 mapOf(

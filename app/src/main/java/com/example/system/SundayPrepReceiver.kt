@@ -53,11 +53,13 @@ class SundayPrepReceiver : BroadcastReceiver() {
                 val todayKey = DateUtils.todayKey()
                 val repository = AttendanceRepository(appCtx)
                 val (profile, records, events) = repository.getQuickWidgetMetrics(uid, todayKey)
-                val activeTerm = AttendanceCalculator.resolveActiveTerm(
-                    SriLankaCalendarDefaults.defaultTerms,
-                    todayKey
-                )
+                val (settings, fetchedTerms) = repository.getQuickWidgetSettingsAndTerms()
+                val effectiveTerms = fetchedTerms.ifEmpty { SriLankaCalendarDefaults.defaultTerms }
+                val activeTerm = AttendanceCalculator.resolveActiveTerm(effectiveTerms, todayKey)
+                val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(events, profile, uid)
+                val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
                 val periodBlocks = repository.getQuickWidgetPeriodBlocks(uid)
+                val lockedRange = profile?.lockedBaselineRange
                 val termStats = AttendanceCalculator.calculateStats(
                     records = records,
                     thresholdPercent = activeTerm.minEligibilityPercent,
@@ -66,18 +68,34 @@ class SundayPrepReceiver : BroadcastReceiver() {
                     priorPresent = profile?.priorPresentCount ?: 0,
                     priorAbsent = profile?.priorAbsentCount ?: 0,
                     termFilter = activeTerm,
-                    lockedRange = profile?.lockedBaselineRange,
-                    periodBlocks = periodBlocks
+                    lockedRange = lockedRange,
+                    periodBlocks = periodBlocks,
+                    calendarEvents = effectiveEvents,
+                    schoolStartDate = schoolStartKey
+                )
+                val overallStats = AttendanceCalculator.calculateStats(
+                    records = records,
+                    thresholdPercent = settings.defaultEligibilityPercent,
+                    countExcusedAsPresent = true,
+                    includePriorBalance = true,
+                    priorPresent = profile?.priorPresentCount ?: 0,
+                    priorAbsent = profile?.priorAbsentCount ?: 0,
+                    termFilter = null,
+                    lockedRange = lockedRange,
+                    periodBlocks = periodBlocks,
+                    calendarEvents = effectiveEvents,
+                    schoolStartDate = schoolStartKey
                 )
                 val digest = AttendanceCalculator.calculateLastWeekDigest(
                     records = records,
-                    calendarEvents = events,
-                    overallStats = termStats,
+                    calendarEvents = effectiveEvents,
+                    overallStats = overallStats,
                     periodBlocks = periodBlocks,
-                    todayKey = todayKey
+                    todayKey = todayKey,
+                    lockedRange = lockedRange
                 )
                 val prep = AttendanceCalculator.calculateUpcomingWeekPrep(
-                    calendarEvents = events,
+                    calendarEvents = effectiveEvents,
                     termStats = termStats,
                     referenceDateKey = todayKey
                 )
@@ -91,7 +109,7 @@ class SundayPrepReceiver : BroadcastReceiver() {
                 } else {
                     "Last week: School break"
                 }
-                val overallSegment = if (termStats.totalCountedDays == 0) {
+                val overallSegment = if (overallStats.totalCountedDays == 0) {
                     "Overall: Ready to track"
                 } else {
                     String.format(Locale.US, "Overall: %.1f%%%s", digest.overallPercent, deltaStr)
