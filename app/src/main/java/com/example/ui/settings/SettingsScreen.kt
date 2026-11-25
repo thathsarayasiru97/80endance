@@ -117,10 +117,12 @@ import com.example.ui.components.BubbleLookPreset
 import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.LiquidGlassSegmentOption
 import com.example.ui.components.MorphingThemeToggleButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
+import com.example.ui.components.SlidableLiquidGlassSegmentedBar
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.components.ThinFilmBubbleInteractiveCard
 import com.example.ui.reports.RegisterVerificationDialog
@@ -933,30 +935,26 @@ fun SettingsScreen(
                             )
                         }
 
-                        SingleChoiceSegmentedButtonRow(
+                        val themeModeOptions = remember {
+                            AppThemeMode.entries.map { mode ->
+                                LiquidGlassSegmentOption(
+                                    label = mode.label,
+                                    testTag = "theme_mode_${mode.raw}"
+                                )
+                            }
+                        }
+                        SlidableLiquidGlassSegmentedBar(
+                            options = themeModeOptions,
+                            selectedIndex = AppThemeMode.entries.indexOf(state.themeMode).coerceAtLeast(0),
+                            onOptionSelected = { idx ->
+                                AppThemeMode.entries.getOrNull(idx)?.let { mode ->
+                                    onUpdateAppearance(mode, state.accentPalette)
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("settings_theme_mode_row")
-                        ) {
-                            AppThemeMode.entries.forEachIndexed { idx, mode ->
-                                SegmentedButton(
-                                    selected = state.themeMode == mode,
-                                    onClick = { onUpdateAppearance(mode, state.accentPalette) },
-                                    shape = SegmentedButtonDefaults.itemShape(
-                                        index = idx,
-                                        count = AppThemeMode.entries.size
-                                    ),
-                                    modifier = Modifier.testTag("theme_mode_${mode.raw}")
-                                ) {
-                                    Text(
-                                        text = mode.label,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                }
-                            }
-                        }
+                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),

@@ -71,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -98,6 +99,7 @@ import com.example.data.DateUtils
 import com.example.data.PersonalAcademicMarker
 import com.example.data.PersonalMarkerCategory
 import com.example.ui.admin.AdminCalendarEventEditorDialog
+import com.example.ui.components.drawThinFilmLiquidBubble
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.PersonalMarkerDialog
 import com.example.ui.components.StaggeredReveal
@@ -751,13 +753,42 @@ fun CalendarScreen(
                                                 animationSpec = tween(240),
                                                 label = "cal_bg_$dateKey"
                                             )
-                                            val bulkScale by animateFloatAsState(
-                                                targetValue = if (isBulkSelected) 1.05f else 1f,
+                                            val isSelectedDay = selectedDateKey == dateKey
+                                            val hasLiquidDroplet = isBulkSelected || isToday || isSelectedDay
+                                            val bgCol = MaterialTheme.colorScheme.background
+                                            val isDarkCellTheme = (0.299f * bgCol.red + 0.587f * bgCol.green + 0.114f * bgCol.blue) < 0.5f
+                                            val dropletTint = when {
+                                                isBulkSelected -> MaterialTheme.colorScheme.primary
+                                                rec?.statusEnum == AttendanceStatus.PRESENT -> semantic.present
+                                                rec?.statusEnum == AttendanceStatus.ABSENT -> semantic.absent
+                                                rec?.statusEnum == AttendanceStatus.MEDICAL -> semantic.medical
+                                                rec?.statusEnum == AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
+                                                isSlHoliday -> semantic.poya
+                                                else -> MaterialTheme.colorScheme.primary
+                                            }
+                                            val dropletStretchX by animateFloatAsState(
+                                                targetValue = when {
+                                                    isSelectedDay -> 1.07f
+                                                    isBulkSelected -> 1.05f
+                                                    else -> 1f
+                                                },
                                                 animationSpec = spring(
                                                     dampingRatio = Spring.DampingRatioMediumBouncy,
                                                     stiffness = Spring.StiffnessMedium
                                                 ),
-                                                label = "cal_bulk_scale_$dateKey"
+                                                label = "cal_droplet_sx_$dateKey"
+                                            )
+                                            val dropletSquashY by animateFloatAsState(
+                                                targetValue = when {
+                                                    isSelectedDay -> 1.04f
+                                                    isBulkSelected -> 1.05f
+                                                    else -> 1f
+                                                },
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessMedium
+                                                ),
+                                                label = "cal_droplet_sy_$dateKey"
                                             )
                                             val textColor = when {
                                                 isBulkSelected -> MaterialTheme.colorScheme.onPrimaryContainer
@@ -780,21 +811,35 @@ fun CalendarScreen(
                                                     .weight(1f)
                                                     .aspectRatio(1f)
                                                     .graphicsLayer {
-                                                        scaleX = bulkScale
-                                                        scaleY = bulkScale
+                                                        scaleX = dropletStretchX
+                                                        scaleY = dropletSquashY
                                                     }
                                                     .clip(RoundedCornerShape(12.dp))
                                                     .background(cellBg)
+                                                    .drawBehind {
+                                                        if (hasLiquidDroplet) {
+                                                            val cr = 12.dp.toPx()
+                                                            drawThinFilmLiquidBubble(
+                                                                topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                                                                bubbleSize = size,
+                                                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(cr, cr),
+                                                                baseTint = dropletTint,
+                                                                isDark = isDarkCellTheme,
+                                                                velocityNorm = if (isSelectedDay || isBulkSelected) 0.25f else 0f,
+                                                                pressIntensity = if (isSelectedDay || isBulkSelected) 0.7f else 0.2f
+                                                            )
+                                                        }
+                                                    }
                                                     .then(
                                                         when {
                                                             isBulkSelected -> Modifier.border(
-                                                                width = 2.dp,
-                                                                color = MaterialTheme.colorScheme.primary,
+                                                                width = 1.5.dp,
+                                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
                                                                 shape = RoundedCornerShape(12.dp)
                                                             )
                                                             isToday -> Modifier.border(
-                                                                width = 2.dp,
-                                                                color = if (isWeekend) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+                                                                width = 1.5.dp,
+                                                                color = (if (isWeekend) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary).copy(alpha = 0.65f),
                                                                 shape = RoundedCornerShape(12.dp)
                                                             )
                                                             else -> Modifier

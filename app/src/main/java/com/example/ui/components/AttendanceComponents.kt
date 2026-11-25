@@ -25,7 +25,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,6 +93,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -98,10 +101,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -188,6 +193,24 @@ fun AnimatedEligibilityGauge(
         ),
         label = "gauge_halo_alpha"
     )
+    val shimmerPhase by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 5200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "gauge_lens_shimmer"
+    )
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val lensOffset = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    var isLensPressed by remember { mutableStateOf(false) }
+    val lensPressIntensity by animateFloatAsState(
+        targetValue = if (isLensPressed) 1f else 0f,
+        animationSpec = tween(180),
+        label = "gauge_lens_press_intensity"
+    )
+    val gaugeScope = rememberCoroutineScope()
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
     val thresholdColor = MaterialTheme.colorScheme.secondary
 
@@ -199,20 +222,71 @@ fun AnimatedEligibilityGauge(
                 scaleX = toggleSquish.value
                 scaleY = toggleSquish.value
             }
-            .then(
-                if (onDoubleTapTogglePrivacy != null) {
-                    Modifier.pointerInput(true) {
-                        detectTapGestures(
-                            onDoubleTap = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                latestDoubleTap?.invoke()
-                            }
-                        )
+            .pointerInput(onDoubleTapTogglePrivacy != null) {
+                detectTapGestures(
+                    onPress = {
+                        isLensPressed = true
+                        tryAwaitRelease()
+                        isLensPressed = false
+                    },
+                    onTap = { tapPos ->
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        val nudge = ((tapPos - center) * 0.16f)
+                        gaugeScope.launch {
+                            lensOffset.animateTo(nudge, tween(90))
+                            lensOffset.animateTo(
+                                Offset.Zero,
+                                spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            )
+                        }
+                    },
+                    onDoubleTap = if (onDoubleTapTogglePrivacy != null) {
+                        {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            latestDoubleTap?.invoke()
+                        }
+                    } else null
+                )
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isLensPressed = true },
+                    onDragEnd = {
+                        isLensPressed = false
+                        gaugeScope.launch {
+                            lensOffset.animateTo(
+                                Offset.Zero,
+                                spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessLow
+                                )
+                            )
+                        }
+                    },
+                    onDragCancel = {
+                        isLensPressed = false
+                        gaugeScope.launch {
+                            lensOffset.animateTo(
+                                Offset.Zero,
+                                spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessLow
+                                )
+                            )
+                        }
                     }
-                } else {
-                    Modifier
+                ) { change, dragAmount ->
+                    change.consume()
+                    val next = Offset(
+                        x = (lensOffset.value.x + dragAmount.x * 0.38f).coerceIn(-22f, 22f),
+                        y = (lensOffset.value.y + dragAmount.y * 0.38f).coerceIn(-22f, 22f)
+                    )
+                    gaugeScope.launch { lensOffset.snapTo(next) }
                 }
-            )
+            }
             .testTag("eligibility_gauge")
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -238,6 +312,25 @@ fun AnimatedEligibilityGauge(
                     radius = size.minDimension * 0.50f
                 )
             }
+
+            // Thin-Film Liquid-Glass Center Lens Orb behind the 80% centerpiece
+            val center = Offset(size.width / 2f, size.height / 2f) + lensOffset.value
+            val dragMag = (lensOffset.value.getDistance() / 22f).coerceIn(0f, 1f)
+            val stretchX = 1f + (lensOffset.value.x.absoluteValue / 110f) + lensPressIntensity * 0.04f
+            val squashY = 1f + (lensOffset.value.y.absoluteValue / 110f) + lensPressIntensity * 0.04f
+            val baseOrbDiameter = size.minDimension * 0.64f
+            val orbW = baseOrbDiameter * stretchX
+            val orbH = baseOrbDiameter * squashY
+            drawThinFilmLiquidBubble(
+                topLeft = Offset(center.x - orbW / 2f, center.y - orbH / 2f),
+                bubbleSize = Size(orbW, orbH),
+                cornerRadius = CornerRadius(orbW / 2f, orbH / 2f),
+                baseTint = accentColor,
+                isDark = isDark,
+                velocityNorm = (lensOffset.value.x / 22f).coerceIn(-1f, 1f),
+                phaseRad = shimmerPhase,
+                pressIntensity = (lensPressIntensity + dragMag * 0.5f).coerceIn(0f, 1f)
+            )
 
             // Background track
             drawArc(
@@ -1182,6 +1275,53 @@ fun DailyCheckInDialog(
                                     Triple(AttendanceStatus.MEDICAL, Icons.Rounded.LocalHospital, "Sick / medical certificate • Counts as present"),
                                     Triple(AttendanceStatus.HOLIDAY, Icons.Rounded.NightsStay, "School closed / no classes")
                                 )
+
+                                val reasonStatuses = remember {
+                                    listOf(
+                                        AttendanceStatus.ABSENT,
+                                        AttendanceStatus.SCHOOL_EVENT,
+                                        AttendanceStatus.MEDICAL,
+                                        AttendanceStatus.HOLIDAY
+                                    )
+                                }
+                                val reasonSliderOptions = remember(semantic) {
+                                    listOf(
+                                        LiquidGlassSegmentOption(
+                                            label = "Absent",
+                                            testTag = "checkin_slider_absent",
+                                            tintColor = semantic.absent
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Event",
+                                            testTag = "checkin_slider_event",
+                                            tintColor = semantic.schoolEvent
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Medical",
+                                            testTag = "checkin_slider_medical",
+                                            tintColor = semantic.medical
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Off Day",
+                                            testTag = "checkin_slider_holiday",
+                                            tintColor = semantic.poya
+                                        )
+                                    )
+                                }
+                                SlidableLiquidGlassSegmentedBar(
+                                    options = reasonSliderOptions,
+                                    selectedIndex = reasonStatuses.indexOf(selectedNoStatus).coerceAtLeast(0),
+                                    onOptionSelected = { idx ->
+                                        reasonStatuses.getOrNull(idx)?.let { selectedNoStatus = it }
+                                    },
+                                    barHeight = 42.dp,
+                                    defaultTint = semantic.absent,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("checkin_reason_slider")
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
 
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     reasonOptions.forEach { (status, icon, desc) ->

@@ -7,33 +7,47 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,18 +56,21 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -65,11 +82,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -78,8 +101,12 @@ import androidx.compose.ui.util.lerp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -159,6 +186,719 @@ enum class BubbleLookPreset(
             Color(0xFFEC4899)
         )
     )
+}
+
+/**
+ * Option model for [SlidableLiquidGlassSegmentedBar].
+ */
+data class LiquidGlassSegmentOption(
+    val label: String,
+    val testTag: String,
+    val icon: ImageVector? = null,
+    val tintColor: Color? = null
+)
+
+/**
+ * Draws a thin-film iridescent liquid-glass pill or orb inside a [DrawScope],
+ * including soap-bubble thin-film chromatic interference along the curved rim,
+ * inner Fresnel sheen, and velocity-reactive specular reflection.
+ */
+fun DrawScope.drawThinFilmLiquidBubble(
+    topLeft: Offset,
+    bubbleSize: Size,
+    cornerRadius: CornerRadius,
+    baseTint: Color,
+    isDark: Boolean,
+    velocityNorm: Float = 0f,
+    phaseRad: Float = 0f,
+    pressIntensity: Float = 0f
+) {
+    if (bubbleSize.width <= 1f || bubbleSize.height <= 1f) return
+
+    val center = Offset(
+        x = topLeft.x + bubbleSize.width / 2f,
+        y = topLeft.y + bubbleSize.height / 2f
+    )
+
+    // 1. Soft outer thin-film halo glow
+    val glowAlpha = (if (isDark) 0.24f else 0.18f) + pressIntensity * 0.08f
+    drawRoundRect(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                baseTint.copy(alpha = glowAlpha),
+                Color(0xFF60A5FA).copy(alpha = glowAlpha * 0.6f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = maxOf(bubbleSize.width, bubbleSize.height) * 0.72f
+        ),
+        topLeft = topLeft,
+        size = bubbleSize,
+        cornerRadius = cornerRadius
+    )
+
+    // 2. Translucent liquid-glass body with Fresnel edge brightness
+    val bodyTopColor = if (isDark) {
+        Color.White.copy(alpha = 0.24f + pressIntensity * 0.06f)
+    } else {
+        Color.White.copy(alpha = 0.86f + pressIntensity * 0.08f)
+    }
+    val bodyMidColor = baseTint.copy(alpha = if (isDark) 0.28f else 0.22f)
+    val bodyBottomColor = if (isDark) {
+        baseTint.copy(alpha = 0.20f)
+    } else {
+        Color.White.copy(alpha = 0.68f)
+    }
+
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(bodyTopColor, bodyMidColor, bodyBottomColor),
+            startY = topLeft.y,
+            endY = topLeft.y + bubbleSize.height
+        ),
+        topLeft = topLeft,
+        size = bubbleSize,
+        cornerRadius = cornerRadius
+    )
+
+    // 3. Thin-film soap-bubble interference rim (chromatic dispersion shifted by velocity + phase)
+    val shiftX = cos(phaseRad + velocityNorm * 1.4f) * bubbleSize.width * 0.35f
+    val shiftY = sin(phaseRad) * bubbleSize.height * 0.35f
+    val iridescentRim = Brush.linearGradient(
+        colors = listOf(
+            Color.White.copy(alpha = if (isDark) 0.85f else 0.96f),
+            Color(0xFF60A5FA).copy(alpha = if (isDark) 0.78f else 0.72f),
+            baseTint.copy(alpha = 0.90f),
+            Color(0xFFF472B6).copy(alpha = if (isDark) 0.72f else 0.65f),
+            Color(0xFFFBBF24).copy(alpha = if (isDark) 0.70f else 0.62f),
+            Color(0xFF34D399).copy(alpha = if (isDark) 0.76f else 0.68f),
+            Color.White.copy(alpha = if (isDark) 0.85f else 0.96f)
+        ),
+        start = Offset(topLeft.x + shiftX, topLeft.y + shiftY),
+        end = Offset(
+            topLeft.x + bubbleSize.width - shiftX,
+            topLeft.y + bubbleSize.height - shiftY
+        )
+    )
+    drawRoundRect(
+        brush = iridescentRim,
+        topLeft = topLeft,
+        size = bubbleSize,
+        cornerRadius = cornerRadius,
+        style = Stroke(width = (1.5f + pressIntensity * 0.5f).dp.toPx())
+    )
+
+    // 4. Top specular lens highlight arc (shifts opposite to motion direction like a real water droplet)
+    val highlightInsetX = bubbleSize.width * 0.14f - (velocityNorm * bubbleSize.width * 0.06f)
+    val highlightWidth = (bubbleSize.width * 0.72f).coerceAtLeast(4f)
+    val highlightHeight = (bubbleSize.height * 0.34f).coerceAtLeast(2f)
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = if (isDark) 0.45f else 0.78f),
+                Color.White.copy(alpha = 0f)
+            ),
+            startY = topLeft.y + 2.dp.toPx(),
+            endY = topLeft.y + 2.dp.toPx() + highlightHeight
+        ),
+        topLeft = Offset(
+            x = (topLeft.x + highlightInsetX).coerceIn(topLeft.x + 2f, topLeft.x + bubbleSize.width - 4f),
+            y = topLeft.y + 2.dp.toPx()
+        ),
+        size = Size(
+            width = highlightWidth.coerceAtMost(bubbleSize.width - 4f),
+            height = highlightHeight
+        ),
+        cornerRadius = CornerRadius(cornerRadius.x * 0.85f, cornerRadius.y * 0.85f)
+    )
+}
+
+/**
+ * Slidable Thin-Film Liquid-Glass Segmented Bar.
+ *
+ * Supports both:
+ * - **Tap-to-Glide:** Spring-driven glide to any segment with overshoot bounce.
+ * - **Touch-and-Slide Scrubbing:** Drag the liquid-glass bubble continuously across segments
+ *   with kinematic velocity squash-and-stretch (`scaleX` / `scaleY`), press swell,
+ *   dynamic thin-film tint morphing, and haptic ticks on segment boundaries.
+ */
+@Composable
+fun SlidableLiquidGlassSegmentedBar(
+    options: List<LiquidGlassSegmentOption>,
+    selectedIndex: Int,
+    onOptionSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    barHeight: Dp = 46.dp,
+    defaultTint: Color = MaterialTheme.colorScheme.primary
+) {
+    if (options.isEmpty()) return
+    val count = options.size
+    val safeSelected = selectedIndex.coerceIn(0, count - 1)
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val latestOnSelected by rememberUpdatedState(onOptionSelected)
+
+    // Continuous fractional slot position in [0f, (count - 1).toFloat()]
+    val slotAnim = remember { Animatable(safeSelected.toFloat()) }
+    var isDragging by remember { mutableStateOf(false) }
+    var lastHapticSlot by remember { mutableStateOf(safeSelected) }
+
+    // Kinematic velocity squash & stretch state
+    var stretchX by remember { mutableFloatStateOf(1f) }
+    var squashY by remember { mutableFloatStateOf(1f) }
+    var normalizedVelocity by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(safeSelected, isDragging) {
+        if (!isDragging) {
+            lastHapticSlot = safeSelected
+            slotAnim.animateTo(
+                targetValue = safeSelected.toFloat(),
+                animationSpec = spring(
+                    dampingRatio = 0.66f,
+                    stiffness = 380f
+                )
+            )
+        }
+    }
+
+    // Spring-damped squash & stretch physics loop while the bubble is moving or being dragged
+    val isBubbleActive = isDragging || slotAnim.isRunning || abs(stretchX - 1f) > 0.004f
+    LaunchedEffect(isBubbleActive) {
+        if (!isBubbleActive) {
+            stretchX = 1f
+            squashY = 1f
+            normalizedVelocity = 0f
+            return@LaunchedEffect
+        }
+        var prevSlot = slotAnim.value
+        var lastNanos = withFrameNanos { it }
+        var smoothedVel = 0f
+        var defX = stretchX - 1f
+        var defVelX = 0f
+
+        while (isDragging || slotAnim.isRunning || abs(defX) > 0.003f || abs(defVelX) > 0.01f) {
+            val now = withFrameNanos { it }
+            val dt = ((now - lastNanos) / 1_000_000_000f).coerceIn(0.001f, 0.032f)
+            lastNanos = now
+
+            val curSlot = slotAnim.value
+            val rawVel = (curSlot - prevSlot) / dt // slots per second
+            prevSlot = curSlot
+
+            smoothedVel += (rawVel - smoothedVel) * 0.22f
+            normalizedVelocity = (smoothedVel / 6f).coerceIn(-1f, 1f)
+
+            val targetDef = (abs(smoothedVel) * 0.042f).coerceIn(0f, 0.28f)
+            val force = (targetDef - defX) * 980f - defVelX * 28f
+            defVelX += force * dt
+            defX = (defX + defVelX * dt).coerceIn(-0.08f, 0.32f)
+
+            val sX = (1f + defX).coerceIn(0.92f, 1.32f)
+            stretchX = sX
+            squashY = (1f / sqrt(sX)).coerceIn(0.84f, 1.05f)
+        }
+        stretchX = 1f
+        squashY = 1f
+        normalizedVelocity = 0f
+    }
+
+    val pressScale by animateFloatAsState(
+        targetValue = if (isDragging) 1.05f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "seg_bubble_press_scale"
+    )
+    val pressIntensity by animateFloatAsState(
+        targetValue = if (isDragging) 1f else 0f,
+        animationSpec = tween(180),
+        label = "seg_bubble_press_intensity"
+    )
+
+    val activeVisualIndex = slotAnim.value.roundToInt().coerceIn(0, count - 1)
+    val targetTint = options[activeVisualIndex].tintColor ?: defaultTint
+    val bubbleTint by animateColorAsState(
+        targetValue = targetTint,
+        animationSpec = tween(240),
+        label = "seg_bubble_tint"
+    )
+
+    val infinite = rememberInfiniteTransition(label = "seg_thin_film_shimmer")
+    val shimmerPhase by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 4800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "seg_shimmer_phase"
+    )
+
+    val trackShape = RoundedCornerShape(24.dp)
+    val trackBg = if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    val trackBorder = if (isDark) {
+        Color.White.copy(alpha = 0.16f)
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(barHeight)
+            .clip(trackShape)
+            .background(trackBg)
+            .border(BorderStroke(1.dp, trackBorder), trackShape)
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+    ) {
+        val density = LocalDensity.current
+        val totalWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val slotWidthPx = (totalWidthPx / count.toFloat()).coerceAtLeast(1f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(count, slotWidthPx) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { startOffset ->
+                            isDragging = true
+                            val touchedSlot = ((startOffset.x / slotWidthPx) - 0.5f)
+                                .coerceIn(0f, (count - 1).toFloat())
+                            val nearest = touchedSlot.roundToInt().coerceIn(0, count - 1)
+                            lastHapticSlot = nearest
+                            scope.launch {
+                                slotAnim.animateTo(
+                                    targetValue = touchedSlot,
+                                    animationSpec = spring(
+                                        dampingRatio = 0.8f,
+                                        stiffness = 700f
+                                    )
+                                )
+                            }
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val nextSlot = (slotAnim.value + (dragAmount / slotWidthPx))
+                                .coerceIn(-0.08f, (count - 1).toFloat() + 0.08f)
+                            scope.launch { slotAnim.snapTo(nextSlot) }
+
+                            val nearest = nextSlot.roundToInt().coerceIn(0, count - 1)
+                            if (nearest != lastHapticSlot) {
+                                lastHapticSlot = nearest
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                latestOnSelected(nearest)
+                            }
+                        },
+                        onDragEnd = {
+                            val targetIdx = slotAnim.value.roundToInt().coerceIn(0, count - 1)
+                            isDragging = false
+                            if (targetIdx != safeSelected) {
+                                latestOnSelected(targetIdx)
+                            }
+                            scope.launch {
+                                slotAnim.animateTo(
+                                    targetValue = targetIdx.toFloat(),
+                                    animationSpec = spring(
+                                        dampingRatio = 0.62f,
+                                        stiffness = 380f
+                                    )
+                                )
+                            }
+                        },
+                        onDragCancel = {
+                            val targetIdx = slotAnim.value.roundToInt().coerceIn(0, count - 1)
+                            isDragging = false
+                            scope.launch {
+                                slotAnim.animateTo(
+                                    targetValue = targetIdx.toFloat(),
+                                    animationSpec = spring(
+                                        dampingRatio = 0.66f,
+                                        stiffness = 380f
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+                .drawBehind {
+                    val itemW = size.width / count.toFloat()
+                    val itemH = size.height
+                    val centerSlot = slotAnim.value
+                    val baseCenterX = (centerSlot + 0.5f) * itemW
+                    val centerY = itemH / 2f
+
+                    val bubbleW = (itemW * stretchX * pressScale).coerceAtLeast(12f)
+                    val bubbleH = (itemH * squashY * pressScale).coerceAtLeast(12f)
+                    val topLeft = Offset(
+                        x = baseCenterX - bubbleW / 2f,
+                        y = centerY - bubbleH / 2f
+                    )
+                    val radiusPx = bubbleH / 2f
+
+                    drawThinFilmLiquidBubble(
+                        topLeft = topLeft,
+                        bubbleSize = Size(bubbleW, bubbleH),
+                        cornerRadius = CornerRadius(radiusPx, radiusPx),
+                        baseTint = bubbleTint,
+                        isDark = isDark,
+                        velocityNorm = normalizedVelocity,
+                        phaseRad = shimmerPhase,
+                        pressIntensity = pressIntensity
+                    )
+                }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                options.forEachIndexed { index, option ->
+                    val distance = abs(slotAnim.value - index.toFloat()).coerceIn(0f, 1f)
+                    val selectedFraction = 1f - distance
+                    val itemScale = lerp(0.96f, 1.04f, selectedFraction)
+                    val itemTint = androidx.compose.ui.graphics.lerp(
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (isDark) Color.White else (option.tintColor ?: MaterialTheme.colorScheme.primary),
+                        selectedFraction
+                    )
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .graphicsLayer {
+                                scaleX = itemScale
+                                scaleY = itemScale
+                            }
+                            .clip(RoundedCornerShape(20.dp))
+                            .selectable(
+                                selected = index == safeSelected,
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                role = Role.Tab,
+                                onClick = {
+                                    if (index != safeSelected) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
+                                    latestOnSelected(index)
+                                }
+                            )
+                            .testTag(option.testTag)
+                            .padding(horizontal = 6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            if (option.icon != null) {
+                                Icon(
+                                    imageVector = option.icon,
+                                    contentDescription = null,
+                                    tint = itemTint,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                            }
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = if (selectedFraction > 0.55f) FontWeight.ExtraBold else FontWeight.Medium
+                                ),
+                                color = itemTint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Interactive Thin-Film Liquid-Glass Droplet Slider for the "What-If" Attendance Simulator.
+ *
+ * The thumb is a refractive thin-film liquid-glass droplet that swells when grabbed,
+ * stretches horizontally with drag velocity (`scaleX` / `scaleY`), shifts its interference
+ * tint dynamically (Emerald when eligible, Crimson/Amber when at risk), and displays
+ * the live day count inside the lens.
+ */
+@Composable
+fun LiquidGlassDropletSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..15f,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
+    thumbBadgeText: String? = null
+) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
+
+    val minVal = valueRange.start
+    val maxVal = valueRange.endInclusive
+    val rangeSpan = (maxVal - minVal).coerceAtLeast(1f)
+    val clampedFraction = ((value - minVal) / rangeSpan).coerceIn(0f, 1f)
+
+    val fractionAnim = remember { Animatable(clampedFraction) }
+    var isDragging by remember { mutableStateOf(false) }
+    var lastDiscreteDay by remember { mutableStateOf(value.roundToInt()) }
+
+    var stretchX by remember { mutableFloatStateOf(1f) }
+    var squashY by remember { mutableFloatStateOf(1f) }
+    var velocityNorm by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(clampedFraction, isDragging) {
+        if (!isDragging) {
+            fractionAnim.animateTo(
+                targetValue = clampedFraction,
+                animationSpec = spring(
+                    dampingRatio = 0.68f,
+                    stiffness = 420f
+                )
+            )
+        }
+    }
+
+    val isLoopActive = isDragging || fractionAnim.isRunning || abs(stretchX - 1f) > 0.004f
+    LaunchedEffect(isLoopActive) {
+        if (!isLoopActive) {
+            stretchX = 1f
+            squashY = 1f
+            velocityNorm = 0f
+            return@LaunchedEffect
+        }
+        var prevFrac = fractionAnim.value
+        var lastNanos = withFrameNanos { it }
+        var smoothedVel = 0f
+        var defX = stretchX - 1f
+        var defVelX = 0f
+
+        while (isDragging || fractionAnim.isRunning || abs(defX) > 0.003f || abs(defVelX) > 0.01f) {
+            val now = withFrameNanos { it }
+            val dt = ((now - lastNanos) / 1_000_000_000f).coerceIn(0.001f, 0.032f)
+            lastNanos = now
+
+            val curFrac = fractionAnim.value
+            val rawVel = (curFrac - prevFrac) / dt
+            prevFrac = curFrac
+
+            smoothedVel += (rawVel - smoothedVel) * 0.24f
+            velocityNorm = (smoothedVel / 2.2f).coerceIn(-1f, 1f)
+
+            val targetDef = (abs(smoothedVel) * 0.14f).coerceIn(0f, 0.30f)
+            val force = (targetDef - defX) * 1050f - defVelX * 30f
+            defVelX += force * dt
+            defX = (defX + defVelX * dt).coerceIn(-0.08f, 0.32f)
+
+            val sX = (1f + defX).coerceIn(0.92f, 1.32f)
+            stretchX = sX
+            squashY = (1f / sqrt(sX)).coerceIn(0.84f, 1.05f)
+        }
+        stretchX = 1f
+        squashY = 1f
+        velocityNorm = 0f
+    }
+
+    val pressScale by animateFloatAsState(
+        targetValue = if (isDragging) 1.18f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "droplet_slider_press_scale"
+    )
+    val pressIntensity by animateFloatAsState(
+        targetValue = if (isDragging) 1f else 0f,
+        animationSpec = tween(160),
+        label = "droplet_slider_press_intensity"
+    )
+    val animatedAccent by animateColorAsState(
+        targetValue = accentColor,
+        animationSpec = tween(260),
+        label = "droplet_slider_accent"
+    )
+
+    val infinite = rememberInfiniteTransition(label = "droplet_slider_shimmer")
+    val shimmerPhase by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 4200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "droplet_shimmer_phase"
+    )
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        val density = LocalDensity.current
+        val totalW = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val thumbBaseW = with(density) { 46.dp.toPx() }
+        val thumbBaseH = with(density) { 32.dp.toPx() }
+        val usableTrackW = (totalW - thumbBaseW).coerceAtLeast(1f)
+
+        fun updateFromX(xPx: Float, snapSmooth: Boolean) {
+            val frac = ((xPx - thumbBaseW / 2f) / usableTrackW).coerceIn(0f, 1f)
+            val rawVal = minVal + frac * rangeSpan
+            val discrete = rawVal.roundToInt()
+            if (discrete != lastDiscreteDay) {
+                lastDiscreteDay = discrete
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            latestOnValueChange(discrete.toFloat())
+            scope.launch {
+                if (snapSmooth) {
+                    fractionAnim.animateTo(
+                        targetValue = ((discrete - minVal) / rangeSpan).coerceIn(0f, 1f),
+                        animationSpec = spring(dampingRatio = 0.65f, stiffness = 450f)
+                    )
+                } else {
+                    fractionAnim.snapTo(frac)
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(usableTrackW) {
+                    detectTapGestures { tapOffset ->
+                        updateFromX(tapOffset.x, snapSmooth = true)
+                    }
+                }
+                .pointerInput(usableTrackW) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { startOffset ->
+                            isDragging = true
+                            updateFromX(startOffset.x, snapSmooth = false)
+                        },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            updateFromX(change.position.x, snapSmooth = false)
+                        },
+                        onDragEnd = {
+                            isDragging = false
+                            val snappedFrac = ((value.roundToInt() - minVal) / rangeSpan).coerceIn(0f, 1f)
+                            scope.launch {
+                                fractionAnim.animateTo(
+                                    targetValue = snappedFrac,
+                                    animationSpec = spring(dampingRatio = 0.62f, stiffness = 420f)
+                                )
+                            }
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                        }
+                    )
+                }
+                .drawBehind {
+                    val trackY = size.height / 2f
+                    val trackH = 10.dp.toPx()
+                    val startX = thumbBaseW / 2f
+                    val endX = size.width - thumbBaseW / 2f
+                    val trackW = (endX - startX).coerceAtLeast(1f)
+                    val curX = startX + fractionAnim.value * trackW
+
+                    // Inactive glass rail
+                    drawRoundRect(
+                        color = if (isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.08f),
+                        topLeft = Offset(startX, trackY - trackH / 2f),
+                        size = Size(trackW, trackH),
+                        cornerRadius = CornerRadius(trackH, trackH)
+                    )
+
+                    // Active liquid fill rail
+                    val fillW = (curX - startX).coerceAtLeast(0f)
+                    if (fillW > 1f) {
+                        drawRoundRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    animatedAccent.copy(alpha = 0.45f),
+                                    animatedAccent.copy(alpha = 0.92f)
+                                ),
+                                startX = startX,
+                                endX = curX
+                            ),
+                            topLeft = Offset(startX, trackY - trackH / 2f),
+                            size = Size(fillW, trackH),
+                            cornerRadius = CornerRadius(trackH, trackH)
+                        )
+                    }
+
+                    // Step tick dots along the rail
+                    val stepCount = rangeSpan.roundToInt().coerceAtLeast(1)
+                    for (i in 0..stepCount) {
+                        val tickX = startX + (i.toFloat() / stepCount.toFloat()) * trackW
+                        val passed = tickX <= curX + 1f
+                        drawCircle(
+                            color = if (passed) {
+                                Color.White.copy(alpha = 0.85f)
+                            } else {
+                                if (isDark) Color.White.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.18f)
+                            },
+                            radius = 2.dp.toPx(),
+                            center = Offset(tickX, trackY)
+                        )
+                    }
+
+                    // Thin-Film Liquid-Glass Droplet Thumb
+                    val activeW = thumbBaseW * stretchX * pressScale
+                    val activeH = thumbBaseH * squashY * pressScale
+                    val thumbTopLeft = Offset(
+                        x = curX - activeW / 2f,
+                        y = trackY - activeH / 2f
+                    )
+                    drawThinFilmLiquidBubble(
+                        topLeft = thumbTopLeft,
+                        bubbleSize = Size(activeW, activeH),
+                        cornerRadius = CornerRadius(activeH / 2f, activeH / 2f),
+                        baseTint = animatedAccent,
+                        isDark = isDark,
+                        velocityNorm = velocityNorm,
+                        phaseRad = shimmerPhase,
+                        pressIntensity = pressIntensity
+                    )
+                }
+        ) {
+            val labelText = thumbBadgeText ?: "${value.roundToInt()}d"
+            val curCenterOffsetPx = (thumbBaseW / 2f) + fractionAnim.value * usableTrackW
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = (curCenterOffsetPx - thumbBaseW / 2f).roundToInt(),
+                            y = 0
+                        )
+                    }
+                    .size(width = 46.dp, height = 32.dp)
+                    .graphicsLayer {
+                        scaleX = pressScale
+                        scaleY = pressScale
+                    }
+            ) {
+                Text(
+                    text = labelText,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold
+                    ),
+                    color = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
 }
 
 private const val THIN_FILM_BUBBLE_SHADER_SRC = """
@@ -541,7 +1281,6 @@ fun ThinFilmBubbleInteractiveCard(
                         .testTag("bubble_theme_toggle_button")
                 )
 
-                // Subtle badge in top-left
                 Surface(
                     color = (if (isDarkTheme) Color.White else Color(0xFF0F2242)).copy(alpha = 0.12f),
                     shape = RoundedCornerShape(999.dp),
@@ -988,10 +1727,6 @@ private fun Modifier.bubbleShaderLayer(
     }
 }
 
-/**
- * Rich iridescent glass bubble fallback for Android 7–12 (API < 33),
- * complete with pop expansion and specular highlights.
- */
 @Composable
 private fun BubbleFallback(
     state: BubbleState,
@@ -1027,7 +1762,6 @@ private fun BubbleFallback(
             radius = activeRadius * 0.96f,
             style = Stroke(width = 3.dp.toPx())
         )
-        // Specular highlight dot
         drawCircle(
             color = Color.White.copy(alpha = 0.75f * fadeAlpha),
             radius = activeRadius * 0.14f,

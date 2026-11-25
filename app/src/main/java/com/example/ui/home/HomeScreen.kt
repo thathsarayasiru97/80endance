@@ -116,8 +116,10 @@ import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
 import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.HOME_HEADER_PILL_HEIGHT
+import com.example.ui.components.LiquidGlassSegmentOption
 import com.example.ui.components.ResolvedFeedbackBanner
 import com.example.ui.components.RollingCounterText
+import com.example.ui.components.SlidableLiquidGlassSegmentedBar
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.StreakAndWeeklyCard
 import com.example.ui.components.SwipeCatchUpDeckDialog
@@ -633,36 +635,30 @@ fun HomeScreen(
                                 .fillMaxWidth()
                                 .padding(20.dp)
                         ) {
-                            SingleChoiceSegmentedButtonRow(
+                            val scopeOrder = remember {
+                                listOf(
+                                    DashboardScopeMode.CURRENT_MONTH,
+                                    DashboardScopeMode.OVERALL_AL,
+                                    DashboardScopeMode.CURRENT_TERM
+                                )
+                            }
+                            val scopeOptions = remember {
+                                listOf(
+                                    LiquidGlassSegmentOption(label = "Month", testTag = "scope_tab_month"),
+                                    LiquidGlassSegmentOption(label = "Overall", testTag = "scope_tab_overall"),
+                                    LiquidGlassSegmentOption(label = "Term", testTag = "scope_tab_term")
+                                )
+                            }
+                            SlidableLiquidGlassSegmentedBar(
+                                options = scopeOptions,
+                                selectedIndex = scopeOrder.indexOf(scopeMode).coerceAtLeast(0),
+                                onOptionSelected = { idx ->
+                                    scopeOrder.getOrNull(idx)?.let(onScopeModeChange)
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("scope_mode_toggle")
-                            ) {
-                                SegmentedButton(
-                                    selected = scopeMode == DashboardScopeMode.CURRENT_MONTH,
-                                    onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_MONTH) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-                                    modifier = Modifier.testTag("scope_tab_month")
-                                ) {
-                                    Text("Month", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                SegmentedButton(
-                                    selected = scopeMode == DashboardScopeMode.OVERALL_AL,
-                                    onClick = { onScopeModeChange(DashboardScopeMode.OVERALL_AL) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                                    modifier = Modifier.testTag("scope_tab_overall")
-                                ) {
-                                    Text("Overall", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                SegmentedButton(
-                                    selected = scopeMode == DashboardScopeMode.CURRENT_TERM,
-                                    onClick = { onScopeModeChange(DashboardScopeMode.CURRENT_TERM) },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-                                    modifier = Modifier.testTag("scope_tab_term")
-                                ) {
-                                    Text("Term", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
+                            )
 
                             Spacer(modifier = Modifier.height(8.dp))
 
@@ -1069,74 +1065,129 @@ fun HomeScreen(
                             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(18.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = DateUtils.formatReadableShort(todayKey),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        AnimatedVisibility(
-                                            visible = todayRec?.statusEnum == AttendanceStatus.PRESENT ||
-                                                todayRec?.statusEnum == AttendanceStatus.SCHOOL_EVENT ||
-                                                todayRec?.statusEnum == AttendanceStatus.MEDICAL,
-                                            enter = fadeIn() + scaleIn(
-                                                initialScale = 0.5f,
-                                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
-                                            )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = DateUtils.formatReadableShort(todayKey),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.CheckCircle,
-                                                contentDescription = "Logged present",
-                                                tint = semantic.present,
-                                                modifier = Modifier.size(20.dp)
+                                            AnimatedVisibility(
+                                                visible = todayRec?.statusEnum == AttendanceStatus.PRESENT ||
+                                                    todayRec?.statusEnum == AttendanceStatus.SCHOOL_EVENT ||
+                                                    todayRec?.statusEnum == AttendanceStatus.MEDICAL,
+                                                enter = fadeIn() + scaleIn(
+                                                    initialScale = 0.5f,
+                                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                                                )
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.CheckCircle,
+                                                    contentDescription = "Logged present",
+                                                    tint = semantic.present,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = when {
+                                                    todayRec != null -> "Today: ${todayRec.statusEnum.label}"
+                                                    else -> "Did you attend school today?"
+                                                },
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
                                         }
-                                        Text(
-                                            text = when {
-                                                todayRec != null -> "Today: ${todayRec.statusEnum.label}"
-                                                else -> "Did you attend school today?"
-                                            },
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
+                                        if (todayRec?.note?.isNotBlank() == true) {
+                                            Text(
+                                                text = todayRec.note,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
-                                    if (todayRec?.note?.isNotBlank() == true) {
-                                        Text(
-                                            text = todayRec.note,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    LiquidGlassButton(
+                                        onClick = { onOpenCheckIn(todayKey) },
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.primary,
+                                        minHeight = 48.dp,
+                                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                                        modifier = Modifier.testTag("home_checkin_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (todayRec == null) Icons.Rounded.AddTask else Icons.Rounded.Edit,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
                                         )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(if (todayRec == null) "Check In" else "Edit")
                                     }
                                 }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                LiquidGlassButton(
-                                    onClick = { onOpenCheckIn(todayKey) },
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.primary,
-                                    minHeight = 48.dp,
-                                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                                    modifier = Modifier.testTag("home_checkin_button")
-                                ) {
-                                    Icon(
-                                        imageVector = if (todayRec == null) Icons.Rounded.AddTask else Icons.Rounded.Edit,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+
+                                // Slidable Thin-Film Liquid-Glass Today Status Switcher
+                                val quickStatuses = remember {
+                                    listOf(
+                                        AttendanceStatus.PRESENT,
+                                        AttendanceStatus.MEDICAL,
+                                        AttendanceStatus.SCHOOL_EVENT,
+                                        AttendanceStatus.ABSENT
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (todayRec == null) "Check In" else "Edit")
                                 }
+                                val quickStatusOptions = remember(semantic) {
+                                    listOf(
+                                        LiquidGlassSegmentOption(
+                                            label = "Present",
+                                            testTag = "home_today_status_present",
+                                            tintColor = semantic.present
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Medical",
+                                            testTag = "home_today_status_medical",
+                                            tintColor = semantic.medical
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Event",
+                                            testTag = "home_today_status_event",
+                                            tintColor = semantic.schoolEvent
+                                        ),
+                                        LiquidGlassSegmentOption(
+                                            label = "Absent",
+                                            testTag = "home_today_status_absent",
+                                            tintColor = semantic.absent
+                                        )
+                                    )
+                                }
+                                val currentTodayIdx = quickStatuses.indexOf(todayRec?.statusEnum ?: AttendanceStatus.PRESENT)
+                                    .coerceAtLeast(0)
+                                SlidableLiquidGlassSegmentedBar(
+                                    options = quickStatusOptions,
+                                    selectedIndex = currentTodayIdx,
+                                    onOptionSelected = { idx ->
+                                        quickStatuses.getOrNull(idx)?.let { status ->
+                                            onQuickLogDate(todayKey, status)
+                                        }
+                                    },
+                                    barHeight = 42.dp,
+                                    defaultTint = semantic.present,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("home_today_status_slider")
+                                )
                             }
                         }
                     }

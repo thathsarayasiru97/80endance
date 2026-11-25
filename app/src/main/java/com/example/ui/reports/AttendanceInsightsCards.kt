@@ -87,6 +87,9 @@ import com.example.data.MonthlyAttendancePoint
 import com.example.data.StudentTrendSummary
 import com.example.data.TrendsTimeframe
 import com.example.data.UserProfile
+import com.example.ui.components.LiquidGlassDropletSlider
+import com.example.ui.components.LiquidGlassSegmentOption
+import com.example.ui.components.SlidableLiquidGlassSegmentedBar
 import com.example.ui.theme.LocalAttendanceColors
 import java.util.Locale
 import kotlin.math.abs
@@ -158,24 +161,27 @@ fun WhatIfSkipSimulatorCard(
                 }
             }
 
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                SegmentedButton(
-                    selected = simulateSkips,
-                    onClick = { simulateSkips = true },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    modifier = Modifier.testTag("sim_mode_skip")
-                ) {
-                    Text("If I skip days")
-                }
-                SegmentedButton(
-                    selected = !simulateSkips,
-                    onClick = { simulateSkips = false },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    modifier = Modifier.testTag("sim_mode_attend")
-                ) {
-                    Text("If I attend next")
-                }
+            val simModeOptions = remember(semantic) {
+                listOf(
+                    LiquidGlassSegmentOption(
+                        label = "If I skip days",
+                        testTag = "sim_mode_skip",
+                        tintColor = semantic.absent
+                    ),
+                    LiquidGlassSegmentOption(
+                        label = "If I attend next",
+                        testTag = "sim_mode_attend",
+                        tintColor = semantic.present
+                    )
+                )
             }
+            SlidableLiquidGlassSegmentedBar(
+                options = simModeOptions,
+                selectedIndex = if (simulateSkips) 0 else 1,
+                onOptionSelected = { idx -> simulateSkips = (idx == 0) },
+                defaultTint = if (simulateSkips) semantic.absent else semantic.present,
+                modifier = Modifier.fillMaxWidth()
+            )
 
             // Projected result banner with smooth emerald <-> crimson color morph & spring numbers
             val resultBg by animateColorAsState(
@@ -314,11 +320,12 @@ fun WhatIfSkipSimulatorCard(
                     )
                 }
 
-                Slider(
+                LiquidGlassDropletSlider(
                     value = daysSlider,
                     onValueChange = { daysSlider = it },
                     valueRange = 0f..15f,
-                    steps = 14,
+                    accentColor = if (projection.willStayEligible) semantic.present else semantic.absent,
+                    thumbBadgeText = "${selectedDays}d",
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("sim_days_slider")
@@ -469,46 +476,30 @@ fun AttendancePatternsAndChartCard(
             }
 
             // Synchronized Scope Selector (Everyone [default] | My Stats)
-            SingleChoiceSegmentedButtonRow(
+            val trendsScopeOptions = remember {
+                listOf(
+                    LiquidGlassSegmentOption(
+                        label = "Everyone",
+                        testTag = "trends_tab_everyone",
+                        icon = Icons.Rounded.Groups
+                    ),
+                    LiquidGlassSegmentOption(
+                        label = "My Stats",
+                        testTag = "trends_tab_personal",
+                        icon = Icons.Rounded.Person
+                    )
+                )
+            }
+            SlidableLiquidGlassSegmentedBar(
+                options = trendsScopeOptions,
+                selectedIndex = pagerState.currentPage.coerceIn(0, 1),
+                onOptionSelected = { idx ->
+                    coroutineScope.launch { pagerState.animateScrollToPage(idx) }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("trends_scope_switcher")
-            ) {
-                SegmentedButton(
-                    selected = pagerState.currentPage == 0,
-                    onClick = {
-                        coroutineScope.launch { pagerState.animateScrollToPage(0) }
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Groups,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    },
-                    modifier = Modifier.testTag("trends_tab_everyone")
-                ) {
-                    Text("Everyone", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                SegmentedButton(
-                    selected = pagerState.currentPage == 1,
-                    onClick = {
-                        coroutineScope.launch { pagerState.animateScrollToPage(1) }
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Person,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    },
-                    modifier = Modifier.testTag("trends_tab_personal")
-                ) {
-                    Text("My Stats", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
+            )
 
             // Slidable 2-Page Content (Page 0 = Everyone, Page 1 = Personal)
             HorizontalPager(
@@ -596,19 +587,21 @@ private fun TrendsInsightSlideContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterChip(
-                selected = timeframe == TrendsTimeframe.ALL_TIME,
-                onClick = { onTimeframeChange(TrendsTimeframe.ALL_TIME) },
-                label = { Text("All Time") },
-                modifier = Modifier.testTag(allTimeTag)
+            val timeframeOptions = remember(allTimeTag, monthlyTag) {
+                listOf(
+                    LiquidGlassSegmentOption(label = "All Time", testTag = allTimeTag),
+                    LiquidGlassSegmentOption(label = "Monthly", testTag = monthlyTag)
+                )
+            }
+            SlidableLiquidGlassSegmentedBar(
+                options = timeframeOptions,
+                selectedIndex = if (timeframe == TrendsTimeframe.ALL_TIME) 0 else 1,
+                onOptionSelected = { idx ->
+                    onTimeframeChange(if (idx == 0) TrendsTimeframe.ALL_TIME else TrendsTimeframe.MONTHLY)
+                },
+                barHeight = 38.dp,
+                modifier = Modifier.weight(1f)
             )
-            FilterChip(
-                selected = timeframe == TrendsTimeframe.MONTHLY,
-                onClick = { onTimeframeChange(TrendsTimeframe.MONTHLY) },
-                label = { Text("Monthly") },
-                modifier = Modifier.testTag(monthlyTag)
-            )
-            Spacer(modifier = Modifier.weight(1f))
             if (isCommunity && insights.contributorCount > 0) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
