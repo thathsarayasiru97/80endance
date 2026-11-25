@@ -22,7 +22,7 @@ object ReleaseNotesCatalog {
     private const val DEFAULT_HEADLINE = "Here's what's new in this update."
 
     private val fallbackEntry = ReleaseNoteEntry(
-        version = BuildConfig.VERSION_NAME.ifBlank { "1.8" },
+        version = BuildConfig.VERSION_NAME.ifBlank { "1.7" },
         headline = DEFAULT_HEADLINE,
         whatsNew = listOf(
             "Smooth Calendar Month Swiping: Swipe left or right directly on the calendar grid and use the quick \"Jump to Today\" pill.",
