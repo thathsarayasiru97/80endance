@@ -118,6 +118,7 @@ import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.LiquidGlassSegmentOption
+import com.example.ui.components.LiquidToggle
 import com.example.ui.components.MorphingThemeToggleButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
@@ -472,9 +473,9 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Switch(
-                                checked = reminderEnabled,
-                                onCheckedChange = { enabled ->
+                            LiquidToggle(
+                                selected = { reminderEnabled },
+                                onSelect = { enabled ->
                                     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
@@ -532,9 +533,9 @@ fun SettingsScreen(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = state.sundayPrepEnabled,
-                                onCheckedChange = { enabled ->
+                            LiquidToggle(
+                                selected = { state.sundayPrepEnabled },
+                                onSelect = { enabled ->
                                     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
@@ -563,9 +564,9 @@ fun SettingsScreen(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = state.afterSchoolUnlockPromptEnabled,
-                                onCheckedChange = { enabled ->
+                            LiquidToggle(
+                                selected = { state.afterSchoolUnlockPromptEnabled },
+                                onSelect = { enabled ->
                                     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
@@ -594,9 +595,9 @@ fun SettingsScreen(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = state.dangerZoneNudgeEnabled,
-                                onCheckedChange = { enabled ->
+                            LiquidToggle(
+                                selected = { state.dangerZoneNudgeEnabled },
+                                onSelect = { enabled ->
                                     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
@@ -757,9 +758,9 @@ fun SettingsScreen(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = state.instantBackgroundAlertsEnabled,
-                                onCheckedChange = { enabled ->
+                            LiquidToggle(
+                                selected = { state.instantBackgroundAlertsEnabled },
+                                onSelect = { enabled ->
                                     if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
