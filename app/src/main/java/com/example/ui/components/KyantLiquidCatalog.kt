@@ -1,14 +1,11 @@
 package com.example.ui.components
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.EaseOut
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.RowScope
@@ -37,11 +34,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.lerp
-import androidx.compose.foundation.clickable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 /**
  * Pill / capsule shape equivalent to `com.kyant.shapes.Capsule()` from the Kyant Backdrop catalog.
@@ -85,16 +80,13 @@ fun RowScope.LiquidBottomTab(
 }
 
 /**
- * Kyant Backdrop catalog `DampedDragAnimation` controller.
+ * Optimized Kyant Backdrop catalog `DampedDragAnimation` controller.
  *
- * Drives the real optical liquid-glass lens pill across `LiquidBottomTabs`, `LiquidSlider`,
- * `LiquidToggle`, and `SlidableLiquidGlassSegmentedBar`, providing:
- * - `value`: continuous animated position
- * - `progress`: normalized `[0f..1f]` progress across `valueRange`
- * - `pressProgress`: `[0f..1f]` spring-animated press intensity driving `lens(..., chromaticAberration = true)`,
- *   `InnerShadow`, `Shadow`, and `Highlight`
- * - `scaleX` / `scaleY`: pressed swell scale
- * - `velocity`: real-time spring velocity driving kinematic squash-and-stretch
+ * Key optimizations for smooth 60/120fps Liquid Glass rendering:
+ * - During active touch dragging, `updateValue()` uses a single non-canceling coroutine or immediate
+ *   `snapTo` / lightweight spring follow without cancelling and spawning a new coroutine on every 120Hz touch sample.
+ * - `animateToValue()` smoothly glides the pill when a tab or track is tapped, briefly pulsing `pressProgress`
+ *   so the optical SDF lens refraction activates during tap-to-glide as well as drag.
  */
 class DampedDragAnimation(
     private val animationScope: CoroutineScope,
@@ -118,6 +110,8 @@ class DampedDragAnimation(
 
     private var lastUpdateNanos: Long = 0L
     private var valueJob: Job? = null
+    private var pressJob: Job? = null
+    private var isPointerDown: Boolean = false
 
     val value: Float
         get() = valueAnim.value
@@ -141,50 +135,59 @@ class DampedDragAnimation(
         val clamped = newValue.coerceIn(valueRange)
         val now = System.nanoTime()
         if (lastUpdateNanos != 0L) {
-            val dt = ((now - lastUpdateNanos) / 1_000_000_000f).coerceIn(0.002f, 0.06f)
+            val dt = ((now - lastUpdateNanos) / 1_000_000_000f).coerceIn(0.003f, 0.06f)
             val instVel = (clamped - targetValue) / dt
-            velocity = velocity * 0.55f + instVel * 0.45f
+            velocity = (velocity * 0.62f + instVel * 0.38f).fastCoerceIn(-18f, 18f)
         }
         lastUpdateNanos = now
         targetValue = clamped
         valueJob?.cancel()
         valueJob = animationScope.launch {
-            valueAnim.animateTo(
-                targetValue = clamped,
-                animationSpec = spring(
-                    dampingRatio = 0.86f,
-                    stiffness = 780f,
-                    visibilityThreshold = visibilityThreshold
-                )
-            )
-            velocity = 0f
+            if (isPointerDown) {
+                // Fast, zero-shutter tracking while finger is dragging
+                valueAnim.snapTo(clamped)
+            } else {
+                valueAnim.animateTo(
+                    targetValue = clamped,
+                    animationSpec = spring(
+                        dampingRatio = 0.82f,
+                        stiffness = 520f,
+                        visibilityThreshold = visibilityThreshold
+                    )
+                ) {
+                    this@DampedDragAnimation.velocity = this.velocity
+                }
+                velocity = 0f
+            }
         }
     }
 
     fun animateToValue(newValue: Float) {
         val clamped = newValue.coerceIn(valueRange)
+        val distance = kotlin.math.abs(clamped - valueAnim.value)
         targetValue = clamped
         lastUpdateNanos = 0L
         valueJob?.cancel()
         valueJob = animationScope.launch {
-            // Brief optical lens pulse when gliding on tap so the glass refraction activates
-            if (pressAnim.value < 0.25f) {
-                launch {
+            // If gliding across tabs/switch on tap, pulse the optical glass lens so it swells & refracts as it slides
+            if (!isPointerDown && distance > 0.02f) {
+                pressJob?.cancel()
+                pressJob = launch {
                     pressAnim.animateTo(
-                        targetValue = 0.65f,
-                        animationSpec = spring(dampingRatio = 0.8f, stiffness = 600f)
+                        targetValue = 0.72f,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 680f)
                     )
                     pressAnim.animateTo(
                         targetValue = 0f,
-                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 320f)
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f)
                     )
                 }
             }
             valueAnim.animateTo(
                 targetValue = clamped,
                 animationSpec = spring(
-                    dampingRatio = 0.72f,
-                    stiffness = 380f,
+                    dampingRatio = 0.76f,
+                    stiffness = 400f,
                     visibilityThreshold = visibilityThreshold
                 )
             ) {
@@ -195,12 +198,14 @@ class DampedDragAnimation(
     }
 
     private fun setPressed(pressed: Boolean) {
-        animationScope.launch {
+        isPointerDown = pressed
+        pressJob?.cancel()
+        pressJob = animationScope.launch {
             pressAnim.animateTo(
                 targetValue = if (pressed) 1f else 0f,
                 animationSpec = spring(
-                    dampingRatio = 0.78f,
-                    stiffness = if (pressed) 520f else 340f
+                    dampingRatio = 0.80f,
+                    stiffness = if (pressed) 550f else 340f
                 )
             )
         }
@@ -237,6 +242,7 @@ class DampedDragAnimation(
 
                 lastUpdateNanos = 0L
                 setPressed(false)
+                velocity = 0f
                 onDragStopped()
             }
         }
@@ -255,6 +261,7 @@ class InteractiveHighlight(
     private val pressAnim = Animatable(0f, 0.001f)
     var offset by mutableStateOf(Offset.Zero)
         private set
+    private var pressJob: Job? = null
 
     val pressProgress: Float
         get() = pressAnim.value.fastCoerceIn(0f, 1f)
@@ -262,14 +269,14 @@ class InteractiveHighlight(
     val modifier: Modifier = Modifier.drawWithContent {
         drawContent()
         val p = pressProgress
-        if (p > 0.005f) {
+        if (p > 0.01f) {
             val center = position(size, offset)
             val radius = (size.maxDimension * 0.65f).coerceAtLeast(48f)
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.24f * p),
-                        Color.White.copy(alpha = 0.08f * p),
+                        Color.White.copy(alpha = 0.22f * p),
+                        Color.White.copy(alpha = 0.07f * p),
                         Color.Transparent
                     ),
                     center = center,
@@ -286,10 +293,11 @@ class InteractiveHighlight(
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             offset = down.position
-            animationScope.launch {
+            pressJob?.cancel()
+            pressJob = animationScope.launch {
                 pressAnim.animateTo(
                     targetValue = 1f,
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f)
+                    animationSpec = spring(dampingRatio = 0.84f, stiffness = 540f)
                 )
             }
             var released = false
@@ -302,7 +310,8 @@ class InteractiveHighlight(
                     offset = change.position
                 }
             }
-            animationScope.launch {
+            pressJob?.cancel()
+            pressJob = animationScope.launch {
                 pressAnim.animateTo(
                     targetValue = 0f,
                     animationSpec = spring(dampingRatio = 0.85f, stiffness = 320f)

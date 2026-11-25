@@ -193,24 +193,6 @@ fun AnimatedEligibilityGauge(
         ),
         label = "gauge_halo_alpha"
     )
-    val shimmerPhase by pulseTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2.0 * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 5200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "gauge_lens_shimmer"
-    )
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
-    val lensOffset = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
-    var isLensPressed by remember { mutableStateOf(false) }
-    val lensPressIntensity by animateFloatAsState(
-        targetValue = if (isLensPressed) 1f else 0f,
-        animationSpec = tween(180),
-        label = "gauge_lens_press_intensity"
-    )
-    val gaugeScope = rememberCoroutineScope()
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
     val thresholdColor = MaterialTheme.colorScheme.secondary
 
@@ -222,71 +204,20 @@ fun AnimatedEligibilityGauge(
                 scaleX = toggleSquish.value
                 scaleY = toggleSquish.value
             }
-            .pointerInput(onDoubleTapTogglePrivacy != null) {
-                detectTapGestures(
-                    onPress = {
-                        isLensPressed = true
-                        tryAwaitRelease()
-                        isLensPressed = false
-                    },
-                    onTap = { tapPos ->
-                        val center = Offset(size.width / 2f, size.height / 2f)
-                        val nudge = ((tapPos - center) * 0.16f)
-                        gaugeScope.launch {
-                            lensOffset.animateTo(nudge, tween(90))
-                            lensOffset.animateTo(
-                                Offset.Zero,
-                                spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessMediumLow
-                                )
-                            )
-                        }
-                    },
-                    onDoubleTap = if (onDoubleTapTogglePrivacy != null) {
-                        {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            latestDoubleTap?.invoke()
-                        }
-                    } else null
-                )
-            }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { isLensPressed = true },
-                    onDragEnd = {
-                        isLensPressed = false
-                        gaugeScope.launch {
-                            lensOffset.animateTo(
-                                Offset.Zero,
-                                spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessLow
-                                )
-                            )
-                        }
-                    },
-                    onDragCancel = {
-                        isLensPressed = false
-                        gaugeScope.launch {
-                            lensOffset.animateTo(
-                                Offset.Zero,
-                                spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessLow
-                                )
-                            )
-                        }
+            .then(
+                if (onDoubleTapTogglePrivacy != null) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                latestDoubleTap?.invoke()
+                            }
+                        )
                     }
-                ) { change, dragAmount ->
-                    change.consume()
-                    val next = Offset(
-                        x = (lensOffset.value.x + dragAmount.x * 0.38f).coerceIn(-22f, 22f),
-                        y = (lensOffset.value.y + dragAmount.y * 0.38f).coerceIn(-22f, 22f)
-                    )
-                    gaugeScope.launch { lensOffset.snapTo(next) }
+                } else {
+                    Modifier
                 }
-            }
+            )
             .testTag("eligibility_gauge")
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -312,25 +243,6 @@ fun AnimatedEligibilityGauge(
                     radius = size.minDimension * 0.50f
                 )
             }
-
-            // Thin-Film Liquid-Glass Center Lens Orb behind the 80% centerpiece
-            val center = Offset(size.width / 2f, size.height / 2f) + lensOffset.value
-            val dragMag = (lensOffset.value.getDistance() / 22f).coerceIn(0f, 1f)
-            val stretchX = 1f + (lensOffset.value.x.absoluteValue / 110f) + lensPressIntensity * 0.04f
-            val squashY = 1f + (lensOffset.value.y.absoluteValue / 110f) + lensPressIntensity * 0.04f
-            val baseOrbDiameter = size.minDimension * 0.64f
-            val orbW = baseOrbDiameter * stretchX
-            val orbH = baseOrbDiameter * squashY
-            drawThinFilmLiquidBubble(
-                topLeft = Offset(center.x - orbW / 2f, center.y - orbH / 2f),
-                bubbleSize = Size(orbW, orbH),
-                cornerRadius = CornerRadius(orbW / 2f, orbH / 2f),
-                baseTint = accentColor,
-                isDark = isDark,
-                velocityNorm = (lensOffset.value.x / 22f).coerceIn(-1f, 1f),
-                phaseRad = shimmerPhase,
-                pressIntensity = (lensPressIntensity + dragMag * 0.5f).coerceIn(0f, 1f)
-            )
 
             // Background track
             drawArc(

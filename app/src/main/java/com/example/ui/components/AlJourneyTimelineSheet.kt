@@ -403,16 +403,6 @@ fun AlJourneyTimelineSheet(
                 }
             }
 
-            // Interactive Thin-Film Soap Bubble & Refractive A/L Countdown Lens
-            ThinFilmBubbleInteractiveCard(
-                RestingPromptText = "${timeline.daysRemaining} Days to A/L ${timeline.examYear}\nDrag the thin-film bubble up",
-                LiftedTitleText = "${(animatedProgress * 100f).toInt()}% Journey Complete",
-                LiftedSubtitleText = "${timeline.elapsedDays}d completed · ${timeline.daysRemaining}d left to A/L Day 1\nTap the bubble to pop or switch optics below.",
-                initialPreset = BubbleLookPreset.SOAP_BUBBLE,
-                initialDarkTheme = true,
-                cardHeight = 256.dp
-            )
-
             // Vertical Checkpoints List
             Text(
                 text = "Key Journey Checkpoints",

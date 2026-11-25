@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -82,12 +83,13 @@ import kotlin.math.sin
 import kotlin.math.tanh
 
 /**
- * Kyant Backdrop catalog `LiquidBottomTabs` implementation.
+ * Optimized Kyant Backdrop catalog `LiquidBottomTabs` implementation.
  *
- * Uses dual-layer `rememberCombinedBackdrop(backdrop, tabsBackdrop)` with SDF
- * `lens(..., chromaticAberration = true)`, `InnerShadow`, `Shadow`, `Highlight`,
- * `InteractiveHighlight`, and `DampedDragAnimation` so the sliding glass lens pill
- * optically refracts and magnifies the tabs and content underneath.
+ * Fixes:
+ * - Uses `rememberUpdatedState(selectedTabIndex)` so `currentIndex` and `dampedDragAnimation` are NOT
+ *   destroyed and recreated on every tab click recomposition — ensuring clicking any tab smoothly
+ *   slides the liquid glass pill from the previous tab to the clicked tab!
+ * - Allows tapping anywhere along the bar or dragging the liquid glass lens pill directly.
  */
 @Composable
 fun LiquidBottomTabs(
@@ -99,6 +101,7 @@ fun LiquidBottomTabs(
     accentColorOverride: Color = Color.Unspecified,
     barHeight: Dp = 64.dp,
     pillHeight: Dp = 56.dp,
+    enableBarEffects: Boolean = true,
     content: @Composable RowScope.() -> Unit
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
@@ -109,8 +112,11 @@ fun LiquidBottomTabs(
         else -> Color(0xFF0091FF)
     }
     val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFA).copy(0.4f)
-        else Color(0xFF121212).copy(0.4f)
+        if (isLightTheme) Color(0xFFFAFAFA).copy(0.42f)
+        else Color(0xFF121212).copy(0.45f)
+
+    val latestSelectedTabIndex by rememberUpdatedState(selectedTabIndex)
+    val latestOnTabSelected by rememberUpdatedState(onTabSelected)
 
     val tabsBackdrop = rememberLayerBackdrop()
 
@@ -119,9 +125,11 @@ fun LiquidBottomTabs(
         contentAlignment = Alignment.CenterStart
     ) {
         val density = LocalDensity.current
+        val maxSlot = (tabsCount - 1).coerceAtLeast(0)
         val tabWidth = with(density) {
             (constraints.maxWidth.toFloat() - 8f.dp.toPx()) / tabsCount.coerceAtLeast(1)
         }.coerceAtLeast(1f)
+        val latestTabWidth by rememberUpdatedState(tabWidth)
 
         val offsetAnimation = remember { Animatable(0f) }
         val panelOffset by remember(density) {
@@ -135,23 +143,29 @@ fun LiquidBottomTabs(
         }
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
+        val latestIsLtr by rememberUpdatedState(isLtr)
         val animationScope = rememberCoroutineScope()
-        var currentIndex by remember(selectedTabIndex) {
-            mutableIntStateOf(selectedTabIndex())
+
+        // IMPORTANT: Do NOT key by `selectedTabIndex` lambda reference — that reset currentIndex
+        // on every recomposition and prevented the pill from sliding on tab clicks!
+        var currentIndex by remember {
+            mutableIntStateOf(latestSelectedTabIndex().coerceIn(0, maxSlot))
         }
+
         val dampedDragAnimation = remember(animationScope, tabsCount) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = selectedTabIndex().toFloat(),
-                valueRange = 0f..(tabsCount - 1).coerceAtLeast(0).toFloat(),
+                initialValue = currentIndex.toFloat(),
+                valueRange = 0f..maxSlot.toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
-                pressedScale = 78f / 56f,
+                pressedScale = 74f / 56f,
                 onDragStarted = {},
                 onDragStopped = {
-                    val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, (tabsCount - 1).coerceAtLeast(0))
+                    val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, maxSlot)
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
+                    latestOnTabSelected(targetIndex)
                     animationScope.launch {
                         offsetAnimation.animateTo(
                             0f,
@@ -160,38 +174,38 @@ fun LiquidBottomTabs(
                     }
                 },
                 onDrag = { _, dragAmount ->
-                    updateValue(
-                        (targetValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
-                            .fastCoerceIn(0f, (tabsCount - 1).coerceAtLeast(0).toFloat())
-                    )
+                    val w = latestTabWidth
+                    val nextVal = (targetValue + dragAmount.x / w * if (latestIsLtr) 1f else -1f)
+                        .fastCoerceIn(0f, maxSlot.toFloat())
+                    updateValue(nextVal)
+                    val rounded = nextVal.fastRoundToInt().fastCoerceIn(0, maxSlot)
+                    if (rounded != currentIndex) {
+                        currentIndex = rounded
+                        latestOnTabSelected(rounded)
+                    }
                     animationScope.launch {
                         offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
                     }
                 }
             )
         }
-        LaunchedEffect(selectedTabIndex) {
-            snapshotFlow { selectedTabIndex() }
-                .collectLatest { index ->
-                    currentIndex = index
-                }
-        }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { currentIndex }
-                .drop(1)
-                .collectLatest { index ->
-                    dampedDragAnimation.animateToValue(index.toFloat())
-                    onTabSelected(index)
-                }
+
+        // Observe external tab changes (e.g., when user taps a LiquidBottomTab or presses Back)
+        // and smoothly animate the liquid glass pill to the newly selected tab index!
+        val externalSelectedIndex = latestSelectedTabIndex().coerceIn(0, maxSlot)
+        LaunchedEffect(externalSelectedIndex) {
+            currentIndex = externalSelectedIndex
+            dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
         }
 
-        val interactiveHighlight = remember(animationScope, tabWidth, isLtr) {
+        val interactiveHighlight = remember(animationScope) {
             InteractiveHighlight(
                 animationScope = animationScope,
                 position = { size, _ ->
+                    val w = latestTabWidth
                     Offset(
-                        if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset
-                        else size.width - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset,
+                        if (latestIsLtr) (dampedDragAnimation.value + 0.5f) * w + panelOffset
+                        else size.width - (dampedDragAnimation.value + 0.5f) * w + panelOffset,
                         size.height / 2f
                     )
                 }
@@ -207,13 +221,15 @@ fun LiquidBottomTabs(
                     backdrop = backdrop,
                     shape = { Capsule() },
                     effects = {
-                        vibrancy()
-                        blur(8f.dp.toPx())
-                        lens(24f.dp.toPx(), 24f.dp.toPx())
+                        if (enableBarEffects) {
+                            vibrancy()
+                            blur(8f.dp.toPx())
+                            lens(20f.dp.toPx(), 20f.dp.toPx())
+                        }
                     },
                     layerBlock = {
                         val progress = dampedDragAnimation.pressProgress
-                        val scale = lerp(1f, 1f + 16f.dp.toPx() / size.width.coerceAtLeast(1f), progress)
+                        val scale = lerp(1f, 1f + 12f.dp.toPx() / size.width.coerceAtLeast(1f), progress)
                         scaleX = scale
                         scaleY = scale
                     },
@@ -229,7 +245,7 @@ fun LiquidBottomTabs(
 
         CompositionLocalProvider(
             LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.2f, dampedDragAnimation.pressProgress)
+                lerp(1f, 1.16f, dampedDragAnimation.pressProgress)
             }
         ) {
             Row(
@@ -245,12 +261,16 @@ fun LiquidBottomTabs(
                         shape = { Capsule() },
                         effects = {
                             val progress = dampedDragAnimation.pressProgress
-                            vibrancy()
-                            blur(8f.dp.toPx())
-                            lens(
-                                24f.dp.toPx() * progress,
-                                24f.dp.toPx() * progress
-                            )
+                            if (enableBarEffects) {
+                                vibrancy()
+                                blur(8f.dp.toPx())
+                            }
+                            if (progress > 0.01f) {
+                                lens(
+                                    20f.dp.toPx() * progress,
+                                    20f.dp.toPx() * progress
+                                )
+                            }
                         },
                         highlight = {
                             val progress = dampedDragAnimation.pressProgress
@@ -268,37 +288,41 @@ fun LiquidBottomTabs(
             )
         }
 
+        val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
+
         Box(
             Modifier
                 .padding(horizontal = 4f.dp)
                 .graphicsLayer {
+                    val w = latestTabWidth
                     translationX =
-                        if (isLtr) dampedDragAnimation.value * tabWidth + panelOffset
-                        else size.width - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
+                        if (latestIsLtr) dampedDragAnimation.value * w + panelOffset
+                        else size.width - (dampedDragAnimation.value + 1f) * w + panelOffset
                 }
                 .then(interactiveHighlight.gestureModifier)
                 .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
-                    backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
+                    backdrop = combinedBackdrop,
                     shape = { Capsule() },
                     effects = {
-                        val progress = dampedDragAnimation.pressProgress
+                        // Keep subtle optical lens refraction active even at rest (0.28f), swelling to 1.0f on press/glide
+                        val lensFactor = lerp(0.28f, 1f, dampedDragAnimation.pressProgress)
                         lens(
-                            10f.dp.toPx() * progress,
-                            14f.dp.toPx() * progress,
+                            10f.dp.toPx() * lensFactor,
+                            14f.dp.toPx() * lensFactor,
                             chromaticAberration = true
                         )
                     },
                     highlight = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = lerp(0.35f, 1f, dampedDragAnimation.pressProgress)
                         Highlight.Default.copy(alpha = progress)
                     },
                     shadow = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = lerp(0.25f, 1f, dampedDragAnimation.pressProgress)
                         Shadow(alpha = progress)
                     },
                     innerShadow = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = lerp(0.30f, 1f, dampedDragAnimation.pressProgress)
                         InnerShadow(
                             radius = 8f.dp * progress,
                             alpha = progress
@@ -307,16 +331,16 @@ fun LiquidBottomTabs(
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
-                        val velocity = dampedDragAnimation.velocity / 10f
-                        scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                        scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                        val velocity = dampedDragAnimation.velocity / 12f
+                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
+                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
                         drawRect(
-                            if (isLightTheme) Color.Black.copy(0.1f)
-                            else Color.White.copy(0.1f),
-                            alpha = 1f - progress
+                            if (isLightTheme) Color.Black.copy(0.09f)
+                            else Color.White.copy(0.11f),
+                            alpha = 1f - progress * 0.85f
                         )
                         drawRect(Color.Black.copy(alpha = 0.03f * progress))
                     }
@@ -329,9 +353,6 @@ fun LiquidBottomTabs(
 
 /**
  * Kyant Backdrop catalog `LiquidButton` implementation.
- *
- * Uses `vibrancy()`, `blur(2.dp)`, `lens(12.dp, 24.dp)`, `tanh` magnetic touch offset,
- * directional drag stretch, and `BlendMode.Hue` tinting.
  */
 @Composable
 fun LiquidButton(
@@ -424,11 +445,7 @@ fun LiquidButton(
 }
 
 /**
- * Kyant Backdrop catalog `LiquidSlider` implementation.
- *
- * Captures the slider track into `trackBackdrop` and combines it with `backdrop` via
- * `rememberCombinedBackdrop`, so the clear liquid-glass capsule thumb optically refracts
- * the colored track beneath it as you drag (`pressedScale = 1.5f`, `chromaticAberration = true`).
+ * Optimized Kyant Backdrop catalog `LiquidSlider` implementation.
  */
 @Composable
 fun LiquidSlider(
@@ -451,6 +468,8 @@ fun LiquidSlider(
         if (isLightTheme) Color(0xFF787878).copy(0.2f)
         else Color(0xFF787880).copy(0.36f)
 
+    val latestValue by rememberUpdatedState(value)
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
     val trackBackdrop = rememberLayerBackdrop()
 
     BoxWithConstraints(
@@ -460,61 +479,71 @@ fun LiquidSlider(
         contentAlignment = Alignment.CenterStart
     ) {
         val trackWidth = constraints.maxWidth.coerceAtLeast(1)
+        val latestTrackWidth by rememberUpdatedState(trackWidth)
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
+        val latestIsLtr by rememberUpdatedState(isLtr)
         val animationScope = rememberCoroutineScope()
         var didDrag by remember { mutableStateOf(false) }
+
         val dampedDragAnimation = remember(animationScope) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = value(),
+                initialValue = latestValue(),
                 valueRange = valueRange,
                 visibilityThreshold = visibilityThreshold,
                 initialScale = 1f,
-                pressedScale = 1.5f,
-                onDragStarted = {},
+                pressedScale = 1.45f,
+                onDragStarted = {
+                    didDrag = false
+                },
                 onDragStopped = {
                     if (didDrag) {
-                        onValueChange(targetValue)
+                        latestOnValueChange(targetValue)
+                        didDrag = false
                     }
                 },
                 onDrag = { _, dragAmount ->
                     if (!didDrag) {
                         didDrag = dragAmount.x != 0f
                     }
-                    val delta = (valueRange.endInclusive - valueRange.start) * (dragAmount.x / trackWidth)
-                    onValueChange(
-                        if (isLtr) (targetValue + delta).coerceIn(valueRange)
-                        else (targetValue - delta).coerceIn(valueRange)
-                    )
+                    val delta = (valueRange.endInclusive - valueRange.start) * (dragAmount.x / latestTrackWidth)
+                    val next = if (latestIsLtr) (targetValue + delta).coerceIn(valueRange)
+                    else (targetValue - delta).coerceIn(valueRange)
+                    updateValue(next)
+                    latestOnValueChange(next)
                 }
             )
         }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { value() }
-                .collectLatest { v ->
-                    if (dampedDragAnimation.targetValue != v) {
-                        dampedDragAnimation.updateValue(v)
-                    }
-                }
+
+        val currentExternalVal = latestValue()
+        LaunchedEffect(currentExternalVal) {
+            if (!didDrag && kotlin.math.abs(dampedDragAnimation.targetValue - currentExternalVal) > 0.001f) {
+                dampedDragAnimation.animateToValue(currentExternalVal)
+            }
         }
 
-        Box(Modifier.layerBackdrop(trackBackdrop)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .pointerInput(animationScope) {
+                    detectTapGestures { position ->
+                        val delta = (valueRange.endInclusive - valueRange.start) * (position.x / latestTrackWidth)
+                        val targetVal =
+                            (if (latestIsLtr) valueRange.start + delta
+                            else valueRange.endInclusive - delta)
+                                .coerceIn(valueRange)
+                        dampedDragAnimation.animateToValue(targetVal)
+                        latestOnValueChange(targetVal)
+                    }
+                }
+                .layerBackdrop(trackBackdrop)
+                .padding(vertical = 10.dp)
+        ) {
             Box(
                 Modifier
                     .clip(Capsule())
                     .background(trackColor)
-                    .pointerInput(animationScope) {
-                        detectTapGestures { position ->
-                            val delta = (valueRange.endInclusive - valueRange.start) * (position.x / trackWidth)
-                            val targetValue =
-                                (if (isLtr) valueRange.start + delta
-                                else valueRange.endInclusive - delta)
-                                    .coerceIn(valueRange)
-                            dampedDragAnimation.animateToValue(targetValue)
-                            onValueChange(targetValue)
-                        }
-                    }
                     .height(6f.dp)
                     .fillMaxWidth()
             )
@@ -534,26 +563,28 @@ fun LiquidSlider(
             )
         }
 
+        val combinedBackdrop = rememberCombinedBackdrop(
+            backdrop,
+            rememberBackdrop(trackBackdrop) { drawBackdrop ->
+                val progress = dampedDragAnimation.pressProgress
+                val sX = lerp(2f / 3f, 1f, progress)
+                val sY = lerp(0f, 1f, progress)
+                scale(sX, sY) {
+                    drawBackdrop()
+                }
+            }
+        )
+
         Box(
             Modifier
                 .graphicsLayer {
                     translationX =
-                        (-size.width / 2f + trackWidth * dampedDragAnimation.progress)
-                            .fastCoerceIn(-size.width / 4f, trackWidth - size.width * 3f / 4f) * if (isLtr) 1f else -1f
+                        (-size.width / 2f + latestTrackWidth * dampedDragAnimation.progress)
+                            .fastCoerceIn(-size.width / 4f, latestTrackWidth - size.width * 3f / 4f) * if (latestIsLtr) 1f else -1f
                 }
                 .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
-                    backdrop = rememberCombinedBackdrop(
-                        backdrop,
-                        rememberBackdrop(trackBackdrop) { drawBackdrop ->
-                            val progress = dampedDragAnimation.pressProgress
-                            val scaleX = lerp(2f / 3f, 1f, progress)
-                            val scaleY = lerp(0f, 1f, progress)
-                            scale(scaleX, scaleY) {
-                                drawBackdrop()
-                            }
-                        }
-                    ),
+                    backdrop = combinedBackdrop,
                     shape = { Capsule() },
                     effects = {
                         val progress = dampedDragAnimation.pressProgress
@@ -588,9 +619,9 @@ fun LiquidSlider(
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
-                        val velocity = dampedDragAnimation.velocity / 10f
-                        scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                        scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                        val velocity = dampedDragAnimation.velocity / 12f
+                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
+                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
@@ -603,10 +634,14 @@ fun LiquidSlider(
 }
 
 /**
- * Kyant Backdrop catalog `LiquidToggle` implementation.
+ * Optimized Kyant Backdrop catalog `LiquidToggle` implementation.
  *
- * Captures the morphing switch track into `trackBackdrop` and refracts it through
- * the clear liquid-glass capsule thumb with `lens(5.dp * progress, 10.dp * progress, chromaticAberration = true)`.
+ * Fixes:
+ * - Tapping anywhere on the track OR tapping directly on the glass thumb now reliably toggles
+ *   the switch on/off with a smooth spring glide!
+ * - Uses `rememberUpdatedState` for `selected` and `onSelect` so the toggle never gets stuck
+ *   referencing a stale initial state closure.
+ * - Dragging the glass thumb across the track also works seamlessly.
  */
 @Composable
 fun LiquidToggle(
@@ -615,7 +650,8 @@ fun LiquidToggle(
     backdrop: Backdrop? = LocalGlassBackdrop.current,
     modifier: Modifier = Modifier
 ) {
-    val activeBackdrop = backdrop ?: rememberLayerBackdrop()
+    val fallbackBackdrop = rememberLayerBackdrop()
+    val activeBackdrop = backdrop ?: fallbackBackdrop
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
     val isLightTheme = !isDark
     val accentColor =
@@ -625,12 +661,18 @@ fun LiquidToggle(
         if (isLightTheme) Color(0xFF787878).copy(0.2f)
         else Color(0xFF787880).copy(0.36f)
 
+    val latestSelected by rememberUpdatedState(selected)
+    val latestOnSelect by rememberUpdatedState(onSelect)
+
     val density = LocalDensity.current
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
+    val latestIsLtr by rememberUpdatedState(isLtr)
     val dragWidth = with(density) { 20f.dp.toPx() }
     val animationScope = rememberCoroutineScope()
     var didDrag by remember { mutableStateOf(false) }
-    var fraction by remember { mutableFloatStateOf(if (selected()) 1f else 0f) }
+    var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var fraction by remember { mutableFloatStateOf(if (latestSelected()) 1f else 0f) }
+
     val dampedDragAnimation = remember(animationScope) {
         DampedDragAnimation(
             animationScope = animationScope,
@@ -638,59 +680,69 @@ fun LiquidToggle(
             valueRange = 0f..1f,
             visibilityThreshold = 0.001f,
             initialScale = 1f,
-            pressedScale = 1.5f,
-            onDragStarted = {},
+            pressedScale = 1.45f,
+            onDragStarted = {
+                didDrag = false
+                dragDistancePx = 0f
+            },
             onDragStopped = {
-                if (didDrag) {
-                    fraction = if (targetValue >= 0.5f) 1f else 0f
-                    onSelect(fraction == 1f)
-                    didDrag = false
+                if (didDrag && dragDistancePx > 6f) {
+                    val newBool = targetValue >= 0.5f
+                    val targetFrac = if (newBool) 1f else 0f
+                    fraction = targetFrac
+                    animateToValue(targetFrac)
+                    latestOnSelect(newBool)
                 } else {
-                    fraction = if (selected()) 0f else 1f
-                    onSelect(fraction == 1f)
+                    // Single tap on the thumb or track -> toggle state and glide smoothly
+                    val newBool = !latestSelected()
+                    val targetFrac = if (newBool) 1f else 0f
+                    fraction = targetFrac
+                    animateToValue(targetFrac)
+                    latestOnSelect(newBool)
                 }
+                didDrag = false
+                dragDistancePx = 0f
             },
             onDrag = { _, dragAmount ->
-                if (!didDrag) {
-                    didDrag = dragAmount.x != 0f
+                dragDistancePx += kotlin.math.abs(dragAmount.x)
+                if (dragDistancePx > 4f) {
+                    didDrag = true
                 }
                 val delta = dragAmount.x / dragWidth
                 fraction =
-                    if (isLtr) (fraction + delta).fastCoerceIn(0f, 1f)
+                    if (latestIsLtr) (fraction + delta).fastCoerceIn(0f, 1f)
                     else (fraction - delta).fastCoerceIn(0f, 1f)
+                updateValue(fraction)
             }
         )
     }
-    LaunchedEffect(dampedDragAnimation) {
-        snapshotFlow { fraction }
-            .collectLatest { f ->
-                dampedDragAnimation.updateValue(f)
-            }
-    }
-    LaunchedEffect(selected) {
-        snapshotFlow { selected() }
-            .collectLatest { isSelected ->
-                val target = if (isSelected) 1f else 0f
-                if (target != fraction) {
-                    fraction = target
-                    dampedDragAnimation.animateToValue(target)
-                }
-            }
+
+    val currentSelectedBool = latestSelected()
+    LaunchedEffect(currentSelectedBool) {
+        val target = if (currentSelectedBool) 1f else 0f
+        fraction = target
+        dampedDragAnimation.animateToValue(target)
     }
 
     val trackBackdrop = rememberLayerBackdrop()
+    val combinedBackdrop = rememberCombinedBackdrop(
+        activeBackdrop,
+        rememberBackdrop(trackBackdrop) { drawBackdrop ->
+            val progress = dampedDragAnimation.pressProgress
+            val sX = lerp(2f / 3f, 0.75f, progress)
+            val sY = lerp(0f, 0.75f, progress)
+            scale(sX, sY) {
+                drawBackdrop()
+            }
+        }
+    )
 
     Box(
-        modifier.clickable(
-            interactionSource = null,
-            indication = null,
-            role = Role.Switch,
-            onClick = {
-                val next = !selected()
-                fraction = if (next) 1f else 0f
-                onSelect(next)
+        modifier
+            .semantics {
+                role = Role.Switch
             }
-        ),
+            .then(dampedDragAnimation.modifier),
         contentAlignment = Alignment.CenterStart
     ) {
         Box(
@@ -710,25 +762,11 @@ fun LiquidToggle(
                     val f = dampedDragAnimation.value
                     val padding = 2f.dp.toPx()
                     translationX =
-                        if (isLtr) lerp(padding, padding + dragWidth, f)
+                        if (latestIsLtr) lerp(padding, padding + dragWidth, f)
                         else lerp(-padding, -(padding + dragWidth), f)
                 }
-                .semantics {
-                    role = Role.Switch
-                }
-                .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
-                    backdrop = rememberCombinedBackdrop(
-                        activeBackdrop,
-                        rememberBackdrop(trackBackdrop) { drawBackdrop ->
-                            val progress = dampedDragAnimation.pressProgress
-                            val scaleX = lerp(2f / 3f, 0.75f, progress)
-                            val scaleY = lerp(0f, 0.75f, progress)
-                            scale(scaleX, scaleY) {
-                                drawBackdrop()
-                            }
-                        }
-                    ),
+                    backdrop = combinedBackdrop,
                     shape = { Capsule() },
                     effects = {
                         val progress = dampedDragAnimation.pressProgress
@@ -764,8 +802,8 @@ fun LiquidToggle(
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
                         val velocity = dampedDragAnimation.velocity / 50f
-                        scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                        scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
+                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress

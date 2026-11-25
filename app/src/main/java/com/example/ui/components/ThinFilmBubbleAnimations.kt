@@ -356,6 +356,7 @@ fun SlidableLiquidGlassSegmentedBar(
         accentColorOverride = animatedTint,
         barHeight = barHeight,
         pillHeight = (barHeight - 8.dp).coerceAtLeast(32.dp),
+        enableBarEffects = false,
         modifier = modifier.fillMaxWidth()
     ) {
         options.forEachIndexed { index, option ->

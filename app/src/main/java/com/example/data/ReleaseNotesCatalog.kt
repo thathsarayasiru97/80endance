@@ -25,7 +25,7 @@ object ReleaseNotesCatalog {
         version = BuildConfig.VERSION_NAME.ifBlank { "1.7" },
         headline = DEFAULT_HEADLINE,
         whatsNew = listOf(
-            "Real Optical Liquid Glass Controls & Morphing Theme Toggle: Authentic refractive liquid-glass bottom navigation bar, segmented switchers, \"What-If\" slider, toggle switches, and buttons with dual-backdrop lens magnification, chromatic aberration, and damped spring physics, plus a morphing Sun-to-Moon theme toggle.",
+            "Optical Liquid Glass Controls & Morphing Theme Toggle: Refractive liquid-glass bottom navigation bar, segmented switchers, \"What-If\" slider, toggle switches, and action pills with dual-backdrop lens magnification, chromatic aberration, and damped spring physics, plus a morphing Sun-to-Moon theme toggle.",
             "Smooth Calendar Month Swiping: Swipe left or right directly on the calendar grid and use the quick \"Jump to Today\" pill.",
             "Dynamic Greeting & Context Banner: Home header adapts to time of day, remaining school days this week, Poya breaks, and active streaks.",
             "A/L Batch Countdown Milestones: Celebratory banners when your batch hits 300d, 200d, 100d, 50d, and 30d to A/Ls.",
