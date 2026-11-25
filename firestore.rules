@@ -110,7 +110,8 @@ service cloud.firestore {
              (!('targetValue' in data) || data.targetValue == null || (data.targetValue is string && data.targetValue.size() <= 60)) &&
              (!('eventDate' in data) || data.eventDate == null || data.eventDate == '' || isValidDateKey(data.eventDate)) &&
              data.priority in ['normal', 'urgent'] &&
-             data.published is bool;
+             data.published is bool &&
+             (!('scheduledAtMillis' in data) || data.scheduledAtMillis == null || (data.scheduledAtMillis is int && data.scheduledAtMillis >= 0));
     }
 
     function isValidAcademicTerm(data) {
@@ -446,7 +447,7 @@ service cloud.firestore {
                          'title', 'message', 'category', 'pinned', 'targetType', 'priority', 'published', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'createdAt', 'updatedAt'
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'scheduledAtMillis', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -457,10 +458,10 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        incoming().keys().hasOnly([
-                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'createdAt', 'updatedAt'
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'scheduledAtMillis', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'updatedAt'
+                         'title', 'message', 'category', 'pinned', 'targetType', 'targetValue', 'eventDate', 'priority', 'published', 'scheduledAtMillis', 'updatedAt'
                        ]);
 
       allow delete: if isAdmin() && isValidId(noticeId);

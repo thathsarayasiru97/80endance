@@ -856,8 +856,12 @@ object AttendanceCalculator {
         )
     }
 
-    fun filterNoticesForStudent(notices: List<Notice>, profile: UserProfile?): List<Notice> {
-        val published = notices.filter { it.published }
+    fun filterNoticesForStudent(
+        notices: List<Notice>,
+        profile: UserProfile?,
+        nowMillis: Long = System.currentTimeMillis()
+    ): List<Notice> {
+        val published = notices.filter { it.published && !it.isScheduledForFuture(nowMillis) }
         if (profile == null) return published.filter { it.targetTypeEnum == NoticeTargetType.ALL }
 
         val userGrade = profile.grade.trim()
@@ -879,7 +883,7 @@ object AttendanceCalculator {
             .sortedWith(
                 compareByDescending<Notice> { it.pinned }
                     .thenByDescending { it.urgentFlag }
-                    .thenByDescending { it.createdAt?.seconds ?: 0L }
+                    .thenByDescending { it.scheduledAtMillis ?: ((it.createdAt?.seconds ?: 0L) * 1000L) }
             )
     }
 
@@ -1773,8 +1777,8 @@ object AttendanceCalculator {
             )
         }
 
-        // Standard countdown checkpoints: 200d, 100d, 50d before exam
-        listOf(200, 100, 50).forEach { before ->
+        // Standard countdown checkpoints: 300d, 200d, 100d, 50d, 30d before exam
+        listOf(300, 200, 100, 50, 30).forEach { before ->
             if (before < totalDays) {
                 val checkpointDate = DateUtils.addDays(examDateKey, -before)
                 val dFromStart = (totalDays - before).coerceIn(1, totalDays - 1)
@@ -1957,5 +1961,126 @@ object AttendanceCalculator {
             myClassGoingPercent = classPct
         )
     }
+
+    /**
+     * Builds the time-aware dynamic greeting title and live context banner for the Home header.
+     */
+    fun buildDynamicGreetingAndContext(
+        greetingName: String,
+        todayKey: String = DateUtils.todayKey(),
+        hourOfDay: Int = DateUtils.currentHourMinute().first,
+        todayIsWeekend: Boolean = DateUtils.isWeekend(todayKey),
+        todayNonSchoolEvent: CalendarEvent? = null,
+        todayRecord: AttendanceRecord? = null,
+        currentStreak: Int = 0,
+        weeklySummary: List<WeekDaySummary> = emptyList(),
+        nextHoliday: CalendarEvent? = null,
+        activeStats: AttendanceStats? = null
+    ): DynamicHomeContext {
+        val timeGreeting = when (hourOfDay) {
+            in 5..11 -> "Good morning"
+            in 12..16 -> "Good afternoon"
+            in 17..21 -> "Good evening"
+            else -> "Hey"
+        }
+        val cleanName = greetingName.trim().ifEmpty { "Student" }
+        val greetingTitle = "$timeGreeting, $cleanName"
+
+        val tomorrowKey = DateUtils.addDays(todayKey, 1)
+        val holidayTomorrow = nextHoliday?.takeIf { it.dateKey == tomorrowKey }
+
+        // Remaining school days this week (including today if today is an unlogged school day, or after today)
+        val remainingSchoolDaysThisWeek = weeklySummary.count { day ->
+            day.holidayLabel == null && (day.isFuture || (day.isToday && todayRecord == null && !todayIsWeekend && todayNonSchoolEvent == null))
+        }
+
+        return when {
+            holidayTomorrow != null -> DynamicHomeContext(
+                greetingTitle = greetingTitle,
+                contextBannerText = "${holidayTomorrow.title} tomorrow — enjoy the break",
+                isHolidayTomorrow = true
+            )
+            todayNonSchoolEvent != null -> DynamicHomeContext(
+                greetingTitle = greetingTitle,
+                contextBannerText = "${todayNonSchoolEvent.title} today — enjoy the break",
+                isHolidayToday = true
+            )
+            !todayIsWeekend && todayRecord == null && currentStreak >= 3 -> DynamicHomeContext(
+                greetingTitle = greetingTitle,
+                contextBannerText = "$currentStreak-day streak on the line today · check in when ready",
+                isStreakAlert = true
+            )
+            todayIsWeekend -> {
+                val holidayHint = nextHoliday?.let {
+                    val d = DateUtils.daysBetween(todayKey, it.dateKey)
+                    if (d in 1..7) " · ${it.title} in ${d}d" else ""
+                }.orEmpty()
+                DynamicHomeContext(
+                    greetingTitle = greetingTitle,
+                    contextBannerText = "Weekend recharge · fresh school week ahead$holidayHint"
+                )
+            }
+            remainingSchoolDaysThisWeek > 1 -> DynamicHomeContext(
+                greetingTitle = greetingTitle,
+                contextBannerText = "$timeGreeting · $remainingSchoolDaysThisWeek school days left this week"
+            )
+            remainingSchoolDaysThisWeek == 1 -> DynamicHomeContext(
+                greetingTitle = greetingTitle,
+                contextBannerText = "$timeGreeting · last school day of the week"
+            )
+            else -> {
+                val safeSkips = activeStats?.safeSkipsRemaining ?: 0
+                val tail = if (activeStats != null && activeStats.eligible) {
+                    "$safeSkips safe skip${if (safeSkips == 1) "" else "s"} in buffer"
+                } else {
+                    "Week wrapped up — great job logging!"
+                }
+                DynamicHomeContext(
+                    greetingTitle = greetingTitle,
+                    contextBannerText = "$timeGreeting · $tail"
+                )
+            }
+        }
+    }
+
+    /**
+     * Resolves a celebratory Batch Countdown Milestone banner when the student's A/L batch
+     * hits major countdowns (300d, 200d, 100d, 50d, 30d to A/Ls, within a 3-day celebratory window).
+     */
+    fun resolveBatchCountdownMilestone(
+        daysUntilAlExam: Int,
+        examYear: Int
+    ): BatchCountdownMilestone? {
+        if (daysUntilAlExam <= 0) return null
+        val majorMilestones = listOf(300, 200, 100, 50, 30)
+        // Trigger when daysUntilAlExam is on the milestone or up to 2 days after crossing it (e.g. 300, 299, 298)
+        val matched = majorMilestones.firstOrNull { milestone ->
+            daysUntilAlExam in (milestone - 2)..milestone
+        } ?: return null
+
+        val headline = when (matched) {
+            300 -> "300 Days to $examYear A/Ls!"
+            200 -> "200 Days to $examYear A/Ls!"
+            100 -> "100-Day Final Stretch — $examYear Batch!"
+            50 -> "50 Days to $examYear A/Ls!"
+            else -> "30 Days to $examYear A/Ls — Final Sprint!"
+        }
+        val subtitle = when (matched) {
+            300 -> "Shared batch milestone unlocked · keep your 80% attendance steady from early on."
+            200 -> "200-day mark reached with your $examYear batch · consistency now builds a stress-free buffer."
+            100 -> "Triple-digit countdown! Lock in your 80% eligibility buffer before revision season peaks."
+            50 -> "50 days left for the $examYear A/L batch · stay above 80% and focus on past papers."
+            else -> "Final 30 days for the $examYear batch — you've got this! Tap to view your A/L Journey."
+        }
+        return BatchCountdownMilestone(
+            examYear = examYear,
+            milestoneDays = matched,
+            exactDaysLeft = daysUntilAlExam,
+            headline = headline,
+            subtitle = subtitle,
+            badgeText = "${matched}D MILESTONE"
+        )
+    }
 }
+
 

@@ -294,6 +294,7 @@ data class Notice(
     val eventDate: String? = null,
     val priority: String = "normal",
     val published: Boolean = true,
+    val scheduledAtMillis: Long? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -305,6 +306,11 @@ data class Notice(
 
     val urgentFlag: Boolean
         get() = priority.equals("urgent", ignoreCase = true)
+
+    fun isScheduledForFuture(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val ts = scheduledAtMillis ?: return false
+        return ts > nowMillis
+    }
 }
 
 @Keep
@@ -659,6 +665,24 @@ data class NextDaySchoolVote(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
+
+data class DynamicHomeContext(
+    val greetingTitle: String,
+    val contextBannerText: String,
+    val isStreakAlert: Boolean = false,
+    val isHolidayTomorrow: Boolean = false,
+    val isHolidayToday: Boolean = false
+)
+
+data class BatchCountdownMilestone(
+    val examYear: Int,
+    val milestoneDays: Int,
+    val exactDaysLeft: Int,
+    val headline: String,
+    val subtitle: String,
+    val badgeText: String
+)
+
 
 
 

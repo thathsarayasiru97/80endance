@@ -129,7 +129,8 @@ data class StudentAppState(
     val dangerZoneNudgeEnabled: Boolean = true,
     val isInDangerZone: Boolean = false,
     val pollWindow: NextDayPollWindow = NextDayPollWindow(),
-    val nextDayPollSummary: NextDayPollSummary = NextDayPollSummary()
+    val nextDayPollSummary: NextDayPollSummary = NextDayPollSummary(),
+    val autoOfferedSwipeDeckThisLaunch: Boolean = false
 ) {
     val effectiveSchoolStartDateKey: String
         get() = appSettings.effectiveSchoolStartDate(profile?.alExamYear)
@@ -186,7 +187,9 @@ private data class LocalSessionState(
     val prefsLoaded: Boolean = false,
     val sessionDismissedCheckIn: Boolean = false,
     val sessionDismissedBroadcastIds: Set<String> = emptySet(),
-    val sessionAckResolvedFeedbackIds: Set<String> = emptySet()
+    val sessionAckResolvedFeedbackIds: Set<String> = emptySet(),
+    val autoOfferedSwipeDeckThisLaunch: Boolean = false,
+    val clockTick: Pair<String, Int> = DateUtils.todayKey() to DateUtils.currentHourMinute().first
 )
 
 class AttendanceViewModel(
@@ -270,6 +273,7 @@ class AttendanceViewModel(
 
     private val _sessionDismissedBroadcastIds = MutableStateFlow<Set<String>>(emptySet())
     private val _sessionAckResolvedFeedbackIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _autoOfferedSwipeDeckThisLaunch = MutableStateFlow(false)
 
     private val adminStreamFlow: Flow<AdminStreamBundle> = if (isVerifiedAdmin) {
         combine(
@@ -365,14 +369,17 @@ class AttendanceViewModel(
         localPrefs.prefsFlow.map { it to true },
         _sessionDismissedCheckIn,
         _sessionDismissedBroadcastIds,
-        _sessionAckResolvedFeedbackIds
-    ) { prefsPair, dismissedCheckIn, dismissedBroadcasts, ackFeedback ->
+        _sessionAckResolvedFeedbackIds,
+        combine(_autoOfferedSwipeDeckThisLaunch, pollClockTickFlow) { autoOffered, tick -> autoOffered to tick }
+    ) { prefsPair, dismissedCheckIn, dismissedBroadcasts, ackFeedback, autoAndTick ->
         LocalSessionState(
             prefs = prefsPair.first,
             prefsLoaded = prefsPair.second,
             sessionDismissedCheckIn = dismissedCheckIn,
             sessionDismissedBroadcastIds = dismissedBroadcasts,
-            sessionAckResolvedFeedbackIds = ackFeedback
+            sessionAckResolvedFeedbackIds = ackFeedback,
+            autoOfferedSwipeDeckThisLaunch = autoAndTick.first,
+            clockTick = autoAndTick.second
         )
     }
 
@@ -464,7 +471,11 @@ class AttendanceViewModel(
         val nextHoliday = AttendanceCalculator.nextUpcomingPoyaOrHoliday(effectiveEvents, todayKey)
         val examYear = profile?.alExamYear ?: settings.currentAcademicYear
         val daysToExam = AttendanceCalculator.daysUntilAlExam(examYear, settings, todayKey)
-        val visibleNotices = AttendanceCalculator.filterNoticesForStudent(bundle.notices, profile)
+        val visibleNotices = AttendanceCalculator.filterNoticesForStudent(
+            notices = bundle.notices,
+            profile = profile,
+            nowMillis = System.currentTimeMillis()
+        )
         val pinnedNotices = visibleNotices.filter { it.pinned }
         val todayRecord = bundle.records.firstOrNull { it.dateKey == todayKey }
         val todayIsWeekend = DateUtils.isWeekend(todayKey)
@@ -740,13 +751,18 @@ class AttendanceViewModel(
             dangerZoneNudgeEnabled = prefs.dangerZoneNudgeEnabled,
             isInDangerZone = inDangerZone,
             pollWindow = pollWindow,
-            nextDayPollSummary = pollSummary
+            nextDayPollSummary = pollSummary,
+            autoOfferedSwipeDeckThisLaunch = localState.autoOfferedSwipeDeckThisLaunch
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
         initialValue = StudentAppState(isLoading = true, googlePhotoUrl = googlePhotoUrl)
     )
+
+    fun markSwipeDeckAutoOffered() {
+        _autoOfferedSwipeDeckThisLaunch.value = true
+    }
 
     fun setPresence(online: Boolean) {
         viewModelScope.launch {

@@ -16,6 +16,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,6 +74,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -136,12 +140,31 @@ fun CalendarScreen(
     bottomBarPadding: Dp = 24.dp
 ) {
     val semantic = LocalAttendanceColors.current
+    val haptic = LocalHapticFeedback.current
     val initialYm = remember { DateUtils.currentYearMonth() }
     var displayYear by remember { mutableIntStateOf(initialYm.first) }
     var displayMonth by remember { mutableIntStateOf(initialYm.second) }
     var selectedDateKey by remember { mutableStateOf<String?>(null) }
     var adminEventDialogDate by remember { mutableStateOf<String?>(null) }
     var editingCalendarEvent by remember { mutableStateOf<CalendarEvent?>(null) }
+
+    val isCurrentMonth = displayYear == initialYm.first && displayMonth == initialYm.second
+    val goToPrevMonth: () -> Unit = {
+        if (displayMonth == 1) {
+            displayMonth = 12
+            displayYear--
+        } else {
+            displayMonth--
+        }
+    }
+    val goToNextMonth: () -> Unit = {
+        if (displayMonth == 12) {
+            displayMonth = 1
+            displayYear++
+        } else {
+            displayMonth++
+        }
+    }
 
     // Multi-Day Bulk Select state
     var bulkSelectMode by remember { mutableStateOf(false) }
@@ -440,44 +463,63 @@ fun CalendarScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = {
-                                    if (displayMonth == 1) {
-                                        displayMonth = 12
-                                        displayYear--
-                                    } else {
-                                        displayMonth--
-                                    }
-                                },
+                                onClick = goToPrevMonth,
                                 modifier = Modifier.testTag("calendar_prev_month")
                             ) {
                                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "Previous month")
                             }
-                            AnimatedContent(
-                                targetState = displayYear * 12 + displayMonth,
-                                transitionSpec = {
-                                    val forward = targetState >= initialState
-                                    (slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(220)))
-                                        .togetherWith(slideOutHorizontally(tween(180)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(150)))
-                                },
-                                label = "calendar_month_title"
-                            ) { ymIndex ->
-                                val yr = (ymIndex - 1) / 12
-                                val mo = ((ymIndex - 1) % 12) + 1
-                                Text(
-                                    text = DateUtils.formatMonthYear(yr, mo),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                AnimatedContent(
+                                    targetState = displayYear * 12 + displayMonth,
+                                    transitionSpec = {
+                                        val forward = targetState >= initialState
+                                        val slideSpec = spring<androidx.compose.ui.unit.IntOffset>(
+                                            dampingRatio = Spring.DampingRatioLowBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                        (slideInHorizontally(slideSpec) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(220)))
+                                            .togetherWith(slideOutHorizontally(tween(180)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(150)))
+                                    },
+                                    label = "calendar_month_title"
+                                ) { ymIndex ->
+                                    val yr = (ymIndex - 1) / 12
+                                    val mo = ((ymIndex - 1) % 12) + 1
+                                    Text(
+                                        text = DateUtils.formatMonthYear(yr, mo),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                AnimatedVisibility(
+                                    visible = !isCurrentMonth,
+                                    enter = expandVertically() + fadeIn(tween(180)),
+                                    exit = shrinkVertically() + fadeOut(tween(140))
+                                ) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(999.dp),
+                                        modifier = Modifier
+                                            .padding(top = 4.dp)
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .bouncyClickable(pressedScale = 0.93f) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                displayYear = initialYm.first
+                                                displayMonth = initialYm.second
+                                            }
+                                            .testTag("calendar_jump_to_today_pill")
+                                    ) {
+                                        Text(
+                                            text = "Jump to Today",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
                             }
                             IconButton(
-                                onClick = {
-                                    if (displayMonth == 12) {
-                                        displayMonth = 1
-                                        displayYear++
-                                    } else {
-                                        displayMonth++
-                                    }
-                                },
+                                onClick = goToNextMonth,
                                 modifier = Modifier.testTag("calendar_next_month")
                             ) {
                                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = "Next month")
@@ -622,10 +664,37 @@ fun CalendarScreen(
                             targetState = displayYear * 12 + displayMonth,
                             transitionSpec = {
                                 val forward = targetState >= initialState
-                                (slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { if (forward) it / 4 else -it / 4 } + fadeIn(tween(240)))
-                                    .togetherWith(slideOutHorizontally(tween(190)) { if (forward) -it / 4 else it / 4 } + fadeOut(tween(160)))
+                                val slideSpec = spring<androidx.compose.ui.unit.IntOffset>(
+                                    dampingRatio = Spring.DampingRatioLowBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                                (slideInHorizontally(slideSpec) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(240)))
+                                    .togetherWith(slideOutHorizontally(tween(190)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(160)))
                             },
-                            label = "calendar_grid_month_slide"
+                            label = "calendar_grid_month_slide",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pointerInput(displayYear, displayMonth) {
+                                    var totalDragX = 0f
+                                    val swipeThresholdPx = 56.dp.toPx()
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { totalDragX = 0f },
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            totalDragX += dragAmount
+                                        },
+                                        onDragEnd = {
+                                            if (totalDragX <= -swipeThresholdPx) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                goToNextMonth()
+                                            } else if (totalDragX >= swipeThresholdPx) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                goToPrevMonth()
+                                            }
+                                        }
+                                    )
+                                }
+                                .testTag("calendar_month_grid")
                         ) { ymIndex ->
                         val gridYear = (ymIndex - 1) / 12
                         val gridMonth = ((ymIndex - 1) % 12) + 1

@@ -1513,7 +1513,8 @@ class AttendanceRepository(
         targetValue: String?,
         eventDate: String?,
         urgent: Boolean,
-        published: Boolean
+        published: Boolean,
+        scheduledAtMillis: Long? = null
     ): Result<Unit> {
         val docRef = if (noticeId.isNullOrBlank()) {
             db.collection("notices").document()
@@ -1531,6 +1532,7 @@ class AttendanceRepository(
             val cleanTargetVal = if (targetType == NoticeTargetType.ALL) null else targetValue?.trim()?.take(60)?.ifEmpty { null }
             val cleanEventDate = eventDate?.trim()?.takeIf { it.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) }
             val priority = if (urgent) "urgent" else "normal"
+            val cleanScheduledAt = scheduledAtMillis?.takeIf { it > 0L }
 
             if (noticeId.isNullOrBlank()) {
                 val payload = mapOf(
@@ -1543,6 +1545,7 @@ class AttendanceRepository(
                     "eventDate" to cleanEventDate,
                     "priority" to priority,
                     "published" to published,
+                    "scheduledAtMillis" to cleanScheduledAt,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 ).filterValues { it != null }
@@ -1558,6 +1561,7 @@ class AttendanceRepository(
                     "eventDate" to (cleanEventDate ?: ""),
                     "priority" to priority,
                     "published" to published,
+                    "scheduledAtMillis" to (cleanScheduledAt ?: FieldValue.delete()),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.update(updates).awaitOfflineAware()

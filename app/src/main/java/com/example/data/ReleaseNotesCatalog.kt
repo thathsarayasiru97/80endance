@@ -22,19 +22,18 @@ object ReleaseNotesCatalog {
     private const val DEFAULT_HEADLINE = "Here's what's new in this update."
 
     private val fallbackEntry = ReleaseNoteEntry(
-        version = BuildConfig.VERSION_NAME.ifBlank { "1.7" },
+        version = BuildConfig.VERSION_NAME.ifBlank { "1.8" },
         headline = DEFAULT_HEADLINE,
         whatsNew = listOf(
-            "Next-Day Attendance Poll: Vote whether you're going to school tomorrow (8 PM–5 AM) and see live turnout.",
-            "Faster Logging & Catch-Up: Swipe missed days on launch, bulk-select dates on the Calendar, and undo mistaps in 5 seconds.",
-            "Widgets, Quick Tile & Shortcuts: Added the 4×1 pill widget, 1-tap Quick Settings tile, and launcher icon shortcuts.",
-            "Monthly Wrapped & Privacy Blur: Double-tap your ring to blur your %, share Monthly Wrapped or Parent cards, and unlock milestones.",
-            "Calendar Markers & Stream Pulse: Pin personal exam/SBA dates and compare Class, Stream, and Grade averages."
+            "Smooth Calendar Month Swiping: Swipe left or right directly on the calendar grid and use the quick \"Jump to Today\" pill.",
+            "Dynamic Greeting & Context Banner: Home header adapts to time of day, remaining school days this week, Poya breaks, and active streaks.",
+            "A/L Batch Countdown Milestones: Celebratory banners when your batch hits 300d, 200d, 100d, 50d, and 30d to A/Ls.",
+            "Scheduled Notices: Upcoming announcements and reminders can now be queued to appear automatically on time."
         ),
         bugFixes = listOf(
-            "Attendance ring now defaults to Overall, with Trends and What-If Simulator moved to the top of Reports.",
-            "Calendar enforces the school start date and supports Tip ✨ notices.",
-            "Smoother animations, uniform header pills, and general stability fixes."
+            "Eliminated attendance double-counting across imported baselines, locked periods, and school holidays.",
+            "Swipe catch-up deck now only auto-appears on app launch instead of every time you switch back to Home.",
+            "Improved release notes and general stability fixes."
         )
     )
 

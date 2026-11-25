@@ -39,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -61,8 +62,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.BroadcastNotification
+import com.example.data.DateUtils
 import com.example.data.UserProfile
 import com.example.ui.theme.LocalAttendanceColors
+import java.util.Locale
 
 /**
  * Shared height across Home header pills (A/L Journey, Community Account Count, Admin Online Now).
@@ -129,6 +132,7 @@ fun PulsingLiveDot(
 @Composable
 fun CommunityAccountCountPill(
     totalAccounts: Int,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val semantic = LocalAttendanceColors.current
@@ -140,13 +144,25 @@ fun CommunityAccountCountPill(
         shape = pillShape,
         modifier = modifier
             .height(HOME_HEADER_PILL_HEIGHT)
+            .clip(pillShape)
             .border(
                 width = 1.2.dp,
                 color = semantic.present.copy(alpha = 0.36f),
                 shape = pillShape
             )
+            .then(
+                if (onClick != null) {
+                    Modifier.bouncyClickable(pressedScale = 0.94f, onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
             .semantics(mergeDescendants = true) {
-                contentDescription = "$count registered accounts"
+                contentDescription = if (onClick != null) {
+                    "$count registered accounts. Tap to view current members list."
+                } else {
+                    "$count registered accounts"
+                }
             }
             .testTag("home_community_count_pill")
     ) {
@@ -379,6 +395,224 @@ fun AdminOnlineUsersSheet(
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = semantic.onPresentContainer,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bottom sheet opened by tapping the pulsing app downloads / registered accounts pill on Home,
+ * showing the full current members list with search, online status, class/stream, and attendance %.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminRegisteredMembersSheet(
+    members: List<UserProfile>,
+    onDismiss: () -> Unit
+) {
+    val semantic = LocalAttendanceColors.current
+    val nowMs = remember(members) { System.currentTimeMillis() }
+    var searchQuery by remember { mutableStateOf("") }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val sortedMembers = remember(members, searchQuery, nowMs) {
+        val q = searchQuery.trim().lowercase(Locale.US)
+        members
+            .filter { user ->
+                q.isEmpty() ||
+                    user.fullName.lowercase(Locale.US).contains(q) ||
+                    user.nickname.orEmpty().lowercase(Locale.US).contains(q) ||
+                    user.className.lowercase(Locale.US).contains(q) ||
+                    user.alStream.lowercase(Locale.US).contains(q) ||
+                    user.grade.lowercase(Locale.US).contains(q)
+            }
+            .sortedWith(
+                compareByDescending<UserProfile> { it.isCurrentlyOnline(nowMs) }
+                    .thenByDescending { it.lastSeenAt?.toDate()?.time ?: 0L }
+                    .thenBy { it.fullName }
+            )
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .testTag("admin_registered_members_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PulsingLiveDot(color = semantic.present, dotSize = 8.dp)
+                    Column {
+                        Text(
+                            text = "Current Members (${members.size})",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Registered student accounts on 80endance",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (members.size > 4) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it.take(60) },
+                    placeholder = { Text("Search name, class, or stream...") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_members_search_input")
+                )
+            }
+
+            if (sortedMembers.isEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 28.dp, horizontal = 16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PeopleOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(34.dp)
+                        )
+                        Text(
+                            text = if (searchQuery.isNotBlank()) "No matching members" else "No members found",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    itemsIndexed(
+                        items = sortedMembers,
+                        key = { _, user -> user.userId.ifBlank { user.email } }
+                    ) { idx, user ->
+                        StaggeredReveal(index = idx.coerceAtMost(8)) {
+                            val isOnline = user.isCurrentlyOnline(nowMs)
+                            val seenLabel = DateUtils.formatLastSeen(
+                                timestampMillis = user.lastSeenAt?.toDate()?.time,
+                                isOnline = isOnline,
+                                nowMillis = nowMs
+                            )
+                            val pct = user.quickOverallPercent
+                            val isEligible = pct >= 80.0
+
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("admin_member_row_${user.userId}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box {
+                                        ProfileAvatar(
+                                            customAvatarBase64 = user.customAvatarBase64,
+                                            googlePhotoUrl = user.photoUrl,
+                                            displayName = user.fullName,
+                                            size = 42.dp
+                                        )
+                                        if (isOnline) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                                    .padding(2.dp)
+                                                    .clip(CircleShape)
+                                                    .background(semantic.present)
+                                            )
+                                        }
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        val nick = user.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                                        Text(
+                                            text = if (nick != null) "${user.fullName} ($nick)" else user.fullName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = listOf(user.grade, user.className, user.alStream)
+                                                .filter { it.isNotBlank() }
+                                                .joinToString(" • ")
+                                                .ifEmpty { "Setup pending" },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = seenLabel,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isOnline) semantic.present else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Surface(
+                                        color = if (isEligible) {
+                                            semantic.presentContainer.copy(alpha = 0.85f)
+                                        } else {
+                                            semantic.absentContainer.copy(alpha = 0.85f)
+                                        },
+                                        shape = RoundedCornerShape(999.dp)
+                                    ) {
+                                        Text(
+                                            text = String.format(Locale.US, "%.0f%%", pct),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isEligible) semantic.onPresentContainer else semantic.onAbsentContainer,
                                             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
                                         )
                                     }

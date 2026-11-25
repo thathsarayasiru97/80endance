@@ -40,12 +40,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddTask
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.HistoryToggleOff
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Timer
@@ -55,6 +57,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -108,6 +111,7 @@ import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.AdminOnlineNowPill
 import com.example.ui.components.AdminOnlineUsersSheet
+import com.example.ui.components.AdminRegisteredMembersSheet
 import com.example.ui.components.BroadcastAlertBanner
 import com.example.ui.components.CommunityAccountCountPill
 import com.example.ui.components.DevelopedByAtayaFooter
@@ -142,6 +146,7 @@ fun HomeScreen(
     onDismissResolvedFeedback: (String) -> Unit = {},
     celebrationEvent: CelebrationEvent? = null,
     onDismissCelebration: () -> Unit = {},
+    onMarkSwipeDeckAutoOffered: () -> Unit = {},
     bottomBarPadding: Dp = 24.dp
 ) {
     val profile = state.profile
@@ -162,10 +167,11 @@ fun HomeScreen(
     var showPhotoDialog by remember { mutableStateOf(false) }
     var showAlTimelineSheet by remember { mutableStateOf(false) }
     var showSwipeCatchUpDeck by remember { mutableStateOf(false) }
-    var autoOfferedSwipeDeck by rememberSaveable { mutableStateOf(false) }
     var privacyBlurred by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
     var showAdminOnlineUsersSheet by remember { mutableStateOf(false) }
+    var showAdminMembersSheet by remember { mutableStateOf(false) }
+    var dismissedBatchMilestoneDays by rememberSaveable { mutableStateOf<Int?>(null) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
 
@@ -177,10 +183,13 @@ fun HomeScreen(
         }
     }
 
-    // Auto-offer Swipe-to-Catch-Up stack once per launch if student has a 3+ day unlogged backlog
-    LaunchedEffect(state.missedSchoolDays.size, state.shouldAutoShowCheckIn) {
-        if (!autoOfferedSwipeDeck && state.missedSchoolDays.size >= 3 && !state.shouldAutoShowCheckIn) {
-            autoOfferedSwipeDeck = true
+    // Auto-offer Swipe-to-Catch-Up stack strictly once per app launch (never on tab switches)
+    LaunchedEffect(state.missedSchoolDays.size, state.shouldAutoShowCheckIn, state.autoOfferedSwipeDeckThisLaunch) {
+        if (!state.autoOfferedSwipeDeckThisLaunch &&
+            state.missedSchoolDays.size >= 3 &&
+            !state.shouldAutoShowCheckIn
+        ) {
+            onMarkSwipeDeckAutoOffered()
             delay(900L)
             showSwipeCatchUpDeck = true
         }
@@ -203,8 +212,32 @@ fun HomeScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Greeting Header + A/L Countdown + Sync Status
+            // 1. Greeting Header + Dynamic Context Banner + A/L Countdown + Sync Status
             item {
+                val dynamicContext = remember(
+                    profile?.greetingName,
+                    state.todayIsWeekend,
+                    state.todayNonSchoolEvent,
+                    state.todayRecord,
+                    state.currentStreak,
+                    state.weeklySummary,
+                    state.nextPoyaOrHoliday,
+                    activeStats
+                ) {
+                    AttendanceCalculator.buildDynamicGreetingAndContext(
+                        greetingName = profile?.greetingName ?: "Student",
+                        todayKey = DateUtils.todayKey(),
+                        hourOfDay = DateUtils.currentHourMinute().first,
+                        todayIsWeekend = state.todayIsWeekend,
+                        todayNonSchoolEvent = state.todayNonSchoolEvent,
+                        todayRecord = state.todayRecord,
+                        currentStreak = state.currentStreak,
+                        weeklySummary = state.weeklySummary,
+                        nextHoliday = state.nextPoyaOrHoliday,
+                        activeStats = activeStats
+                    )
+                }
+
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -226,11 +259,12 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Hey, ${profile?.greetingName ?: "Student"}",
+                                    text = dynamicContext.greetingTitle,
                                     style = MaterialTheme.typography.headlineSmall,
                                     color = MaterialTheme.colorScheme.onBackground,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.testTag("home_dynamic_greeting_title")
                                 )
                                 Text(
                                     text = listOfNotNull(
@@ -251,7 +285,130 @@ fun HomeScreen(
                         )
                     }
 
+                    // Subtle Dynamic Context Banner ("Good afternoon · 4 school days left this week", Poya tomorrow, Streak alert)
+                    val contextBg = when {
+                        dynamicContext.isStreakAlert -> semantic.poyaContainer.copy(alpha = 0.72f)
+                        dynamicContext.isHolidayTomorrow || dynamicContext.isHolidayToday -> semantic.poyaContainer.copy(alpha = 0.65f)
+                        else -> MaterialTheme.colorScheme.surfaceContainerLow
+                    }
+                    val contextFg = when {
+                        dynamicContext.isStreakAlert -> semantic.onPoyaContainer
+                        dynamicContext.isHolidayTomorrow || dynamicContext.isHolidayToday -> semantic.onPoyaContainer
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Surface(
+                        color = contextBg,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_dynamic_context_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = when {
+                                    dynamicContext.isStreakAlert -> Icons.Rounded.LocalFireDepartment
+                                    dynamicContext.isHolidayTomorrow || dynamicContext.isHolidayToday -> Icons.Rounded.NightsStay
+                                    else -> Icons.Rounded.AutoAwesome
+                                },
+                                contentDescription = null,
+                                tint = if (dynamicContext.isStreakAlert) semantic.poya else contextFg,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = dynamicContext.contextBannerText,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = contextFg,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
                     val examYear = profile?.alExamYear ?: state.appSettings.currentAcademicYear
+                    val batchMilestone = remember(state.daysUntilAlExam, examYear) {
+                        AttendanceCalculator.resolveBatchCountdownMilestone(
+                            daysUntilAlExam = state.daysUntilAlExam,
+                            examYear = examYear
+                        )
+                    }
+
+                    // Shared Celebratory Batch Countdown Milestone Banner (300d, 200d, 100d, 50d, 30d to A/Ls)
+                    if (batchMilestone != null && dismissedBatchMilestoneDays != batchMilestone.milestoneDays) {
+                        Card(
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .bouncyClickable(pressedScale = 0.98f) { showAlTimelineSheet = true }
+                                .testTag("home_batch_milestone_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier.size(42.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AutoAwesome,
+                                            contentDescription = "Batch milestone",
+                                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(50)
+                                    ) {
+                                        Text(
+                                            text = batchMilestone.badgeText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = batchMilestone.headline,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Text(
+                                        text = batchMilestone.subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.9f)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { dismissedBatchMilestoneDays = batchMilestone.milestoneDays }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Dismiss milestone banner",
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     // Hero "Days Left for A/L" First-Glance Spotlight — starts large, then docks into compact chip
                     AnimatedVisibility(
@@ -369,7 +526,11 @@ fun HomeScreen(
                         }
 
                         if (state.totalAccounts > 0) {
-                            CommunityAccountCountPill(totalAccounts = state.totalAccounts)
+                            val canViewMembers = state.adminOnlineNowCount != null || state.adminAllStudents.isNotEmpty()
+                            CommunityAccountCountPill(
+                                totalAccounts = state.totalAccounts,
+                                onClick = if (canViewMembers) ({ showAdminMembersSheet = true }) else null
+                            )
                         }
 
                         state.adminOnlineNowCount?.let { onlineNow ->
@@ -1261,6 +1422,13 @@ fun HomeScreen(
         AdminOnlineUsersSheet(
             onlineUsers = state.adminOnlineUsers,
             onDismiss = { showAdminOnlineUsersSheet = false }
+        )
+    }
+
+    if (showAdminMembersSheet && (state.adminOnlineNowCount != null || state.adminAllStudents.isNotEmpty())) {
+        AdminRegisteredMembersSheet(
+            members = state.adminAllStudents,
+            onDismiss = { showAdminMembersSheet = false }
         )
     }
 

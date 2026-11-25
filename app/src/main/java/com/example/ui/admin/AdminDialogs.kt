@@ -54,7 +54,8 @@ fun NoticeEditorDialog(
         targetType: NoticeTargetType,
         targetValue: String?,
         eventDate: String?,
-        urgent: Boolean
+        urgent: Boolean,
+        scheduledAtMillis: Long?
     ) -> Unit
 ) {
     var title by remember { mutableStateOf(editingNotice?.title.orEmpty()) }
@@ -65,6 +66,25 @@ fun NoticeEditorDialog(
     var targetValue by remember { mutableStateOf(editingNotice?.targetValue.orEmpty()) }
     var eventDate by remember { mutableStateOf(editingNotice?.eventDate.orEmpty()) }
     var urgent by remember { mutableStateOf(editingNotice?.urgentFlag ?: false) }
+
+    val initialScheduledPair = remember(editingNotice?.scheduledAtMillis) {
+        val existingMillis = editingNotice?.scheduledAtMillis
+        if (existingMillis != null && existingMillis > 0L) {
+            DateUtils.toDateKeyAndTime24h(existingMillis)
+        } else {
+            DateUtils.addDays(DateUtils.todayKey(), 1) to "07:00"
+        }
+    }
+    var scheduleLater by remember {
+        mutableStateOf(editingNotice?.scheduledAtMillis != null && editingNotice.scheduledAtMillis > 0L)
+    }
+    var scheduledDateKey by remember { mutableStateOf(initialScheduledPair.first) }
+    var scheduledTime24h by remember { mutableStateOf(initialScheduledPair.second) }
+
+    val parsedScheduledMillis = remember(scheduleLater, scheduledDateKey, scheduledTime24h) {
+        if (!scheduleLater) null else DateUtils.parseDateTimeMillis(scheduledDateKey, scheduledTime24h)
+    }
+    val scheduleInputValid = !scheduleLater || (parsedScheduledMillis != null && parsedScheduledMillis > 0L)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -181,12 +201,104 @@ fun NoticeEditorDialog(
                     Text("Mark Urgent Highlight", style = MaterialTheme.typography.bodyMedium)
                     Switch(checked = urgent, onCheckedChange = { urgent = it })
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Schedule for Later", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "Auto-appear to students at the set date & time",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = scheduleLater, onCheckedChange = { scheduleLater = it })
+                }
+
+                if (scheduleLater) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val today = DateUtils.todayKey()
+                        val tomorrow = DateUtils.addDays(today, 1)
+                        val nextMon = remember(today) {
+                            val mon = DateUtils.mondayOfWeek(today)
+                            if (mon > today) mon else DateUtils.addDays(mon, 7)
+                        }
+                        FilterChip(
+                            selected = scheduledDateKey == today && scheduledTime24h == "20:00",
+                            onClick = {
+                                scheduledDateKey = today
+                                scheduledTime24h = "20:00"
+                            },
+                            label = { Text("Tonight 8:00 PM") }
+                        )
+                        FilterChip(
+                            selected = scheduledDateKey == tomorrow && scheduledTime24h == "07:00",
+                            onClick = {
+                                scheduledDateKey = tomorrow
+                                scheduledTime24h = "07:00"
+                            },
+                            label = { Text("Tomorrow 7:00 AM") }
+                        )
+                        FilterChip(
+                            selected = scheduledDateKey == nextMon && scheduledTime24h == "07:00",
+                            onClick = {
+                                scheduledDateKey = nextMon
+                                scheduledTime24h = "07:00"
+                            },
+                            label = { Text("Mon 7:00 AM") }
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = scheduledDateKey,
+                            onValueChange = { scheduledDateKey = it.take(10) },
+                            label = { Text("Publish Date") },
+                            placeholder = { Text("YYYY-MM-DD") },
+                            singleLine = true,
+                            isError = !scheduleInputValid,
+                            modifier = Modifier.weight(1.25f)
+                        )
+                        OutlinedTextField(
+                            value = scheduledTime24h,
+                            onValueChange = { scheduledTime24h = it.take(5) },
+                            label = { Text("Time (24h)") },
+                            placeholder = { Text("07:00") },
+                            singleLine = true,
+                            isError = !scheduleInputValid,
+                            modifier = Modifier.weight(0.95f)
+                        )
+                    }
+
+                    if (parsedScheduledMillis != null) {
+                        Text(
+                            text = "Will go live on ${DateUtils.formatScheduledDateTime(parsedScheduledMillis)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text(
+                            text = "Enter valid date (YYYY-MM-DD) and 24-hour time (HH:MM)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    if (title.trim().isNotEmpty() && message.trim().isNotEmpty()) {
+                    if (title.trim().isNotEmpty() && message.trim().isNotEmpty() && scheduleInputValid) {
                         onSave(
                             editingNotice?.id,
                             title.trim(),
@@ -196,13 +308,20 @@ fun NoticeEditorDialog(
                             targetType,
                             targetValue.trim().ifEmpty { null },
                             eventDate.trim().ifEmpty { null },
-                            urgent
+                            urgent,
+                            parsedScheduledMillis
                         )
                     }
                 },
-                enabled = title.trim().isNotEmpty() && message.trim().isNotEmpty()
+                enabled = title.trim().isNotEmpty() && message.trim().isNotEmpty() && scheduleInputValid
             ) {
-                Text(if (editingNotice == null) "Publish" else "Save")
+                Text(
+                    when {
+                        scheduleLater && editingNotice == null -> "Schedule"
+                        editingNotice == null -> "Publish"
+                        else -> "Save"
+                    }
+                )
             }
         },
         dismissButton = {

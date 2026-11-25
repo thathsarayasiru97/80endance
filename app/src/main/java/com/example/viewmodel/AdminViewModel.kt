@@ -172,6 +172,7 @@ class AdminViewModel(
         targetValue: String?,
         eventDate: String?,
         urgent: Boolean,
+        scheduledAtMillis: Long? = null,
         onDone: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -186,11 +187,17 @@ class AdminViewModel(
                 targetValue = targetValue,
                 eventDate = eventDate,
                 urgent = urgent,
-                published = true
+                published = true,
+                scheduledAtMillis = scheduledAtMillis
             )
             _isBusy.value = false
             res.onSuccess {
-                _snackbar.value = if (noticeId == null) "Notice published" else "Notice updated"
+                val isFutureSchedule = scheduledAtMillis != null && scheduledAtMillis > System.currentTimeMillis()
+                _snackbar.value = when {
+                    isFutureSchedule -> "Notice scheduled for ${DateUtils.formatScheduledDateTime(scheduledAtMillis!!)}"
+                    noticeId == null -> "Notice published"
+                    else -> "Notice updated"
+                }
                 onDone()
             }.onFailure { e ->
                 _snackbar.value = e.message ?: "Failed to save notice"

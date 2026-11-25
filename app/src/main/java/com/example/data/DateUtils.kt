@@ -294,4 +294,43 @@ object DateUtils {
             }
         }
     }
+
+    /**
+     * Parses a `YYYY-MM-DD` date key and `HH:mm` (24-hour) time string into epoch milliseconds,
+     * or returns null if either part is invalid.
+     */
+    fun parseDateTimeMillis(dateKey: String, time24h: String): Long? {
+        val baseCal = parseDateKey(dateKey.trim()) ?: return null
+        val parts = time24h.trim().split(":")
+        if (parts.size != 2) return null
+        val hour = parts[0].toIntOrNull() ?: return null
+        val minute = parts[1].toIntOrNull() ?: return null
+        if (hour !in 0..23 || minute !in 0..59) return null
+        baseCal.set(Calendar.HOUR_OF_DAY, hour)
+        baseCal.set(Calendar.MINUTE, minute)
+        baseCal.set(Calendar.SECOND, 0)
+        baseCal.set(Calendar.MILLISECOND, 0)
+        return baseCal.timeInMillis
+    }
+
+    /**
+     * Formats an epoch millisecond timestamp into a pair of `(YYYY-MM-DD, HH:mm)` in local time.
+     */
+    fun toDateKeyAndTime24h(millis: Long): Pair<String, String> {
+        val cal = Calendar.getInstance().apply { timeInMillis = millis }
+        val dateKey = formatDateKey(cal)
+        val hh = String.format(Locale.US, "%02d", cal.get(Calendar.HOUR_OF_DAY))
+        val mm = String.format(Locale.US, "%02d", cal.get(Calendar.MINUTE))
+        return dateKey to "$hh:$mm"
+    }
+
+    /**
+     * Formats a scheduled publication timestamp for display (e.g. "12 Nov • 7:00 AM").
+     */
+    fun formatScheduledDateTime(millis: Long): String {
+        if (millis <= 0L) return ""
+        val fmt = SimpleDateFormat("d MMM • h:mm a", Locale.US)
+        return fmt.format(Date(millis))
+    }
 }
+

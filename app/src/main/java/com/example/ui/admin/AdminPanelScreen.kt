@@ -277,20 +277,40 @@ fun AdminPanelScreen(
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text(
-                                                    text = buildString {
-                                                        append(notice.categoryEnum.label)
-                                                        append(" • ")
-                                                        append(
-                                                            when (notice.targetTypeEnum) {
-                                                                NoticeTargetType.ALL -> "All"
-                                                                else -> notice.targetValue ?: notice.targetTypeEnum.label
-                                                            }
-                                                        )
-                                                    },
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text(
+                                                        text = buildString {
+                                                            append(notice.categoryEnum.label)
+                                                            append(" • ")
+                                                            append(
+                                                                when (notice.targetTypeEnum) {
+                                                                    NoticeTargetType.ALL -> "All"
+                                                                    else -> notice.targetValue ?: notice.targetTypeEnum.label
+                                                                }
+                                                            )
+                                                        },
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    val scheduledMs = notice.scheduledAtMillis
+                                                    if (scheduledMs != null && notice.isScheduledForFuture(state.presenceNowMillis)) {
+                                                        Surface(
+                                                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                                                            shape = RoundedCornerShape(50)
+                                                        ) {
+                                                            Text(
+                                                                text = "Scheduled • ${DateUtils.formatScheduledDateTime(scheduledMs)}",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                                 Row {
                                                     IconButton(onClick = { viewModel.togglePin(notice) }) {
                                                         Icon(
@@ -960,8 +980,8 @@ fun AdminPanelScreen(
         NoticeEditorDialog(
             editingNotice = editingNotice,
             onDismiss = { showNoticeDialog = false },
-            onSave = { id, title, msg, cat, pinned, targetType, targetVal, evDate, urgent ->
-                viewModel.saveNotice(id, title, msg, cat, pinned, targetType, targetVal, evDate, urgent) {
+            onSave = { id, title, msg, cat, pinned, targetType, targetVal, evDate, urgent, scheduledAtMillis ->
+                viewModel.saveNotice(id, title, msg, cat, pinned, targetType, targetVal, evDate, urgent, scheduledAtMillis) {
                     showNoticeDialog = false
                 }
             }

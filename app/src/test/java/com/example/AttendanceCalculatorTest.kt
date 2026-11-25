@@ -1290,7 +1290,148 @@ class AttendanceCalculatorTest {
         assertEquals(1, digest.lastWeekAttended) // Only unlocked Thu
         assertEquals(-1.15, digest.weekOverWeekDelta ?: 0.0, 0.1) // 78.85% - 80.0%
     }
+
+    @Test
+    fun scheduledNoticesAreHiddenUntilScheduledTimestampArrives() {
+        val profile = UserProfile(grade = "Grade 13", alStream = "Physical Science", className = "13M1")
+        val nowMs = 1_760_000_000_000L
+        val liveNotice = com.example.data.Notice(
+            id = "n_live",
+            title = "Live Notice",
+            message = "Visible right now",
+            published = true,
+            scheduledAtMillis = null
+        )
+        val pastScheduledNotice = com.example.data.Notice(
+            id = "n_past_sched",
+            title = "Already Due Notice",
+            message = "Scheduled 10 minutes ago",
+            published = true,
+            scheduledAtMillis = nowMs - 600_000L
+        )
+        val futureScheduledNotice = com.example.data.Notice(
+            id = "n_future_sched",
+            title = "Tomorrow Morning Notice",
+            message = "Scheduled for tomorrow 7 AM",
+            published = true,
+            scheduledAtMillis = nowMs + 3_600_000L
+        )
+
+        val beforeDue = AttendanceCalculator.filterNoticesForStudent(
+            notices = listOf(liveNotice, pastScheduledNotice, futureScheduledNotice),
+            profile = profile,
+            nowMillis = nowMs
+        )
+        assertEquals(listOf("n_past_sched", "n_live"), beforeDue.map { it.id })
+
+        val afterDue = AttendanceCalculator.filterNoticesForStudent(
+            notices = listOf(liveNotice, pastScheduledNotice, futureScheduledNotice),
+            profile = profile,
+            nowMillis = nowMs + 3_600_001L
+        )
+        assertEquals(listOf("n_future_sched", "n_past_sched", "n_live"), afterDue.map { it.id })
+    }
+
+    @Test
+    fun dynamicGreetingAndContextAdaptsToTimeHolidayStreakAndRemainingSchoolDays() {
+        val vesakPoya = CalendarEvent(
+            id = "poya_vesak",
+            title = "Vesak Poya",
+            dateKey = "2026-05-12",
+            eventType = CalendarEventType.POYA.raw
+        )
+        val weekly = listOf(
+            com.example.data.WeekDaySummary("Mon", "2026-05-11", status = null, holidayLabel = null, isToday = true, isFuture = false),
+            com.example.data.WeekDaySummary("Tue", "2026-05-12", status = null, holidayLabel = "Vesak Poya", isToday = false, isFuture = true),
+            com.example.data.WeekDaySummary("Wed", "2026-05-13", status = null, holidayLabel = null, isToday = false, isFuture = true),
+            com.example.data.WeekDaySummary("Thu", "2026-05-14", status = null, holidayLabel = null, isToday = false, isFuture = true),
+            com.example.data.WeekDaySummary("Fri", "2026-05-15", status = null, holidayLabel = null, isToday = false, isFuture = true)
+        )
+
+        // 1. Holiday tomorrow takes priority
+        val poyaTomorrowCtx = AttendanceCalculator.buildDynamicGreetingAndContext(
+            greetingName = "Yasiru",
+            todayKey = "2026-05-11",
+            hourOfDay = 14,
+            todayIsWeekend = false,
+            todayRecord = null,
+            currentStreak = 5,
+            weeklySummary = weekly,
+            nextHoliday = vesakPoya
+        )
+        assertEquals("Good afternoon, Yasiru", poyaTomorrowCtx.greetingTitle)
+        assertEquals("Vesak Poya tomorrow — enjoy the break", poyaTomorrowCtx.contextBannerText)
+        assertTrue(poyaTomorrowCtx.isHolidayTomorrow)
+
+        // 2. Active streak >= 3 on unlogged school day (when tomorrow is not a holiday)
+        val streakCtx = AttendanceCalculator.buildDynamicGreetingAndContext(
+            greetingName = "Yasiru",
+            todayKey = "2026-05-13",
+            hourOfDay = 9,
+            todayIsWeekend = false,
+            todayRecord = null,
+            currentStreak = 5,
+            weeklySummary = weekly,
+            nextHoliday = null
+        )
+        assertEquals("Good morning, Yasiru", streakCtx.greetingTitle)
+        assertTrue(streakCtx.isStreakAlert)
+        assertTrue(streakCtx.contextBannerText.contains("5-day streak on the line today"))
+
+        // 3. Remaining school days this week when today is already logged
+        val loggedMonday = AttendanceRecord(dateKey = "2026-05-11", status = AttendanceStatus.PRESENT.raw)
+        val schoolDaysLeftCtx = AttendanceCalculator.buildDynamicGreetingAndContext(
+            greetingName = "Yasiru",
+            todayKey = "2026-05-11",
+            hourOfDay = 15,
+            todayIsWeekend = false,
+            todayRecord = loggedMonday,
+            currentStreak = 2,
+            weeklySummary = weekly,
+            nextHoliday = null
+        )
+        assertEquals("Good afternoon, Yasiru", schoolDaysLeftCtx.greetingTitle)
+        // Tue is Vesak Poya, so Wed/Thu/Fri = 3 school days left this week
+        assertEquals("Good afternoon · 3 school days left this week", schoolDaysLeftCtx.contextBannerText)
+    }
+
+    @Test
+    fun batchCountdownMilestonesResolveFor300_200_100_50_30Days() {
+        listOf(300, 200, 100, 50, 30).forEach { milestone ->
+            val resolved = AttendanceCalculator.resolveBatchCountdownMilestone(
+                daysUntilAlExam = milestone,
+                examYear = 2027
+            )
+            assertEquals(milestone, resolved?.milestoneDays)
+            assertEquals("${milestone}D MILESTONE", resolved?.badgeText)
+            assertTrue(resolved?.headline?.contains("2027") == true)
+        }
+        // Within 2-day post-milestone celebratory window (e.g. 99d left for 100d milestone)
+        val windowMatch = AttendanceCalculator.resolveBatchCountdownMilestone(
+            daysUntilAlExam = 99,
+            examYear = 2027
+        )
+        assertEquals(100, windowMatch?.milestoneDays)
+
+        // Non-milestone day returns null
+        val nonMilestone = AttendanceCalculator.resolveBatchCountdownMilestone(
+            daysUntilAlExam = 145,
+            examYear = 2027
+        )
+        assertEquals(null, nonMilestone)
+    }
+
+    @Test
+    fun dateUtilsScheduledDateTimeRoundTripsCleanly() {
+        val millis = com.example.data.DateUtils.parseDateTimeMillis("2026-11-26", "07:30")
+        assertTrue(millis != null && millis > 0L)
+        val (dateKey, time24h) = com.example.data.DateUtils.toDateKeyAndTime24h(millis!!)
+        assertEquals("2026-11-26", dateKey)
+        assertEquals("07:30", time24h)
+        assertEquals(null, com.example.data.DateUtils.parseDateTimeMillis("2026-11-26", "25:99"))
+    }
 }
+
 
 
 

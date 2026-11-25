@@ -701,6 +701,7 @@ private fun AuthenticatedAppShell(
                             onDismissResolvedFeedback = { id -> attendanceViewModel.dismissResolvedFeedbackAlert(id) },
                             celebrationEvent = celebrationEvent,
                             onDismissCelebration = { attendanceViewModel.dismissCelebration() },
+                            onMarkSwipeDeckAutoOffered = { attendanceViewModel.markSwipeDeckAutoOffered() },
                             bottomBarPadding = bottomScrollPadding
                         )
 
