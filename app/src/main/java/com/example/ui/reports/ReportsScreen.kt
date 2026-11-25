@@ -58,7 +58,9 @@ import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
 import com.example.data.DateUtils
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.LiquidGlassSegmentOption
 import com.example.ui.components.RollingCounterText
+import com.example.ui.components.SlidableLiquidGlassSegmentedBar
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.StudentAppState
@@ -230,25 +232,42 @@ fun ReportsScreen(
                 }
             }
 
-            // Scope Chips
+            // Scope Switcher (Overall + Terms) in Real Liquid Glass
             item {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedTerm == null,
-                        onClick = { selectedTerm = null },
-                        label = { Text("Overall (G12 & 13)") }
-                    )
-                    state.terms.take(4).forEach { term ->
-                        FilterChip(
-                            selected = selectedTerm?.id == term.id,
-                            onClick = { selectedTerm = term },
-                            label = { Text(term.name) }
+                val visibleTerms = remember(state.terms) { state.terms.take(4) }
+                val scopeOptions = remember(visibleTerms) {
+                    buildList {
+                        add(
+                            LiquidGlassSegmentOption(
+                                label = "Overall (G12 & 13)",
+                                testTag = "reports_scope_overall"
+                            )
                         )
+                        visibleTerms.forEach { term ->
+                            add(
+                                LiquidGlassSegmentOption(
+                                    label = term.name,
+                                    testTag = "reports_scope_${term.id}"
+                                )
+                            )
+                        }
                     }
                 }
+                val selectedScopeIdx = remember(selectedTerm, visibleTerms) {
+                    if (selectedTerm == null) 0
+                    else (visibleTerms.indexOfFirst { it.id == selectedTerm?.id } + 1).coerceAtLeast(0)
+                }
+                SlidableLiquidGlassSegmentedBar(
+                    options = scopeOptions,
+                    selectedIndex = selectedScopeIdx,
+                    onOptionSelected = { idx ->
+                        selectedTerm = if (idx == 0) null else visibleTerms.getOrNull(idx - 1)
+                    },
+                    barHeight = 46.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("reports_term_scope_switcher")
+                )
             }
 
             // Summary Card

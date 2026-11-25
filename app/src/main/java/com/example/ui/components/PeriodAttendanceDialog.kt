@@ -380,53 +380,45 @@ fun PeriodAttendanceDialog(
                 }
 
                 // 3 Entry Modes: Days Missed | Days Attended | Percentage %
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    FilterChip(
-                        selected = entryMode == AttendancePeriodEntryMode.MISSED_DAYS,
-                        onClick = {
-                            if (entryMode != AttendancePeriodEntryMode.MISSED_DAYS) {
-                                entryMode = AttendancePeriodEntryMode.MISSED_DAYS
-                                valueText = ""
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.EventBusy, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                        label = { Text("Days Missed") },
-                        modifier = Modifier.testTag("period_mode_missed")
-                    )
-                    FilterChip(
-                        selected = entryMode == AttendancePeriodEntryMode.ATTENDED_DAYS,
-                        onClick = {
-                            if (entryMode != AttendancePeriodEntryMode.ATTENDED_DAYS) {
-                                entryMode = AttendancePeriodEntryMode.ATTENDED_DAYS
-                                valueText = ""
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                        label = { Text("Days Attended") },
-                        modifier = Modifier.testTag("period_mode_attended")
-                    )
-                    FilterChip(
-                        selected = entryMode == AttendancePeriodEntryMode.PERCENTAGE,
-                        onClick = {
-                            if (entryMode != AttendancePeriodEntryMode.PERCENTAGE) {
-                                entryMode = AttendancePeriodEntryMode.PERCENTAGE
-                                valueText = ""
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Percent, contentDescription = null, modifier = Modifier.size(16.dp))
-                        },
-                        label = { Text("Percentage %") },
-                        modifier = Modifier.testTag("period_mode_percent")
+                val entryModes = remember {
+                    listOf(
+                        AttendancePeriodEntryMode.MISSED_DAYS,
+                        AttendancePeriodEntryMode.ATTENDED_DAYS,
+                        AttendancePeriodEntryMode.PERCENTAGE
                     )
                 }
+                val entryModeOptions = remember {
+                    listOf(
+                        LiquidGlassSegmentOption(
+                            label = "Missed",
+                            testTag = "period_mode_missed",
+                            icon = Icons.Rounded.EventBusy
+                        ),
+                        LiquidGlassSegmentOption(
+                            label = "Attended",
+                            testTag = "period_mode_attended",
+                            icon = Icons.Rounded.CheckCircle
+                        ),
+                        LiquidGlassSegmentOption(
+                            label = "Percent %",
+                            testTag = "period_mode_percent",
+                            icon = Icons.Rounded.Percent
+                        )
+                    )
+                }
+                SlidableLiquidGlassSegmentedBar(
+                    options = entryModeOptions,
+                    selectedIndex = entryModes.indexOf(entryMode).coerceAtLeast(0),
+                    onOptionSelected = { idx ->
+                        val nextMode = entryModes.getOrNull(idx) ?: return@SlidableLiquidGlassSegmentedBar
+                        if (entryMode != nextMode) {
+                            entryMode = nextMode
+                            valueText = ""
+                        }
+                    },
+                    barHeight = 44.dp,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 // Value Input Field
                 val fieldLabel = when (entryMode) {

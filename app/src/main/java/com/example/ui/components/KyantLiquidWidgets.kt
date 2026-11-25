@@ -30,7 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -45,9 +44,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -72,12 +73,11 @@ import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.tanh
@@ -85,11 +85,12 @@ import kotlin.math.tanh
 /**
  * Optimized Kyant Backdrop catalog `LiquidBottomTabs` implementation.
  *
- * Fixes:
- * - Uses `rememberUpdatedState(selectedTabIndex)` so `currentIndex` and `dampedDragAnimation` are NOT
- *   destroyed and recreated on every tab click recomposition — ensuring clicking any tab smoothly
- *   slides the liquid glass pill from the previous tab to the clicked tab!
- * - Allows tapping anywhere along the bar or dragging the liquid glass lens pill directly.
+ * Free-sliding physics:
+ * - While your finger is dragging, the liquid-glass pill follows your exact fractional finger position
+ *   (`0.00f .. (tabsCount - 1).toFloat()`) with zero mid-drag snapping or tab-switch preemption!
+ * - `onTabSelected` is ONLY invoked when you release your finger (`onDragStopped`), at which point
+ *   the pill settles into the nearest tab slot with damped liquid spring physics.
+ * - Tapping any tab item directly also glides the pill smoothly from its current slot to the tapped slot.
  */
 @Composable
 fun LiquidBottomTabs(
@@ -115,6 +116,7 @@ fun LiquidBottomTabs(
         if (isLightTheme) Color(0xFFFAFAFA).copy(0.42f)
         else Color(0xFF121212).copy(0.45f)
 
+    val haptic = LocalHapticFeedback.current
     val latestSelectedTabIndex by rememberUpdatedState(selectedTabIndex)
     val latestOnTabSelected by rememberUpdatedState(onTabSelected)
 
@@ -146,11 +148,11 @@ fun LiquidBottomTabs(
         val latestIsLtr by rememberUpdatedState(isLtr)
         val animationScope = rememberCoroutineScope()
 
-        // IMPORTANT: Do NOT key by `selectedTabIndex` lambda reference — that reset currentIndex
-        // on every recomposition and prevented the pill from sliding on tab clicks!
         var currentIndex by remember {
             mutableIntStateOf(latestSelectedTabIndex().coerceIn(0, maxSlot))
         }
+        var isUserDragging by remember { mutableStateOf(false) }
+        var lastHoverSlot by remember { mutableIntStateOf(currentIndex) }
 
         val dampedDragAnimation = remember(animationScope, tabsCount) {
             DampedDragAnimation(
@@ -159,11 +161,16 @@ fun LiquidBottomTabs(
                 valueRange = 0f..maxSlot.toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
-                pressedScale = 74f / 56f,
-                onDragStarted = {},
+                pressedScale = 76f / 56f,
+                onDragStarted = {
+                    isUserDragging = true
+                    lastHoverSlot = targetValue.fastRoundToInt().fastCoerceIn(0, maxSlot)
+                },
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, maxSlot)
+                    isUserDragging = false
                     currentIndex = targetIndex
+                    // Settle into the nearest tab slot with liquid spring physics
                     animateToValue(targetIndex.toFloat())
                     latestOnTabSelected(targetIndex)
                     animationScope.launch {
@@ -177,11 +184,12 @@ fun LiquidBottomTabs(
                     val w = latestTabWidth
                     val nextVal = (targetValue + dragAmount.x / w * if (latestIsLtr) 1f else -1f)
                         .fastCoerceIn(0f, maxSlot.toFloat())
+                    // Free continuous sliding while finger is down — DO NOT call latestOnTabSelected mid-drag!
                     updateValue(nextVal)
-                    val rounded = nextVal.fastRoundToInt().fastCoerceIn(0, maxSlot)
-                    if (rounded != currentIndex) {
-                        currentIndex = rounded
-                        latestOnTabSelected(rounded)
+                    val hoverSlot = nextVal.fastRoundToInt().fastCoerceIn(0, maxSlot)
+                    if (hoverSlot != lastHoverSlot) {
+                        lastHoverSlot = hoverSlot
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     }
                     animationScope.launch {
                         offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
@@ -190,12 +198,16 @@ fun LiquidBottomTabs(
             )
         }
 
-        // Observe external tab changes (e.g., when user taps a LiquidBottomTab or presses Back)
-        // and smoothly animate the liquid glass pill to the newly selected tab index!
+        // Only animate to external selectedTabIndex when the user is NOT actively dragging the pill
         val externalSelectedIndex = latestSelectedTabIndex().coerceIn(0, maxSlot)
-        LaunchedEffect(externalSelectedIndex) {
-            currentIndex = externalSelectedIndex
-            dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
+        LaunchedEffect(externalSelectedIndex, isUserDragging) {
+            if (!isUserDragging) {
+                currentIndex = externalSelectedIndex
+                lastHoverSlot = externalSelectedIndex
+                if (abs(dampedDragAnimation.targetValue - externalSelectedIndex.toFloat()) > 0.001f) {
+                    dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
+                }
+            }
         }
 
         val interactiveHighlight = remember(animationScope) {
@@ -245,7 +257,7 @@ fun LiquidBottomTabs(
 
         CompositionLocalProvider(
             LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.16f, dampedDragAnimation.pressProgress)
+                lerp(1f, 1.18f, dampedDragAnimation.pressProgress)
             }
         ) {
             Row(
@@ -305,8 +317,7 @@ fun LiquidBottomTabs(
                     backdrop = combinedBackdrop,
                     shape = { Capsule() },
                     effects = {
-                        // Keep subtle optical lens refraction active even at rest (0.28f), swelling to 1.0f on press/glide
-                        val lensFactor = lerp(0.28f, 1f, dampedDragAnimation.pressProgress)
+                        val lensFactor = lerp(0.32f, 1f, dampedDragAnimation.pressProgress)
                         lens(
                             10f.dp.toPx() * lensFactor,
                             14f.dp.toPx() * lensFactor,
@@ -314,15 +325,15 @@ fun LiquidBottomTabs(
                         )
                     },
                     highlight = {
-                        val progress = lerp(0.35f, 1f, dampedDragAnimation.pressProgress)
+                        val progress = lerp(0.38f, 1f, dampedDragAnimation.pressProgress)
                         Highlight.Default.copy(alpha = progress)
                     },
                     shadow = {
-                        val progress = lerp(0.25f, 1f, dampedDragAnimation.pressProgress)
+                        val progress = lerp(0.28f, 1f, dampedDragAnimation.pressProgress)
                         Shadow(alpha = progress)
                     },
                     innerShadow = {
-                        val progress = lerp(0.30f, 1f, dampedDragAnimation.pressProgress)
+                        val progress = lerp(0.32f, 1f, dampedDragAnimation.pressProgress)
                         InnerShadow(
                             radius = 8f.dp * progress,
                             alpha = progress
@@ -331,9 +342,9 @@ fun LiquidBottomTabs(
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
-                        val velocity = dampedDragAnimation.velocity / 12f
-                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
-                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
+                        val velocity = dampedDragAnimation.velocity / 10f
+                        scaleX /= 1f - (velocity * 0.72f).fastCoerceIn(-0.22f, 0.22f)
+                        scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.20f, 0.20f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
@@ -446,6 +457,12 @@ fun LiquidButton(
 
 /**
  * Optimized Kyant Backdrop catalog `LiquidSlider` implementation.
+ *
+ * Free-sliding physics:
+ * - While your finger is dragging, the liquid-glass capsule thumb moves continuously with zero
+ *   integer-stepping jumps.
+ * - If [snapToStepsOnRelease] is true (e.g., for whole school days in the What-If simulator),
+ *   when you release your finger the thumb settles smoothly into the nearest step with liquid spring physics.
  */
 @Composable
 fun LiquidSlider(
@@ -455,7 +472,8 @@ fun LiquidSlider(
     visibilityThreshold: Float,
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
-    accentColorOverride: Color = Color.Unspecified
+    accentColorOverride: Color = Color.Unspecified,
+    snapToStepsOnRelease: Boolean = true
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
     val isLightTheme = !isDark
@@ -468,6 +486,7 @@ fun LiquidSlider(
         if (isLightTheme) Color(0xFF787878).copy(0.2f)
         else Color(0xFF787880).copy(0.36f)
 
+    val haptic = LocalHapticFeedback.current
     val latestValue by rememberUpdatedState(value)
     val latestOnValueChange by rememberUpdatedState(onValueChange)
     val trackBackdrop = rememberLayerBackdrop()
@@ -484,7 +503,8 @@ fun LiquidSlider(
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val latestIsLtr by rememberUpdatedState(isLtr)
         val animationScope = rememberCoroutineScope()
-        var didDrag by remember { mutableStateOf(false) }
+        var isUserDragging by remember { mutableStateOf(false) }
+        var lastHapticStep by remember { mutableIntStateOf(latestValue().roundToInt()) }
 
         val dampedDragAnimation = remember(animationScope) {
             DampedDragAnimation(
@@ -493,32 +513,40 @@ fun LiquidSlider(
                 valueRange = valueRange,
                 visibilityThreshold = visibilityThreshold,
                 initialScale = 1f,
-                pressedScale = 1.45f,
+                pressedScale = 1.48f,
                 onDragStarted = {
-                    didDrag = false
+                    isUserDragging = true
+                    lastHapticStep = targetValue.roundToInt()
                 },
                 onDragStopped = {
-                    if (didDrag) {
-                        latestOnValueChange(targetValue)
-                        didDrag = false
+                    isUserDragging = false
+                    val finalValue = if (snapToStepsOnRelease) {
+                        targetValue.roundToInt().toFloat().coerceIn(valueRange)
+                    } else {
+                        targetValue.coerceIn(valueRange)
                     }
+                    animateToValue(finalValue)
+                    latestOnValueChange(finalValue)
                 },
                 onDrag = { _, dragAmount ->
-                    if (!didDrag) {
-                        didDrag = dragAmount.x != 0f
-                    }
                     val delta = (valueRange.endInclusive - valueRange.start) * (dragAmount.x / latestTrackWidth)
                     val next = if (latestIsLtr) (targetValue + delta).coerceIn(valueRange)
                     else (targetValue - delta).coerceIn(valueRange)
+                    // Continuous fractional thumb movement while dragging
                     updateValue(next)
+                    val step = next.roundToInt()
+                    if (step != lastHapticStep) {
+                        lastHapticStep = step
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
                     latestOnValueChange(next)
                 }
             )
         }
 
         val currentExternalVal = latestValue()
-        LaunchedEffect(currentExternalVal) {
-            if (!didDrag && kotlin.math.abs(dampedDragAnimation.targetValue - currentExternalVal) > 0.001f) {
+        LaunchedEffect(currentExternalVal, isUserDragging) {
+            if (!isUserDragging && abs(dampedDragAnimation.targetValue - currentExternalVal) > 0.001f) {
                 dampedDragAnimation.animateToValue(currentExternalVal)
             }
         }
@@ -529,10 +557,15 @@ fun LiquidSlider(
                 .pointerInput(animationScope) {
                     detectTapGestures { position ->
                         val delta = (valueRange.endInclusive - valueRange.start) * (position.x / latestTrackWidth)
-                        val targetVal =
+                        val rawTarget =
                             (if (latestIsLtr) valueRange.start + delta
                             else valueRange.endInclusive - delta)
                                 .coerceIn(valueRange)
+                        val targetVal = if (snapToStepsOnRelease) {
+                            rawTarget.roundToInt().toFloat().coerceIn(valueRange)
+                        } else {
+                            rawTarget
+                        }
                         dampedDragAnimation.animateToValue(targetVal)
                         latestOnValueChange(targetVal)
                     }
@@ -619,9 +652,9 @@ fun LiquidSlider(
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
-                        val velocity = dampedDragAnimation.velocity / 12f
-                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
-                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
+                        val velocity = dampedDragAnimation.velocity / 10f
+                        scaleX /= 1f - (velocity * 0.70f).fastCoerceIn(-0.20f, 0.20f)
+                        scaleY *= 1f - (velocity * 0.24f).fastCoerceIn(-0.18f, 0.18f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
@@ -636,12 +669,11 @@ fun LiquidSlider(
 /**
  * Optimized Kyant Backdrop catalog `LiquidToggle` implementation.
  *
- * Fixes:
- * - Tapping anywhere on the track OR tapping directly on the glass thumb now reliably toggles
- *   the switch on/off with a smooth spring glide!
- * - Uses `rememberUpdatedState` for `selected` and `onSelect` so the toggle never gets stuck
- *   referencing a stale initial state closure.
- * - Dragging the glass thumb across the track also works seamlessly.
+ * Free-sliding + tap-to-toggle physics:
+ * - While your finger is dragging, the glass capsule thumb slides continuously across `0f..1f`.
+ * - When you release your finger after dragging, it settles into `0f` or `1f` with liquid spring physics
+ *   and invokes `onSelect`.
+ * - Tapping anywhere on the switch immediately toggles and glides the thumb with liquid refraction.
  */
 @Composable
 fun LiquidToggle(
@@ -669,7 +701,7 @@ fun LiquidToggle(
     val latestIsLtr by rememberUpdatedState(isLtr)
     val dragWidth = with(density) { 20f.dp.toPx() }
     val animationScope = rememberCoroutineScope()
-    var didDrag by remember { mutableStateOf(false) }
+    var isUserDragging by remember { mutableStateOf(false) }
     var dragDistancePx by remember { mutableFloatStateOf(0f) }
     var fraction by remember { mutableFloatStateOf(if (latestSelected()) 1f else 0f) }
 
@@ -680,34 +712,27 @@ fun LiquidToggle(
             valueRange = 0f..1f,
             visibilityThreshold = 0.001f,
             initialScale = 1f,
-            pressedScale = 1.45f,
+            pressedScale = 1.48f,
             onDragStarted = {
-                didDrag = false
+                isUserDragging = true
                 dragDistancePx = 0f
             },
             onDragStopped = {
-                if (didDrag && dragDistancePx > 6f) {
-                    val newBool = targetValue >= 0.5f
-                    val targetFrac = if (newBool) 1f else 0f
-                    fraction = targetFrac
-                    animateToValue(targetFrac)
-                    latestOnSelect(newBool)
-                } else {
-                    // Single tap on the thumb or track -> toggle state and glide smoothly
-                    val newBool = !latestSelected()
-                    val targetFrac = if (newBool) 1f else 0f
-                    fraction = targetFrac
-                    animateToValue(targetFrac)
-                    latestOnSelect(newBool)
-                }
-                didDrag = false
+                val dragged = dragDistancePx > 5f
+                isUserDragging = false
                 dragDistancePx = 0f
+                val newBool = if (dragged) {
+                    targetValue >= 0.5f
+                } else {
+                    !latestSelected()
+                }
+                val targetFrac = if (newBool) 1f else 0f
+                fraction = targetFrac
+                animateToValue(targetFrac)
+                latestOnSelect(newBool)
             },
             onDrag = { _, dragAmount ->
-                dragDistancePx += kotlin.math.abs(dragAmount.x)
-                if (dragDistancePx > 4f) {
-                    didDrag = true
-                }
+                dragDistancePx += abs(dragAmount.x)
                 val delta = dragAmount.x / dragWidth
                 fraction =
                     if (latestIsLtr) (fraction + delta).fastCoerceIn(0f, 1f)
@@ -718,10 +743,14 @@ fun LiquidToggle(
     }
 
     val currentSelectedBool = latestSelected()
-    LaunchedEffect(currentSelectedBool) {
-        val target = if (currentSelectedBool) 1f else 0f
-        fraction = target
-        dampedDragAnimation.animateToValue(target)
+    LaunchedEffect(currentSelectedBool, isUserDragging) {
+        if (!isUserDragging) {
+            val target = if (currentSelectedBool) 1f else 0f
+            fraction = target
+            if (abs(dampedDragAnimation.targetValue - target) > 0.001f) {
+                dampedDragAnimation.animateToValue(target)
+            }
+        }
     }
 
     val trackBackdrop = rememberLayerBackdrop()
@@ -802,8 +831,8 @@ fun LiquidToggle(
                         scaleX = dampedDragAnimation.scaleX
                         scaleY = dampedDragAnimation.scaleY
                         val velocity = dampedDragAnimation.velocity / 50f
-                        scaleX /= 1f - (velocity * 0.65f).fastCoerceIn(-0.18f, 0.18f)
-                        scaleY *= 1f - (velocity * 0.22f).fastCoerceIn(-0.18f, 0.18f)
+                        scaleX /= 1f - (velocity * 0.70f).fastCoerceIn(-0.20f, 0.20f)
+                        scaleY *= 1f - (velocity * 0.24f).fastCoerceIn(-0.18f, 0.18f)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress

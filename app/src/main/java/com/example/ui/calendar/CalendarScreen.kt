@@ -606,25 +606,27 @@ fun CalendarScreen(
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 listOf(
-                                                    Triple("Present", AttendanceStatus.PRESENT, semantic.presentContainer to semantic.onPresentContainer),
-                                                    Triple("Medical", AttendanceStatus.MEDICAL, semantic.medicalContainer to semantic.onMedicalContainer),
-                                                    Triple("Excused", AttendanceStatus.SCHOOL_EVENT, semantic.schoolEventContainer to semantic.onSchoolEventContainer),
-                                                    Triple("Absent", AttendanceStatus.ABSENT, semantic.absentContainer to semantic.onAbsentContainer)
+                                                    Triple("Present", AttendanceStatus.PRESENT, semantic.present to semantic.onPresentContainer),
+                                                    Triple("Medical", AttendanceStatus.MEDICAL, semantic.medical to semantic.onMedicalContainer),
+                                                    Triple("Excused", AttendanceStatus.SCHOOL_EVENT, semantic.schoolEvent to semantic.onSchoolEventContainer),
+                                                    Triple("Absent", AttendanceStatus.ABSENT, semantic.absent to semantic.onAbsentContainer)
                                                 ).forEach { (label, status, colors) ->
-                                                    Surface(
-                                                        color = colors.first,
-                                                        shape = RoundedCornerShape(12.dp),
+                                                    LiquidGlassButton(
+                                                        onClick = {
+                                                            onBulkLogAttendance(
+                                                                selectedBulkDates.sorted(),
+                                                                status,
+                                                                null
+                                                            )
+                                                            selectedBulkDates = emptySet()
+                                                            bulkSelectMode = false
+                                                        },
+                                                        enabled = !isSaving,
+                                                        tint = colors.first,
+                                                        minHeight = 36.dp,
+                                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                                                         modifier = Modifier
                                                             .weight(1f)
-                                                            .clickable(enabled = !isSaving) {
-                                                                onBulkLogAttendance(
-                                                                    selectedBulkDates.sorted(),
-                                                                    status,
-                                                                    null
-                                                                )
-                                                                selectedBulkDates = emptySet()
-                                                                bulkSelectMode = false
-                                                            }
                                                             .testTag("calendar_bulk_apply_${status.raw}")
                                                     ) {
                                                         Text(
@@ -632,8 +634,7 @@ fun CalendarScreen(
                                                             style = MaterialTheme.typography.labelSmall,
                                                             fontWeight = FontWeight.Bold,
                                                             color = colors.second,
-                                                            textAlign = TextAlign.Center,
-                                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                                                            textAlign = TextAlign.Center
                                                         )
                                                     }
                                                 }

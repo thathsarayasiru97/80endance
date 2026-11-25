@@ -118,18 +118,23 @@ fun PersonalMarkerDialog(
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        PersonalMarkerCategory.entries.forEach { cat ->
-                            FilterChip(
-                                selected = category == cat,
-                                onClick = { category = cat },
-                                label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) }
+                    val categoryOptions = remember {
+                        PersonalMarkerCategory.entries.map { cat ->
+                            LiquidGlassSegmentOption(
+                                label = cat.label,
+                                testTag = "personal_marker_cat_${cat.name.lowercase()}"
                             )
                         }
                     }
+                    SlidableLiquidGlassSegmentedBar(
+                        options = categoryOptions,
+                        selectedIndex = PersonalMarkerCategory.entries.indexOf(category).coerceAtLeast(0),
+                        onOptionSelected = { idx ->
+                            PersonalMarkerCategory.entries.getOrNull(idx)?.let { category = it }
+                        },
+                        barHeight = 42.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 OutlinedTextField(

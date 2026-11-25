@@ -127,33 +127,29 @@ fun FeedbackReportDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        FilterChip(
-                            selected = selectedType == FeedbackType.BUG,
-                            onClick = { selectedType = FeedbackType.BUG },
-                            leadingIcon = {
-                                Icon(Icons.Rounded.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
-                            },
-                            label = { Text("Bug Report") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("feedback_type_bug")
-                        )
-                        FilterChip(
-                            selected = selectedType == FeedbackType.SUGGESTION,
-                            onClick = { selectedType = FeedbackType.SUGGESTION },
-                            leadingIcon = {
-                                Icon(Icons.Rounded.Lightbulb, contentDescription = null, modifier = Modifier.size(16.dp))
-                            },
-                            label = { Text("Feature Idea") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("feedback_type_suggestion")
+                    val feedbackTypeOptions = remember {
+                        listOf(
+                            LiquidGlassSegmentOption(
+                                label = "Bug Report",
+                                testTag = "feedback_type_bug",
+                                icon = Icons.Rounded.BugReport
+                            ),
+                            LiquidGlassSegmentOption(
+                                label = "Feature Idea",
+                                testTag = "feedback_type_suggestion",
+                                icon = Icons.Rounded.Lightbulb
+                            )
                         )
                     }
+                    SlidableLiquidGlassSegmentedBar(
+                        options = feedbackTypeOptions,
+                        selectedIndex = if (selectedType == FeedbackType.BUG) 0 else 1,
+                        onOptionSelected = { idx ->
+                            selectedType = if (idx == 0) FeedbackType.BUG else FeedbackType.SUGGESTION
+                        },
+                        barHeight = 46.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     OutlinedTextField(
                         value = title,
