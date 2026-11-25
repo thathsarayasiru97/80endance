@@ -25,6 +25,7 @@ object ReleaseNotesCatalog {
         version = BuildConfig.VERSION_NAME.ifBlank { "1.7" },
         headline = DEFAULT_HEADLINE,
         whatsNew = listOf(
+            "Thin-Film Soap Bubble Lens & Morphing Theme Toggle: Drag and pop an interactive thin-film optical bubble inside the A/L Journey sheet and Settings Appearance playground, plus a morphing Sun-to-Moon theme toggle with circular reveal.",
             "Smooth Calendar Month Swiping: Swipe left or right directly on the calendar grid and use the quick \"Jump to Today\" pill.",
             "Dynamic Greeting & Context Banner: Home header adapts to time of day, remaining school days this week, Poya breaks, and active streaks.",
             "A/L Batch Countdown Milestones: Celebratory banners when your batch hits 300d, 200d, 100d, 50d, and 30d to A/Ls.",

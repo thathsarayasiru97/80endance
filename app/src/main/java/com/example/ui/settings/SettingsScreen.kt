@@ -113,13 +113,16 @@ import com.example.data.FeedbackType
 import com.example.system.AppUpdateChecker
 import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckStatusSummary
+import com.example.ui.components.BubbleLookPreset
 import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
+import com.example.ui.components.MorphingThemeToggleButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
 import com.example.ui.components.SyncStatusPill
+import com.example.ui.components.ThinFilmBubbleInteractiveCard
 import com.example.ui.reports.RegisterVerificationDialog
 import com.example.ui.theme.accentSwatchColor
 import com.example.viewmodel.StudentAppState
@@ -887,30 +890,47 @@ fun SettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.size(38.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Palette,
-                                        contentDescription = "Appearance and theme",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Palette,
+                                            contentDescription = "Appearance and theme",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Appearance & Accent", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = "Choose light, dark, or true-black OLED + custom accent",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text("Appearance & Accent", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    text = "Choose light, dark, or true-black OLED + custom accent",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            MorphingThemeToggleButton(
+                                isDarkTheme = previewDark,
+                                onToggle = {
+                                    val nextMode = if (previewDark) AppThemeMode.LIGHT else AppThemeMode.DARK
+                                    onUpdateAppearance(nextMode, state.accentPalette)
+                                },
+                                modifier = Modifier.testTag("settings_morphing_theme_toggle")
+                            )
                         }
 
                         SingleChoiceSegmentedButtonRow(
@@ -998,6 +1018,75 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                        }
+
+                        var showBubblePlayground by remember { mutableStateOf(false) }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { showBubblePlayground = !showBubblePlayground }
+                                .padding(vertical = 4.dp)
+                                .testTag("settings_toggle_bubble_playground"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Thin-Film Soap Bubble Playground",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Interactive thin-film optics, spring physics & theme wave",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (showBubblePlayground) "Hide" else "Try It",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        AnimatedVisibility(
+                            visible = showBubblePlayground,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            val overallPct = "%.1f%%".format(state.overallStats.percentage)
+                            val isSafeOverall = state.overallStats.percentage >= 80.0
+                            ThinFilmBubbleInteractiveCard(
+                                RestingPromptText = "Drag the thin-film bubble.\nCurrent eligibility: $overallPct",
+                                LiftedTitleText = if (isSafeOverall) "80% Safe Zone" else "Recovery Focus",
+                                LiftedSubtitleText = "Real-time thin-film interference on a kinematic spring.\nTap the bubble to pop or toggle day/night reveal.",
+                                initialPreset = if (isSafeOverall) {
+                                    BubbleLookPreset.SOAP_BUBBLE
+                                } else {
+                                    BubbleLookPreset.FIRE_STREAK
+                                },
+                                initialDarkTheme = previewDark,
+                                cardHeight = 264.dp,
+                                onToggleExternalTheme = { isDark ->
+                                    onUpdateAppearance(
+                                        if (isDark) AppThemeMode.DARK else AppThemeMode.LIGHT,
+                                        state.accentPalette
+                                    )
+                                }
+                            )
                         }
                     }
                 }
