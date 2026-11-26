@@ -235,21 +235,23 @@ fun LiquidGlassButton(
                     val scale = lerp(1f, 1f + 4f.dp.toPx() / height, progress)
 
                     val maxOffset = size.minDimension.coerceAtLeast(1f)
-                    val initialDerivative = 0.05f
-                    val offset = interactiveHighlight.offset
-                    translationX = maxOffset * tanh(initialDerivative * offset.x / maxOffset)
-                    translationY = maxOffset * tanh(initialDerivative * offset.y / maxOffset)
+                    val initialDerivative = 0.08f
+                    val rawOffset = interactiveHighlight.offset
+                    val relX = (rawOffset.x - width * 0.5f) * progress
+                    val relY = (rawOffset.y - height * 0.5f) * progress
+                    translationX = maxOffset * tanh(initialDerivative * relX / maxOffset)
+                    translationY = maxOffset * tanh(initialDerivative * relY / maxOffset)
 
                     val maxDragScale = 4f.dp.toPx() / height
-                    val offsetAngle = atan2(offset.y, offset.x)
+                    val offsetAngle = atan2(relY, relX)
                     val maxDim = size.maxDimension.coerceAtLeast(1f)
                     scaleX =
                         scale +
-                            maxDragScale * abs(cos(offsetAngle) * offset.x / maxDim) *
+                            maxDragScale * abs(cos(offsetAngle) * relX / maxDim) *
                             (width / height).fastCoerceAtMost(1f)
                     scaleY =
                         scale +
-                            maxDragScale * abs(sin(offsetAngle) * offset.y / maxDim) *
+                            maxDragScale * abs(sin(offsetAngle) * relY / maxDim) *
                             (height / width).fastCoerceAtMost(1f)
                 }
             } else {

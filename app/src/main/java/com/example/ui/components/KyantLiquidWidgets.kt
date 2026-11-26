@@ -134,10 +134,13 @@ fun LiquidBottomTabs(
         val latestTabWidth by rememberUpdatedState(tabWidth)
 
         val offsetAnimation = remember { Animatable(0f) }
+        var isPanelDragging by remember { mutableStateOf(false) }
+        var rawPanelOffset by remember { mutableFloatStateOf(0f) }
         val panelOffset by remember(density) {
             derivedStateOf {
                 val maxW = constraints.maxWidth.coerceAtLeast(1)
-                val fraction = (offsetAnimation.value / maxW).fastCoerceIn(-1f, 1f)
+                val raw = if (isPanelDragging) rawPanelOffset else offsetAnimation.value
+                val fraction = (raw / maxW).fastCoerceIn(-1f, 1f)
                 with(density) {
                     4f.dp.toPx() * fraction.sign * EaseOut.transform(abs(fraction))
                 }
@@ -164,20 +167,39 @@ fun LiquidBottomTabs(
                 pressedScale = 76f / 56f,
                 onDragStarted = {
                     isUserDragging = true
+                    isPanelDragging = true
+                    rawPanelOffset = 0f
                     lastHoverSlot = targetValue.fastRoundToInt().fastCoerceIn(0, maxSlot)
                 },
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, maxSlot)
+                    val releaseOffset = rawPanelOffset
                     isUserDragging = false
+                    isPanelDragging = false
+                    rawPanelOffset = 0f
                     currentIndex = targetIndex
                     // Settle into the nearest tab slot with liquid spring physics
                     animateToValue(targetIndex.toFloat())
                     latestOnTabSelected(targetIndex)
                     animationScope.launch {
+                        offsetAnimation.snapTo(releaseOffset)
                         offsetAnimation.animateTo(
                             0f,
                             spring(1f, 300f, 0.5f)
                         )
+                    }
+                },
+                onDragCancelled = {
+                    val releaseOffset = rawPanelOffset
+                    isUserDragging = false
+                    isPanelDragging = false
+                    rawPanelOffset = 0f
+                    val restIndex = latestSelectedTabIndex().coerceIn(0, maxSlot)
+                    currentIndex = restIndex
+                    animateToValue(restIndex.toFloat())
+                    animationScope.launch {
+                        offsetAnimation.snapTo(releaseOffset)
+                        offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                     }
                 },
                 onDrag = { _, dragAmount ->
@@ -191,9 +213,7 @@ fun LiquidBottomTabs(
                         lastHoverSlot = hoverSlot
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     }
-                    animationScope.launch {
-                        offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
-                    }
+                    rawPanelOffset += dragAmount.x
                 }
             )
         }
@@ -204,8 +224,12 @@ fun LiquidBottomTabs(
             if (!isUserDragging) {
                 currentIndex = externalSelectedIndex
                 lastHoverSlot = externalSelectedIndex
-                if (abs(dampedDragAnimation.targetValue - externalSelectedIndex.toFloat()) > 0.001f) {
+                if (abs(dampedDragAnimation.targetValue - externalSelectedIndex.toFloat()) > 0.001f ||
+                    abs(dampedDragAnimation.value - externalSelectedIndex.toFloat()) > 0.005f
+                ) {
                     dampedDragAnimation.animateToValue(externalSelectedIndex.toFloat())
+                } else {
+                    dampedDragAnimation.ensureReleased()
                 }
             }
         }
@@ -402,21 +426,23 @@ fun LiquidButton(
                         val scale = lerp(1f, 1f + 4f.dp.toPx() / height, progress)
 
                         val maxOffset = size.minDimension.coerceAtLeast(1f)
-                        val initialDerivative = 0.05f
-                        val offset = interactiveHighlight.offset
-                        translationX = maxOffset * tanh(initialDerivative * offset.x / maxOffset)
-                        translationY = maxOffset * tanh(initialDerivative * offset.y / maxOffset)
+                        val initialDerivative = 0.08f
+                        val rawOffset = interactiveHighlight.offset
+                        val relX = (rawOffset.x - width * 0.5f) * progress
+                        val relY = (rawOffset.y - height * 0.5f) * progress
+                        translationX = maxOffset * tanh(initialDerivative * relX / maxOffset)
+                        translationY = maxOffset * tanh(initialDerivative * relY / maxOffset)
 
                         val maxDragScale = 4f.dp.toPx() / height
-                        val offsetAngle = atan2(offset.y, offset.x)
+                        val offsetAngle = atan2(relY, relX)
                         val maxDim = size.maxDimension.coerceAtLeast(1f)
                         scaleX =
                             scale +
-                                maxDragScale * abs(cos(offsetAngle) * offset.x / maxDim) *
+                                maxDragScale * abs(cos(offsetAngle) * relX / maxDim) *
                                 (width / height).fastCoerceAtMost(1f)
                         scaleY =
                             scale +
-                                maxDragScale * abs(sin(offsetAngle) * offset.y / maxDim) *
+                                maxDragScale * abs(sin(offsetAngle) * relY / maxDim) *
                                 (height / width).fastCoerceAtMost(1f)
                     }
                 } else {
@@ -526,7 +552,13 @@ fun LiquidSlider(
                         targetValue.coerceIn(valueRange)
                     }
                     animateToValue(finalValue)
+                    ensureReleased()
                     latestOnValueChange(finalValue)
+                },
+                onDragCancelled = {
+                    isUserDragging = false
+                    animateToValue(latestValue().coerceIn(valueRange))
+                    ensureReleased()
                 },
                 onDrag = { _, dragAmount ->
                     val delta = (valueRange.endInclusive - valueRange.start) * (dragAmount.x / latestTrackWidth)
@@ -546,8 +578,14 @@ fun LiquidSlider(
 
         val currentExternalVal = latestValue()
         LaunchedEffect(currentExternalVal, isUserDragging) {
-            if (!isUserDragging && abs(dampedDragAnimation.targetValue - currentExternalVal) > 0.001f) {
-                dampedDragAnimation.animateToValue(currentExternalVal)
+            if (!isUserDragging) {
+                if (abs(dampedDragAnimation.targetValue - currentExternalVal) > 0.001f ||
+                    abs(dampedDragAnimation.value - currentExternalVal) > 0.005f
+                ) {
+                    dampedDragAnimation.animateToValue(currentExternalVal)
+                } else {
+                    dampedDragAnimation.ensureReleased()
+                }
             }
         }
 
@@ -673,7 +711,8 @@ fun LiquidSlider(
  * - While your finger is dragging, the glass capsule thumb slides continuously across `0f..1f`.
  * - When you release your finger after dragging, it settles into `0f` or `1f` with liquid spring physics
  *   and invokes `onSelect`.
- * - Tapping anywhere on the switch immediately toggles and glides the thumb with liquid refraction.
+ * - Tapping or pressing-and-holding anywhere on the switch toggles and glides the thumb with liquid refraction,
+ *   always settling smoothly back to the resting pill state when released.
  */
 @Composable
 fun LiquidToggle(
@@ -696,14 +735,18 @@ fun LiquidToggle(
     val latestSelected by rememberUpdatedState(selected)
     val latestOnSelect by rememberUpdatedState(onSelect)
 
+    val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val latestIsLtr by rememberUpdatedState(isLtr)
     val dragWidth = with(density) { 20f.dp.toPx() }
+    val tapSlopPx = with(density) { 8f.dp.toPx() }
     val animationScope = rememberCoroutineScope()
     var isUserDragging by remember { mutableStateOf(false) }
     var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var dragStartFraction by remember { mutableFloatStateOf(if (latestSelected()) 1f else 0f) }
     var fraction by remember { mutableFloatStateOf(if (latestSelected()) 1f else 0f) }
+    var lastHalfSide by remember { mutableStateOf(latestSelected()) }
 
     val dampedDragAnimation = remember(animationScope) {
         DampedDragAnimation(
@@ -716,20 +759,41 @@ fun LiquidToggle(
             onDragStarted = {
                 isUserDragging = true
                 dragDistancePx = 0f
+                val startFrac = if (latestSelected()) 1f else 0f
+                dragStartFraction = startFrac
+                fraction = startFrac
+                lastHalfSide = startFrac >= 0.5f
             },
             onDragStopped = {
-                val dragged = dragDistancePx > 5f
+                val netDelta = abs(fraction - dragStartFraction)
+                val dragged = dragDistancePx > tapSlopPx && netDelta > 0.16f
                 isUserDragging = false
                 dragDistancePx = 0f
+                val prevBool = latestSelected()
                 val newBool = if (dragged) {
                     targetValue >= 0.5f
                 } else {
-                    !latestSelected()
+                    !prevBool
                 }
                 val targetFrac = if (newBool) 1f else 0f
                 fraction = targetFrac
+                lastHalfSide = newBool
                 animateToValue(targetFrac)
-                latestOnSelect(newBool)
+                ensureReleased()
+                if (newBool != prevBool) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    latestOnSelect(newBool)
+                }
+            },
+            onDragCancelled = {
+                isUserDragging = false
+                dragDistancePx = 0f
+                val restBool = latestSelected()
+                val restFrac = if (restBool) 1f else 0f
+                fraction = restFrac
+                lastHalfSide = restBool
+                animateToValue(restFrac)
+                ensureReleased()
             },
             onDrag = { _, dragAmount ->
                 dragDistancePx += abs(dragAmount.x)
@@ -738,6 +802,11 @@ fun LiquidToggle(
                     if (latestIsLtr) (fraction + delta).fastCoerceIn(0f, 1f)
                     else (fraction - delta).fastCoerceIn(0f, 1f)
                 updateValue(fraction)
+                val side = fraction >= 0.5f
+                if (side != lastHalfSide) {
+                    lastHalfSide = side
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
             }
         )
     }
@@ -747,8 +816,12 @@ fun LiquidToggle(
         if (!isUserDragging) {
             val target = if (currentSelectedBool) 1f else 0f
             fraction = target
-            if (abs(dampedDragAnimation.targetValue - target) > 0.001f) {
+            if (abs(dampedDragAnimation.targetValue - target) > 0.001f ||
+                abs(dampedDragAnimation.value - target) > 0.005f
+            ) {
                 dampedDragAnimation.animateToValue(target)
+            } else {
+                dampedDragAnimation.ensureReleased()
             }
         }
     }

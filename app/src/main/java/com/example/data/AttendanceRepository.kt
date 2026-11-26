@@ -708,8 +708,14 @@ class AttendanceRepository(
                 batch.delete(userDocRef.collection("attendance_periods").document(block.id))
             }
 
-            val present = remainingRecords.count { it.statusEnum == AttendanceStatus.PRESENT }
-            val absent = remainingRecords.count { it.statusEnum == AttendanceStatus.ABSENT }
+            val present = (
+                remainingRecords.count { it.statusEnum == AttendanceStatus.PRESENT } +
+                    remainingBlocks.sumOf { it.presentDays }
+                ).coerceIn(0, 1000)
+            val absent = (
+                remainingRecords.count { it.statusEnum == AttendanceStatus.ABSENT } +
+                    remainingBlocks.sumOf { it.absentDays }
+                ).coerceIn(0, 1000)
             val medical = remainingRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }
             val schoolEvent = remainingRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
             val lastDate = remainingRecords.maxOfOrNull { it.dateKey } ?: ""
@@ -1008,30 +1014,34 @@ class AttendanceRepository(
                     batch.delete(attendanceCol.document(rec.dateKey))
                 }
             }
-            if (overlapping.isNotEmpty()) {
-                val remaining = uniqueRecords.filterNot { rec ->
-                    (rec.dateKey >= startDateKey && rec.dateKey <= endDateKey) ||
-                        DateUtils.isWeekend(rec.dateKey) ||
-                        (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
-                        existingPeriodBlocks.any { it.id != targetDocId && it.containsDate(rec.dateKey) }
-                }
-                val present = remaining.count { it.statusEnum == AttendanceStatus.PRESENT }
-                val absent = remaining.count { it.statusEnum == AttendanceStatus.ABSENT }
-                val medical = remaining.count { it.statusEnum == AttendanceStatus.MEDICAL }
-                val schoolEvent = remaining.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
-                val lastDate = remaining.maxOfOrNull { it.dateKey } ?: ""
-                batch.update(
-                    userDocRef,
-                    mapOf(
-                        "presentCount" to present,
-                        "absentCount" to absent,
-                        "medicalCount" to medical,
-                        "schoolEventCount" to schoolEvent,
-                        "lastCheckInDate" to lastDate,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
+            val otherActiveBlocks = AttendanceCalculator.deduplicatePeriodBlocks(
+                existingPeriodBlocks.filter { it.id.isNotBlank() && it.id != targetDocId },
+                lockedBaselineRange
+            )
+            val remaining = uniqueRecords.filterNot { rec ->
+                (rec.dateKey >= startDateKey && rec.dateKey <= endDateKey) ||
+                    DateUtils.isWeekend(rec.dateKey) ||
+                    (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
+                    otherActiveBlocks.any { it.containsDate(rec.dateKey) }
             }
+            val blocksPresentTotal = cleanPresent + otherActiveBlocks.sumOf { it.presentDays }
+            val blocksAbsentTotal = cleanAbsent + otherActiveBlocks.sumOf { it.absentDays }
+            val present = (remaining.count { it.statusEnum == AttendanceStatus.PRESENT } + blocksPresentTotal).coerceIn(0, 1000)
+            val absent = (remaining.count { it.statusEnum == AttendanceStatus.ABSENT } + blocksAbsentTotal).coerceIn(0, 1000)
+            val medical = remaining.count { it.statusEnum == AttendanceStatus.MEDICAL }.coerceIn(0, 1000)
+            val schoolEvent = remaining.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }.coerceIn(0, 1000)
+            val lastDate = remaining.maxOfOrNull { it.dateKey } ?: ""
+            batch.update(
+                userDocRef,
+                mapOf(
+                    "presentCount" to present,
+                    "absentCount" to absent,
+                    "medicalCount" to medical,
+                    "schoolEventCount" to schoolEvent,
+                    "lastCheckInDate" to lastDate,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
             batch.commit().awaitOfflineAware()
             scheduleSyncIfOffline()
             Result.success(overlapping.size)
@@ -1050,6 +1060,11 @@ class AttendanceRepository(
             db.collection("users").document(userId)
                 .collection("attendance_periods").document(periodId)
                 .delete().awaitOfflineAware()
+            runCatching {
+                val records = db.collection("users").document(userId).collection("attendance")
+                    .get().await().toObjects(AttendanceRecord::class.java)
+                updateProfileCounterFields(userId, records)
+            }
             scheduleSyncIfOffline()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -1206,13 +1221,15 @@ class AttendanceRepository(
                     (lockedBaselineRange == null || rec.dateKey > lockedBaselineRange.second) &&
                     cleanBlocks.none { it.containsDate(rec.dateKey) }
             }
+            val blocksPresentTotal = cleanBlocks.sumOf { it.presentDays }
+            val blocksAbsentTotal = cleanBlocks.sumOf { it.absentDays }
             batch.update(
                 userDocRef,
                 mapOf(
-                    "presentCount" to allRecs.count { it.statusEnum == AttendanceStatus.PRESENT },
-                    "absentCount" to allRecs.count { it.statusEnum == AttendanceStatus.ABSENT },
-                    "medicalCount" to allRecs.count { it.statusEnum == AttendanceStatus.MEDICAL },
-                    "schoolEventCount" to allRecs.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT },
+                    "presentCount" to (allRecs.count { it.statusEnum == AttendanceStatus.PRESENT } + blocksPresentTotal).coerceIn(0, 1000),
+                    "absentCount" to (allRecs.count { it.statusEnum == AttendanceStatus.ABSENT } + blocksAbsentTotal).coerceIn(0, 1000),
+                    "medicalCount" to allRecs.count { it.statusEnum == AttendanceStatus.MEDICAL }.coerceIn(0, 1000),
+                    "schoolEventCount" to allRecs.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }.coerceIn(0, 1000),
                     "lastCheckInDate" to (allRecs.maxOfOrNull { it.dateKey } ?: ""),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -1480,21 +1497,69 @@ class AttendanceRepository(
         targetUserId: String,
         records: List<AttendanceRecord>
     ) {
+        val userDocRef = db.collection("users").document(targetUserId)
+        val profile = runCatching {
+            withTimeoutOrNull(2_000L) { userDocRef.get().await().toObject(UserProfile::class.java) }
+        }.getOrNull()
+        val lockedBaselineRange = profile?.lockedBaselineRange
+        val periodBlocks = runCatching {
+            withTimeoutOrNull(2_000L) {
+                userDocRef.collection("attendance_periods").get().await().toObjects(AttendancePeriodBlock::class.java)
+            }
+        }.getOrNull().orEmpty()
+        val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(periodBlocks, lockedBaselineRange)
         val uniqueRecords = AttendanceCalculator.deduplicateRecords(records)
-            .filterNot { DateUtils.isWeekend(it.dateKey) }
-        val present = uniqueRecords.count { it.statusEnum == AttendanceStatus.PRESENT }
-        val absent = uniqueRecords.count { it.statusEnum == AttendanceStatus.ABSENT }
-        val medical = uniqueRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }
-        val schoolEvent = uniqueRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }
+            .filterNot { rec ->
+                DateUtils.isWeekend(rec.dateKey) ||
+                    (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
+                    cleanBlocks.any { it.containsDate(rec.dateKey) }
+            }
+        val blocksPresent = cleanBlocks.sumOf { it.presentDays }
+        val blocksAbsent = cleanBlocks.sumOf { it.absentDays }
+        val present = (uniqueRecords.count { it.statusEnum == AttendanceStatus.PRESENT } + blocksPresent).coerceIn(0, 1000)
+        val absent = (uniqueRecords.count { it.statusEnum == AttendanceStatus.ABSENT } + blocksAbsent).coerceIn(0, 1000)
+        val medical = uniqueRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }.coerceIn(0, 1000)
+        val schoolEvent = uniqueRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }.coerceIn(0, 1000)
         val lastDate = uniqueRecords.maxOfOrNull { it.dateKey } ?: ""
         runCatching {
-            db.collection("users").document(targetUserId).update(
+            userDocRef.update(
                 mapOf(
                     "presentCount" to present,
                     "absentCount" to absent,
                     "medicalCount" to medical,
                     "schoolEventCount" to schoolEvent,
                     "lastCheckInDate" to lastDate,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).awaitOfflineAware()
+        }
+    }
+
+    suspend fun reconcileUserCountersWithPeriodBlocks(
+        userId: String,
+        records: List<AttendanceRecord>,
+        periodBlocks: List<AttendancePeriodBlock>,
+        lockedBaselineRange: Pair<String, String>?
+    ) {
+        if (userId.isBlank() || auth.currentUser?.uid != userId) return
+        val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(periodBlocks, lockedBaselineRange)
+        val uniqueRecords = AttendanceCalculator.deduplicateRecords(records)
+            .filterNot { rec ->
+                DateUtils.isWeekend(rec.dateKey) ||
+                    (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
+                    cleanBlocks.any { it.containsDate(rec.dateKey) }
+            }
+        val present = (uniqueRecords.count { it.statusEnum == AttendanceStatus.PRESENT } + cleanBlocks.sumOf { it.presentDays }).coerceIn(0, 1000)
+        val absent = (uniqueRecords.count { it.statusEnum == AttendanceStatus.ABSENT } + cleanBlocks.sumOf { it.absentDays }).coerceIn(0, 1000)
+        val medical = uniqueRecords.count { it.statusEnum == AttendanceStatus.MEDICAL }.coerceIn(0, 1000)
+        val schoolEvent = uniqueRecords.count { it.statusEnum == AttendanceStatus.SCHOOL_EVENT }.coerceIn(0, 1000)
+        runCatching {
+            db.collection("users").document(userId).update(
+                mapOf(
+                    "presentCount" to present,
+                    "absentCount" to absent,
+                    "medicalCount" to medical,
+                    "schoolEventCount" to schoolEvent,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).awaitOfflineAware()

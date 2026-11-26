@@ -65,6 +65,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.graphics.graphicsLayer
 import com.example.data.AttendanceStatus
 import com.example.data.DateUtils
 import com.example.ui.theme.RoyalGold
@@ -72,6 +74,8 @@ import com.example.ui.theme.StatusBlue
 import com.example.ui.theme.StatusGreen
 import com.example.ui.theme.StatusOrange
 import com.example.ui.theme.StatusRed
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -146,28 +150,44 @@ fun SwipeCatchUpDeckDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogBackdrop = rememberLayerBackdrop()
+        val surfaceBase = MaterialTheme.colorScheme.surface
+        val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        val secondaryGlow = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .testTag("swipe_catchup_deck_dialog"),
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = surfaceBase,
             tonalElevation = 8.dp
         ) {
-            Column(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .animateContentSize(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMediumLow
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .layerBackdrop(dialogBackdrop)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(surfaceBase, primaryGlow, secondaryGlow, surfaceBase)
+                            )
                         )
-                    )
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+                )
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -291,9 +311,13 @@ fun SwipeCatchUpDeckDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(220.dp)
-                            .offset { IntOffset(offsetX.value.roundToInt(), -(absDrag * 8f).roundToInt()) }
-                            .scale(cardScale.value)
-                            .rotate(dragFraction * 9f)
+                            .graphicsLayer {
+                                translationX = offsetX.value
+                                translationY = -(absDrag * 8f)
+                                scaleX = cardScale.value
+                                scaleY = cardScale.value
+                                rotationZ = dragFraction * 9f
+                            }
                             .pointerInput(currentDate) {
                                 detectTapGestures(
                                     onTap = { commitStatus(AttendanceStatus.MEDICAL, 0f) }
@@ -406,31 +430,35 @@ fun SwipeCatchUpDeckDialog(
                     }
                 }
 
-                // Quick tap action buttons (for accessibility + Medical/Excused options)
+                // Refractive Liquid Glass quick tap action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(
+                    LiquidGlassButton(
                         onClick = { commitStatus(AttendanceStatus.ABSENT, -1f) },
-                        colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-                        shape = RoundedCornerShape(14.dp),
+                        backdrop = dialogBackdrop,
+                        tint = StatusRed,
+                        contentColor = StatusRed,
+                        minHeight = 48.dp,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
                             .testTag("swipe_deck_absent_btn")
                     ) {
                         Icon(Icons.Rounded.Cancel, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.size(6.dp))
                         Text("Absent", fontWeight = FontWeight.Bold)
                     }
-                    Button(
+                    LiquidGlassButton(
                         onClick = { commitStatus(AttendanceStatus.PRESENT, 1f) },
-                        colors = ButtonDefaults.buttonColors(containerColor = StatusGreen),
-                        shape = RoundedCornerShape(14.dp),
+                        backdrop = dialogBackdrop,
+                        tint = StatusGreen,
+                        contentColor = StatusGreen,
+                        minHeight = 48.dp,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
                             .testTag("swipe_deck_present_btn")
                     ) {
                         Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -443,12 +471,15 @@ fun SwipeCatchUpDeckDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    FilledTonalButton(
+                    LiquidGlassButton(
                         onClick = { commitStatus(AttendanceStatus.MEDICAL, 0f) },
-                        shape = RoundedCornerShape(12.dp),
+                        backdrop = dialogBackdrop,
+                        tint = StatusOrange,
+                        contentColor = StatusOrange,
+                        minHeight = 46.dp,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
                             .testTag("swipe_deck_medical_btn")
                     ) {
                         Icon(
@@ -460,12 +491,15 @@ fun SwipeCatchUpDeckDialog(
                         Spacer(Modifier.size(5.dp))
                         Text("Medical", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     }
-                    OutlinedButton(
+                    LiquidGlassButton(
                         onClick = { commitStatus(AttendanceStatus.SCHOOL_EVENT, 0f) },
-                        shape = RoundedCornerShape(12.dp),
+                        backdrop = dialogBackdrop,
+                        tint = StatusBlue,
+                        contentColor = StatusBlue,
+                        minHeight = 46.dp,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
                             .testTag("swipe_deck_excused_btn")
                     ) {
                         Icon(
@@ -477,6 +511,7 @@ fun SwipeCatchUpDeckDialog(
                         Spacer(Modifier.size(5.dp))
                         Text("Excused", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     }
+                }
                 }
             }
         }

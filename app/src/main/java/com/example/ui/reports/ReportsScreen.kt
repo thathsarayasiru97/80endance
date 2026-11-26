@@ -77,7 +77,7 @@ fun ReportsScreen(
     val semantic = LocalAttendanceColors.current
     val profile = state.profile
 
-    var selectedTerm by remember(state.terms) { mutableStateOf<AcademicTerm?>(null) } // null = Overall (G12 & 13)
+    var selectedScopeIndex by remember { mutableStateOf(0) } // 0 = Overall, 1 = This Term, 2 = This Month
     var showMonthlyWrapped by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
 
@@ -99,28 +99,15 @@ fun ReportsScreen(
         )
     }
 
-    val stats = remember(
-        state.attendanceRecords,
-        state.periodBlocks,
-        selectedTerm,
-        profile,
-        state.calendarEvents,
-        state.effectiveSchoolStartDateKey
-    ) {
-        val threshold = selectedTerm?.minEligibilityPercent ?: state.appSettings.defaultEligibilityPercent
-        AttendanceCalculator.calculateStats(
-            records = state.attendanceRecords,
-            thresholdPercent = threshold,
-            countExcusedAsPresent = true,
-            includePriorBalance = selectedTerm == null || selectedTerm?.id == state.activeTerm.id,
-            priorPresent = profile?.priorPresentCount ?: 0,
-            priorAbsent = profile?.priorAbsentCount ?: 0,
-            termFilter = selectedTerm,
-            lockedRange = profile?.lockedBaselineRange,
-            periodBlocks = state.periodBlocks,
-            calendarEvents = state.calendarEvents,
-            schoolStartDate = state.effectiveSchoolStartDateKey
-        )
+    val stats = when (selectedScopeIndex) {
+        1 -> state.currentTermStats
+        2 -> state.currentMonthStats
+        else -> state.overallStats
+    }
+    val activeScopeTitle = when (selectedScopeIndex) {
+        1 -> state.activeTerm.name
+        2 -> state.currentMonthLabel
+        else -> "Overall GCE A/L"
     }
 
     val subjectCounts = remember(
@@ -128,10 +115,10 @@ fun ReportsScreen(
         state.periodBlocks,
         state.calendarEvents,
         state.effectiveSchoolStartDateKey,
+        state.activeTerm,
         profile,
-        selectedTerm
+        selectedScopeIndex
     ) {
-        val term = selectedTerm
         val lockedRange = profile?.lockedBaselineRange
         val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(state.periodBlocks, lockedRange)
         val nonSchoolDates = state.calendarEvents
@@ -139,6 +126,7 @@ fun ReportsScreen(
             .map { it.dateKey }
             .toSet()
         val startBound = state.effectiveSchoolStartDateKey
+        val currentMonthPrefix = DateUtils.todayKey().take(7)
         val uniqueRecords = AttendanceCalculator.deduplicateRecords(state.attendanceRecords)
             .filter { rec ->
                 if (DateUtils.isWeekend(rec.dateKey)) return@filter false
@@ -148,16 +136,19 @@ fun ReportsScreen(
                 if (cleanBlocks.any { it.containsDate(rec.dateKey) }) return@filter false
                 true
             }
-        val scoped = if (term != null) {
-            uniqueRecords.filter { rec ->
-                if (term.startDate.isNotBlank() && term.endDate.isNotBlank()) {
-                    rec.dateKey >= term.startDate && rec.dateKey <= term.endDate
-                } else {
-                    rec.termId == term.id
+        val scoped = when (selectedScopeIndex) {
+            1 -> {
+                val term = state.activeTerm
+                uniqueRecords.filter { rec ->
+                    if (term.startDate.isNotBlank() && term.endDate.isNotBlank()) {
+                        rec.dateKey >= term.startDate && rec.dateKey <= term.endDate
+                    } else {
+                        rec.termId == term.id
+                    }
                 }
             }
-        } else {
-            uniqueRecords
+            2 -> uniqueRecords.filter { it.dateKey.startsWith(currentMonthPrefix) }
+            else -> uniqueRecords
         }
         val map = mutableMapOf<String, Pair<Int, Int>>() // subject -> (present, missed)
         scoped.forEach { rec ->
@@ -227,50 +218,12 @@ fun ReportsScreen(
                 StaggeredReveal(index = 1) {
                     WhatIfSkipSimulatorCard(
                         stats = stats,
-                        scopeTitle = selectedTerm?.name ?: "Overall GCE A/L"
+                        scopeTitle = activeScopeTitle
                     )
                 }
             }
 
-            // Scope Switcher (Overall + Terms) in Real Liquid Glass
-            item {
-                val visibleTerms = remember(state.terms) { state.terms.take(4) }
-                val scopeOptions = remember(visibleTerms) {
-                    buildList {
-                        add(
-                            LiquidGlassSegmentOption(
-                                label = "Overall (G12 & 13)",
-                                testTag = "reports_scope_overall"
-                            )
-                        )
-                        visibleTerms.forEach { term ->
-                            add(
-                                LiquidGlassSegmentOption(
-                                    label = term.name,
-                                    testTag = "reports_scope_${term.id}"
-                                )
-                            )
-                        }
-                    }
-                }
-                val selectedScopeIdx = remember(selectedTerm, visibleTerms) {
-                    if (selectedTerm == null) 0
-                    else (visibleTerms.indexOfFirst { it.id == selectedTerm?.id } + 1).coerceAtLeast(0)
-                }
-                SlidableLiquidGlassSegmentedBar(
-                    options = scopeOptions,
-                    selectedIndex = selectedScopeIdx,
-                    onOptionSelected = { idx ->
-                        selectedTerm = if (idx == 0) null else visibleTerms.getOrNull(idx - 1)
-                    },
-                    barHeight = 46.dp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("reports_term_scope_switcher")
-                )
-            }
-
-            // Summary Card
+            // Summary Card (with embedded Overall / This Term / This Month Liquid Glass switcher)
             item {
                 val animatedPct by animateFloatAsState(
                     targetValue = stats.percentage.toFloat().coerceIn(0f, 100f),
@@ -285,6 +238,13 @@ fun ReportsScreen(
                     animationSpec = tween(360),
                     label = "reports_summary_accent"
                 )
+                val summaryScopeOptions = remember {
+                    listOf(
+                        LiquidGlassSegmentOption(label = "Overall", testTag = "reports_scope_overall"),
+                        LiquidGlassSegmentOption(label = "This Term", testTag = "reports_scope_this_term"),
+                        LiquidGlassSegmentOption(label = "This Month", testTag = "reports_scope_this_month")
+                    )
+                }
                 StaggeredReveal(index = 2) {
                     Card(
                         shape = RoundedCornerShape(24.dp),
@@ -305,6 +265,16 @@ fun ReportsScreen(
                             modifier = Modifier.padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            SlidableLiquidGlassSegmentedBar(
+                                options = summaryScopeOptions,
+                                selectedIndex = selectedScopeIndex,
+                                onOptionSelected = { idx -> selectedScopeIndex = idx.coerceIn(0, 2) },
+                                barHeight = 42.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("reports_term_scope_switcher")
+                            )
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -312,7 +282,7 @@ fun ReportsScreen(
                             ) {
                                 Column {
                                     Text(
-                                        text = selectedTerm?.name ?: "Overall GCE A/L",
+                                        text = activeScopeTitle,
                                         style = MaterialTheme.typography.titleMedium
                                     )
                                     Text(
@@ -568,7 +538,7 @@ fun ReportsScreen(
                         if (profile != null) {
                             val reportText = AttendanceCalculator.buildShareableReport(
                                 profile = profile,
-                                scopeTitle = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
+                                scopeTitle = activeScopeTitle,
                                 stats = stats,
                                 streak = state.currentStreak
                             )
@@ -612,7 +582,7 @@ fun ReportsScreen(
     if (showParentSummary) {
         ParentSummaryPreviewDialog(
             profile = profile,
-            termName = selectedTerm?.name ?: "Overall (Grade 12 & 13)",
+            termName = activeScopeTitle,
             stats = stats,
             overallStats = state.overallStats,
             onDismiss = { showParentSummary = false }

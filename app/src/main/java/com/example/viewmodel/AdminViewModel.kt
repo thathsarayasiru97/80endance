@@ -22,6 +22,7 @@ import com.example.data.Notice
 import com.example.data.NoticeCategory
 import com.example.data.NoticeTargetType
 import com.example.data.SriLankaCalendarDefaults
+import com.example.data.StudentTrendSummary
 import com.example.data.UserProfile
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -100,10 +101,19 @@ class AdminViewModel(
         repository.observeCommunityStats().safeStream(CommunityStats(), "communityStats"),
         combine(
             presenceTickFlow,
-            repository.observeAcademicCatalog().safeStream(AcademicCatalog.defaultCatalog(), "catalog")
-        ) { nowMs, catalog -> nowMs to catalog }
-    ) { settings, feedback, broadcasts, communityStats, tickAndCatalog ->
-        AdminSecondaryBundle(settings, feedback, broadcasts, communityStats, tickAndCatalog.first, tickAndCatalog.second)
+            repository.observeAcademicCatalog().safeStream(AcademicCatalog.defaultCatalog(), "catalog"),
+            repository.observeAllStudentTrendSummaries().safeStream(emptyList(), "trendSummaries")
+        ) { nowMs, catalog, trendSummaries -> Triple(nowMs, catalog, trendSummaries) }
+    ) { settings, feedback, broadcasts, communityStats, tickCatalogAndTrends ->
+        AdminSecondaryBundle(
+            settings = settings,
+            feedback = feedback,
+            broadcasts = broadcasts,
+            communityStats = communityStats,
+            nowMs = tickCatalogAndTrends.first,
+            academicCatalog = tickCatalogAndTrends.second,
+            trendSummaries = tickCatalogAndTrends.third
+        )
     }
 
     val uiState: StateFlow<AdminUiState> = combine(
@@ -119,8 +129,12 @@ class AdminViewModel(
         ) { secondary, selectedId, selectedRecords, busy ->
             AdminExtras(secondary, selectedId, selectedRecords, busy)
         }
-    ) { students, notices, terms, events, extras ->
+    ) { rawStudents, notices, terms, events, extras ->
         val sec = extras.secondary
+        val trendSummaryByUserId = sec.trendSummaries.associateBy { it.userId.ifBlank { it.id } }
+        val students = rawStudents.map { st ->
+            st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
+        }
         // Reconcile the public /app_stats/community counter whenever admin observes an exact count mismatch
         if (students.isNotEmpty() &&
             students.size != sec.communityStats.totalAccounts &&
@@ -620,7 +634,8 @@ class AdminViewModel(
         val broadcasts: List<BroadcastNotification>,
         val communityStats: CommunityStats,
         val nowMs: Long,
-        val academicCatalog: AcademicCatalog
+        val academicCatalog: AcademicCatalog,
+        val trendSummaries: List<StudentTrendSummary> = emptyList()
     )
 
     private data class AdminExtras(

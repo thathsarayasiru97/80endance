@@ -97,10 +97,14 @@ class DampedDragAnimation(
     private val pressedScale: Float = 1.4f,
     private val onDragStarted: DampedDragAnimation.(Offset) -> Unit = {},
     private val onDragStopped: DampedDragAnimation.() -> Unit = {},
+    private val onDragCancelled: (DampedDragAnimation.() -> Unit)? = null,
     private val onDrag: DampedDragAnimation.(size: Size, dragAmount: Offset) -> Unit = { _, _ -> }
 ) {
     private val valueAnim = Animatable(initialValue.coerceIn(valueRange), visibilityThreshold)
     private val pressAnim = Animatable(0f, 0.001f)
+
+    private var dragValue by mutableFloatStateOf(initialValue.coerceIn(valueRange))
+    private var useDragValue by mutableStateOf(false)
 
     var targetValue by mutableFloatStateOf(initialValue.coerceIn(valueRange))
         private set
@@ -114,7 +118,7 @@ class DampedDragAnimation(
     private var isPointerDown: Boolean = false
 
     val value: Float
-        get() = valueAnim.value
+        get() = if (useDragValue) dragValue else valueAnim.value
 
     val progress: Float
         get() {
@@ -141,12 +145,19 @@ class DampedDragAnimation(
         }
         lastUpdateNanos = now
         targetValue = clamped
-        valueJob?.cancel()
-        valueJob = animationScope.launch {
-            if (isPointerDown) {
-                // Fast, zero-shutter tracking while finger is dragging
-                valueAnim.snapTo(clamped)
-            } else {
+        if (isPointerDown) {
+            // Zero-allocation, zero-shutter tracking at full 120Hz touch sampling rate
+            valueJob?.cancel()
+            dragValue = clamped
+            useDragValue = true
+        } else {
+            valueJob?.cancel()
+            val startVal = value
+            valueJob = animationScope.launch {
+                if (useDragValue) {
+                    valueAnim.snapTo(startVal)
+                    useDragValue = false
+                }
                 valueAnim.animateTo(
                     targetValue = clamped,
                     animationSpec = spring(
@@ -164,36 +175,64 @@ class DampedDragAnimation(
 
     fun animateToValue(newValue: Float) {
         val clamped = newValue.coerceIn(valueRange)
-        val distance = kotlin.math.abs(clamped - valueAnim.value)
+        val currentVal = value
+        val distance = kotlin.math.abs(clamped - currentVal)
         targetValue = clamped
         lastUpdateNanos = 0L
-        valueJob?.cancel()
-        valueJob = animationScope.launch {
-            // If gliding across tabs/switch on tap, pulse the optical glass lens so it swells & refracts as it slides
-            if (!isPointerDown && distance > 0.02f) {
-                pressJob?.cancel()
-                pressJob = launch {
+        if (!isPointerDown) {
+            val alreadySwollenFromHold = pressAnim.value >= 0.32f
+            pressJob?.cancel()
+            pressJob = animationScope.launch {
+                if (distance > 0.02f && !alreadySwollenFromHold) {
                     pressAnim.animateTo(
-                        targetValue = 0.72f,
+                        targetValue = 0.68f,
                         animationSpec = spring(dampingRatio = 0.85f, stiffness = 680f)
                     )
+                }
+                if (!isPointerDown) {
                     pressAnim.animateTo(
                         targetValue = 0f,
-                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f)
+                        animationSpec = spring(dampingRatio = 0.84f, stiffness = 320f)
                     )
                 }
+            }
+        }
+        valueJob?.cancel()
+        valueJob = animationScope.launch {
+            if (useDragValue) {
+                valueAnim.snapTo(currentVal)
+                useDragValue = false
             }
             valueAnim.animateTo(
                 targetValue = clamped,
                 animationSpec = spring(
-                    dampingRatio = 0.76f,
-                    stiffness = 400f,
+                    dampingRatio = 0.78f,
+                    stiffness = 410f,
                     visibilityThreshold = visibilityThreshold
                 )
             ) {
                 this@DampedDragAnimation.velocity = this.velocity
             }
             velocity = 0f
+            if (!isPointerDown && pressAnim.value > 0.001f && pressJob?.isActive != true) {
+                pressJob = animationScope.launch {
+                    pressAnim.animateTo(
+                        targetValue = 0f,
+                        animationSpec = spring(dampingRatio = 0.84f, stiffness = 340f)
+                    )
+                }
+            }
+        }
+    }
+
+    fun ensureReleased() {
+        if (!isPointerDown && pressAnim.value > 0.001f && pressJob?.isActive != true) {
+            pressJob = animationScope.launch {
+                pressAnim.animateTo(
+                    targetValue = 0f,
+                    animationSpec = spring(dampingRatio = 0.84f, stiffness = 340f)
+                )
+            }
         }
     }
 
@@ -204,7 +243,7 @@ class DampedDragAnimation(
             pressAnim.animateTo(
                 targetValue = if (pressed) 1f else 0f,
                 animationSpec = spring(
-                    dampingRatio = 0.80f,
+                    dampingRatio = 0.82f,
                     stiffness = if (pressed) 550f else 340f
                 )
             )
@@ -219,31 +258,64 @@ class DampedDragAnimation(
                 setPressed(true)
                 onDragStarted(down.position)
 
-                var pointerId = down.id
-                var released = false
-                while (!released) {
-                    val event = awaitPointerEvent(PointerEventPass.Main)
-                    val change = event.changes.firstOrNull { it.id == pointerId }
-                        ?: event.changes.firstOrNull()
-                    if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
-                        released = true
-                    } else {
-                        pointerId = change.id
-                        val delta = change.position - change.previousPosition
-                        if (delta != Offset.Zero) {
-                            change.consume()
-                            onDrag(
-                                Size(size.width.toFloat(), size.height.toFloat()),
-                                delta
-                            )
+                var cancelled = false
+                try {
+                    var pointerId = down.id
+                    var released = false
+                    var totalDx = 0f
+                    var totalDy = 0f
+                    var horizontalLocked = false
+                    val touchSlop = viewConfiguration.touchSlop
+                    while (!released) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                            ?: event.changes.firstOrNull()
+                        if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
+                            released = true
+                        } else if (change.isConsumed && !horizontalLocked) {
+                            // Parent scroll container took over this gesture — release cleanly without toggling
+                            cancelled = true
+                            released = true
+                        } else {
+                            pointerId = change.id
+                            val delta = change.position - change.previousPosition
+                            if (delta != Offset.Zero) {
+                                totalDx += kotlin.math.abs(delta.x)
+                                totalDy += kotlin.math.abs(delta.y)
+                                if (!horizontalLocked) {
+                                    if (totalDy > touchSlop && totalDy > totalDx * 1.4f) {
+                                        // User is scrolling vertically; release glass press cleanly
+                                        cancelled = true
+                                        released = true
+                                    } else if (totalDx > touchSlop * 0.45f) {
+                                        horizontalLocked = true
+                                    }
+                                }
+                                if (!released) {
+                                    if (horizontalLocked) {
+                                        change.consume()
+                                    }
+                                    onDrag(
+                                        Size(size.width.toFloat(), size.height.toFloat()),
+                                        delta
+                                    )
+                                }
+                            }
                         }
                     }
+                } catch (e: Throwable) {
+                    cancelled = true
+                    throw e
+                } finally {
+                    lastUpdateNanos = 0L
+                    velocity = 0f
+                    setPressed(false)
+                    if (cancelled && onDragCancelled != null) {
+                        onDragCancelled.invoke(this@DampedDragAnimation)
+                    } else {
+                        onDragStopped()
+                    }
                 }
-
-                lastUpdateNanos = 0L
-                setPressed(false)
-                velocity = 0f
-                onDragStopped()
             }
         }
 }
@@ -300,22 +372,25 @@ class InteractiveHighlight(
                     animationSpec = spring(dampingRatio = 0.84f, stiffness = 540f)
                 )
             }
-            var released = false
-            while (!released) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val change = event.changes.firstOrNull()
-                if (change == null || !change.pressed) {
-                    released = true
-                } else {
-                    offset = change.position
+            try {
+                var released = false
+                while (!released) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull()
+                    if (change == null || !change.pressed) {
+                        released = true
+                    } else {
+                        offset = change.position
+                    }
                 }
-            }
-            pressJob?.cancel()
-            pressJob = animationScope.launch {
-                pressAnim.animateTo(
-                    targetValue = 0f,
-                    animationSpec = spring(dampingRatio = 0.85f, stiffness = 320f)
-                )
+            } finally {
+                pressJob?.cancel()
+                pressJob = animationScope.launch {
+                    pressAnim.animateTo(
+                        targetValue = 0f,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 320f)
+                    )
+                }
             }
         }
     }

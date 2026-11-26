@@ -1647,43 +1647,15 @@ private fun NextDaySchoolPollCard(
             ) {
                 val yesSelected = myVote == true
                 val noSelected = myVote == false
-                val yesBg by animateColorAsState(
-                    targetValue = if (yesSelected) semantic.present else semantic.presentContainer.copy(alpha = 0.72f),
-                    animationSpec = tween(240),
-                    label = "poll_yes_bg"
-                )
-                val yesFg by animateColorAsState(
-                    targetValue = if (yesSelected) MaterialTheme.colorScheme.onPrimary else semantic.onPresentContainer,
-                    animationSpec = tween(240),
-                    label = "poll_yes_fg"
-                )
-                val noBg by animateColorAsState(
-                    targetValue = if (noSelected) semantic.absentContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                    animationSpec = tween(240),
-                    label = "poll_no_bg"
-                )
-                val noFg by animateColorAsState(
-                    targetValue = if (noSelected) semantic.onAbsentContainer else MaterialTheme.colorScheme.onSurface,
-                    animationSpec = tween(240),
-                    label = "poll_no_fg"
-                )
-                val noBorder by animateColorAsState(
-                    targetValue = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outlineVariant,
-                    animationSpec = tween(240),
-                    label = "poll_no_border"
-                )
 
-                Button(
+                LiquidGlassButton(
                     onClick = { onVote(true) },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = yesBg,
-                        contentColor = yesFg
-                    ),
+                    tint = if (yesSelected) semantic.present else semantic.present.copy(alpha = 0.55f),
+                    contentColor = if (yesSelected) semantic.present else semantic.onPresentContainer,
+                    minHeight = 50.dp,
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .height(50.dp)
                         .testTag("poll_vote_yes_btn")
                 ) {
                     Icon(
@@ -1696,25 +1668,18 @@ private fun NextDaySchoolPollCard(
                         text = if (yesSelected) "Coming ✓" else "Yes, Coming",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = if (yesSelected) FontWeight.Bold else FontWeight.SemiBold
                     )
                 }
 
-                OutlinedButton(
+                LiquidGlassButton(
                     onClick = { onVote(false) },
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(
-                        width = if (noSelected) 1.8.dp else 1.dp,
-                        color = noBorder
-                    ),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = noBg,
-                        contentColor = noFg
-                    ),
+                    tint = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outline,
+                    contentColor = if (noSelected) semantic.absent else MaterialTheme.colorScheme.onSurface,
+                    minHeight = 50.dp,
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .height(50.dp)
                         .testTag("poll_vote_no_btn")
                 ) {
                     Icon(
@@ -1727,7 +1692,7 @@ private fun NextDaySchoolPollCard(
                         text = if (noSelected) "Skipping ✓" else "No, Skipping",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = if (noSelected) FontWeight.Bold else FontWeight.SemiBold
                     )
                 }
             }

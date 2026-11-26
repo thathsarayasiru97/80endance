@@ -1,12 +1,13 @@
 ### What's New
-- **Optical Liquid Glass Controls & Free-Slide Physics:** Refractive liquid-glass bottom navigation bar, segmented switchers (Grade, Theme, Term Scope, Period Lock Mode, Personal Marker Category, Feedback Type), "What-If" slider, toggle switches, and action pills with free continuous dragging that glides to the nearest tab on release, dual-backdrop lens magnification, chromatic aberration, and a morphing Sun-to-Moon theme toggle.
-- **Smooth Calendar Month Swiping:** Swipe left or right directly on the calendar grid and use the quick "Jump to Today" pill.
-- **Dynamic Greeting & Context Banner:** Home header adapts to time of day, remaining school days this week, Poya breaks, and active streaks.
-- **A/L Batch Countdown Milestones:** Celebratory banners when your batch hits 300d, 200d, 100d, 50d, and 30d to A/Ls.
-- **Scheduled Notices:** Upcoming announcements and reminders can now be queued to appear automatically on time.
+- **Optical Liquid Glass & Zero-Lag Free-Slide Physics:** Refractive liquid-glass bottom bar, segmented switchers, "What-If" slider, toggle switches, poll actions, and dialog CTAs with zero-allocation 120Hz dragging, centered magnetic touch pull, and smooth spring settlement on release.
+- **Streamlined Reports Scope Switcher:** Clean Overall, This Term, and This Month liquid-glass switcher built directly into the GCE A/L summary card.
+- **One-Tap Clear Attendance:** Clear any logged day's attendance directly from the Edit attendance popup.
+- **Smooth Calendar Month Swiping:** Swipe left or right directly on the calendar grid and jump back to Today in one tap.
+- **Dynamic Greeting, A/L Milestones & Scheduled Notices:** Adaptive Home header, batch countdown milestones (300d–30d), and auto-timed notices.
 
 ### Bug Fixes
-- Fixed Liquid Glass pill and sliders jumping prematurely mid-drag before finger release.
+- Fixed Liquid Glass toggle switches getting stuck in the expanded liquid state when held or interrupted by scrolling.
+- Fixed overall synced attendance totals so locked attendance time periods are always accurately included everywhere.
+- Fixed Liquid Glass pills and sliders jumping prematurely mid-drag before release.
 - Eliminated attendance double-counting across imported baselines, locked periods, and school holidays.
-- Swipe catch-up deck now only auto-appears on app launch instead of every time you switch back to Home.
 

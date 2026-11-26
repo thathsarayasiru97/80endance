@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Lock
@@ -898,7 +899,8 @@ fun DailyCheckInDialog(
     isSaving: Boolean,
     previewForStatus: ((AttendanceStatus) -> CheckInImpactPreview?)? = null,
     onDismiss: () -> Unit,
-    onSave: (status: AttendanceStatus, subjectTags: List<String>, note: String?) -> Unit
+    onSave: (status: AttendanceStatus, subjectTags: List<String>, note: String?) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val semantic = LocalAttendanceColors.current
     var step by remember(dateKey) { mutableStateOf(CheckInStep.ASK_YES_NO) }
@@ -1088,6 +1090,35 @@ fun DailyCheckInDialog(
                                         modifier = Modifier.testTag("checkin_live_impact_preview")
                                     )
                                 }
+
+                                if (existingRecord != null && onDelete != null) {
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    LiquidGlassButton(
+                                        onClick = onDelete,
+                                        backdrop = dialogBackdrop,
+                                        enabled = !isSaving,
+                                        tint = semantic.absent,
+                                        contentColor = semantic.absent,
+                                        minHeight = 46.dp,
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("checkin_clear_attendance_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = semantic.absent,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Clear Attendance (${existingRecord.statusEnum.shortLabel})",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -1168,6 +1199,29 @@ fun DailyCheckInDialog(
                                             .weight(1.4f)
                                             .testTag("checkin_confirm_present_button")
                                     ) { Text("Save Present") }
+                                }
+                                if (existingRecord != null && onDelete != null) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    TextButton(
+                                        onClick = onDelete,
+                                        enabled = !isSaving,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("checkin_yes_clear_attendance_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = semantic.absent,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Clear Attendance for This Day",
+                                            color = semantic.absent,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1396,6 +1450,29 @@ fun DailyCheckInDialog(
                                                 )
                                             }
                                         }
+                                    }
+                                }
+                                if (existingRecord != null && onDelete != null) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    TextButton(
+                                        onClick = onDelete,
+                                        enabled = !isSaving,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("checkin_no_clear_attendance_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = semantic.absent,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Clear Attendance for This Day",
+                                            color = semantic.absent,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
                                     }
                                 }
                             }

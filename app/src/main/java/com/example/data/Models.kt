@@ -252,6 +252,27 @@ data class UserProfile(
         }
 
     /**
+     * Reconciles cached [presentCount] and [absentCount] with the student's synced
+     * [StudentTrendSummary] (which includes locked attendance time periods).
+     */
+    fun withReconciledTrendSummary(summary: StudentTrendSummary?): UserProfile {
+        if (summary == null || summary.totalCounted <= 0) return this
+        val currentEffectivePresent = presentCount + priorPresentCount + medicalCount + schoolEventCount
+        val currentEffectiveAbsent = absentCount + priorAbsentCount
+        if (currentEffectivePresent == summary.totalAttended && currentEffectiveAbsent == summary.totalAbsent) {
+            return this
+        }
+        val reconciledPresent = (summary.totalAttended - priorPresentCount - medicalCount - schoolEventCount)
+            .coerceAtLeast(presentCount)
+        val reconciledAbsent = (summary.totalAbsent - priorAbsentCount)
+            .coerceAtLeast(absentCount)
+        return copy(
+            presentCount = reconciledPresent,
+            absentCount = reconciledAbsent
+        )
+    }
+
+    /**
      * Treats a student as live online only if [onlineNow] is true and their heartbeat
      * [lastSeenAt] arrived within the last 4 minutes (prevents stale online states).
      */

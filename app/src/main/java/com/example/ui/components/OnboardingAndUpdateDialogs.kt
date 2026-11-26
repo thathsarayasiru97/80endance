@@ -55,10 +55,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.graphics.Brush
 import com.example.data.FeedbackReport
 import com.example.data.FeedbackType
 import com.example.data.ReleaseNoteEntry
 import com.example.ui.theme.LocalAttendanceColors
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 /**
  * In-app-only notification banner shown on HomeScreen when the admin marks a student's
@@ -196,27 +201,43 @@ fun WhatsNewDialog(
         onDismissRequest = onContinue,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogBackdrop = rememberLayerBackdrop()
+        val surfaceBase = MaterialTheme.colorScheme.surfaceContainerLowest
+        val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        val secondaryGlow = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            color = surfaceBase,
             tonalElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .testTag("whats_new_dialog")
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .animateContentSize(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .layerBackdrop(dialogBackdrop)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(surfaceBase, primaryGlow, secondaryGlow, surfaceBase)
+                            )
                         )
-                    )
-                    .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateContentSize(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
+                        .padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -350,14 +371,19 @@ fun WhatsNewDialog(
                     }
                 }
 
-                Button(
+                LiquidGlassButton(
                     onClick = onContinue,
-                    shape = RoundedCornerShape(14.dp),
+                    backdrop = dialogBackdrop,
+                    tint = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    minHeight = 48.dp,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("whats_new_continue_button")
                 ) {
-                    Text("Awesome, Continue")
+                    Text("Awesome, Continue", fontWeight = FontWeight.Bold)
+                }
                 }
             }
         }
@@ -379,21 +405,37 @@ fun FeedbackWelcomeDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dialogBackdrop = rememberLayerBackdrop()
+        val surfaceBase = MaterialTheme.colorScheme.surfaceContainerLowest
+        val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        val tertiaryGlow = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            color = surfaceBase,
             tonalElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .testTag("feedback_welcome_dialog")
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .layerBackdrop(dialogBackdrop)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(surfaceBase, primaryGlow, tertiaryGlow, surfaceBase)
+                            )
+                        )
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -500,15 +542,20 @@ fun FeedbackWelcomeDialog(
                     ) {
                         Text("Settings")
                     }
-                    Button(
+                    LiquidGlassButton(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(14.dp),
+                        backdrop = dialogBackdrop,
+                        tint = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                        minHeight = 48.dp,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1.3f)
                             .testTag("feedback_welcome_dismiss")
                     ) {
-                        Text("Got It!")
+                        Text("Got It!", fontWeight = FontWeight.Bold)
                     }
+                }
                 }
             }
         }

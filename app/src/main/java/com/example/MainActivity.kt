@@ -871,7 +871,13 @@ private fun AuthenticatedAppShell(
             },
             onSave = { status, subjectTags, note ->
                 attendanceViewModel.logAttendance(activeCheckInDate, status, subjectTags, note)
-            }
+            },
+            onDelete = if (existingRec != null) {
+                {
+                    attendanceViewModel.deleteAttendance(activeCheckInDate)
+                    attendanceViewModel.dismissCheckInPopup(markDismissedToday = false)
+                }
+            } else null
         )
     }
 

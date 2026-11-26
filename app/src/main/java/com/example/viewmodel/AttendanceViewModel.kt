@@ -231,6 +231,7 @@ class AttendanceViewModel(
 
     private var lastCachedAudienceSignature: String = ""
     private var lastSyncedTrendSignature: String = ""
+    private var lastReconciledCounterSignature: String = ""
     private var lastDangerNudgeTriggeredDate: String = ""
     private var lastSyncedPollEnabled: Boolean? = null
 
@@ -572,11 +573,32 @@ class AttendanceViewModel(
                 }
             }
         }
+        // Reconcile UserProfile presentCount/absentCount in Firestore if locked period blocks were not yet included
+        if (bundle.profileLoaded && profile?.setupCompleted == true && periodBlocks.isNotEmpty()) {
+            val storedEffectivePresent = profile.presentCount + profile.priorPresentCount + profile.medicalCount + profile.schoolEventCount
+            val storedEffectiveAbsent = profile.absentCount + profile.priorAbsentCount
+            val counterSig = "${overallStats.effectiveAttended}|${overallStats.absentDays}"
+            if ((storedEffectivePresent != overallStats.effectiveAttended || storedEffectiveAbsent != overallStats.absentDays) &&
+                counterSig != lastReconciledCounterSignature
+            ) {
+                lastReconciledCounterSignature = counterSig
+                val recordsSnapshot = bundle.records
+                viewModelScope.launch {
+                    repository.reconcileUserCountersWithPeriodBlocks(
+                        userId = currentUserId,
+                        records = recordsSnapshot,
+                        periodBlocks = periodBlocks,
+                        lockedBaselineRange = lockedRange
+                    )
+                }
+            }
+        }
         val mergedCommunitySummaries = if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
             extras.communityTrendSummaries.filterNot { it.userId == currentUserId || it.id == currentUserId } + localTrendSummary
         } else {
             extras.communityTrendSummaries
         }
+        val trendSummaryByUserId = mergedCommunitySummaries.associateBy { it.userId.ifBlank { it.id } }
 
         val inDangerZone = AttendanceCalculator.isDangerZone(termStats)
         if (localState.prefsLoaded &&
@@ -712,7 +734,11 @@ class AttendanceViewModel(
             activeTerm = activeTerm,
             calendarEvents = effectiveEvents,
             allCalendarEventsForAdmin = if (isVerifiedAdmin) rawEvents else emptyList(),
-            adminAllStudents = if (isVerifiedAdmin) extras.adminBundle.students else emptyList(),
+            adminAllStudents = if (isVerifiedAdmin) {
+                extras.adminBundle.students.map { st ->
+                    st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
+                }
+            } else emptyList(),
             academicCatalog = extras.academicCatalog,
             appSettings = settings,
             syncStatus = syncStatus,
@@ -736,7 +762,11 @@ class AttendanceViewModel(
             accentPalette = prefs.accentPalette,
             totalAccounts = displayedAccounts,
             adminOnlineNowCount = extras.adminBundle.onlineNowCount,
-            adminOnlineUsers = if (isVerifiedAdmin) extras.adminBundle.onlineUsers else emptyList(),
+            adminOnlineUsers = if (isVerifiedAdmin) {
+                extras.adminBundle.onlineUsers.map { st ->
+                    st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
+                }
+            } else emptyList(),
             unreadBroadcasts = recentMatchingBroadcasts,
             resolvedFeedbackAlerts = resolvedFeedbackAlerts,
             lastSeenAppVersion = prefs.lastSeenAppVersion,
