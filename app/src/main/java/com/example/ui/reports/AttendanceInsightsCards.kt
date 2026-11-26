@@ -68,9 +68,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -948,12 +955,15 @@ private fun MonthlyAttendanceBarChart(
     absentColor: Color,
     thresholdColor: Color
 ) {
+    val haptic = LocalHapticFeedback.current
     val barAnimatables = remember(points.size) { List(points.size) { Animatable(0f) } }
+    var selectedIdx by remember(points) { mutableIntStateOf(-1) }
+
     LaunchedEffect(points) {
         barAnimatables.forEachIndexed { idx, anim ->
             launch {
                 anim.snapTo(0f)
-                delay(idx * 65L)
+                delay(idx * 60L)
                 anim.animateTo(
                     targetValue = 1f,
                     animationSpec = spring(
@@ -966,62 +976,209 @@ private fun MonthlyAttendanceBarChart(
     }
     val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     val goalFraction = (thresholdPercent.coerceIn(50, 99) / 100f)
+    val focusedPoint = points.getOrNull(selectedIdx)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("monthly_attendance_chart"),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Floating scrub inspector pill (interactive drag or tap on any bar)
+        AnimatedContent(
+            targetState = focusedPoint,
+            transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(120)) },
+            label = "monthly_chart_scrub_tooltip"
+        ) { activePt ->
+            if (activePt != null) {
+                val activeOk = activePt.percentage >= thresholdPercent
+                val pillAccent = if (activeOk) presentColor else absentColor
+                Surface(
+                    color = pillAccent.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("monthly_chart_scrub_pill")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = activePt.fullLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${activePt.attendedDays} / ${activePt.totalDays} school days attended",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = String.format(Locale.US, "%.1f%%", activePt.percentage),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = pillAccent
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Monthly Attendance",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Slide or tap bars to inspect",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
         // Percentage labels above each bar
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            points.forEach { pt ->
+            points.forEachIndexed { idx, pt ->
+                val isFocused = selectedIdx == -1 || selectedIdx == idx
                 Text(
                     text = String.format(Locale.US, "%.0f%%", pt.percentage),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (pt.percentage >= thresholdPercent) presentColor else absentColor,
+                    fontWeight = if (selectedIdx == idx) FontWeight.ExtraBold else FontWeight.Bold,
+                    color = (if (pt.percentage >= thresholdPercent) presentColor else absentColor)
+                        .copy(alpha = if (isFocused) 1f else 0.42f),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
-        // Bar canvas with dashed 80% threshold line
+        // Touch-scrubbable bar canvas with dashed 80% goal line & glowing active cap
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(148.dp)
+                .height(152.dp)
+                .pointerInput(points) {
+                    fun updateIndexForX(x: Float) {
+                        if (points.isEmpty() || size.width <= 0) return
+                        val idx = ((x / size.width.toFloat()) * points.size)
+                            .toInt()
+                            .coerceIn(0, points.lastIndex)
+                        if (idx != selectedIdx) {
+                            selectedIdx = idx
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                    }
+                    detectTapGestures { offset ->
+                        val idx = ((offset.x / size.width.toFloat()) * points.size)
+                            .toInt()
+                            .coerceIn(0, points.lastIndex)
+                        selectedIdx = if (selectedIdx == idx) -1 else idx
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                }
+                .pointerInput(points) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            if (points.isNotEmpty() && size.width > 0) {
+                                val idx = ((offset.x / size.width.toFloat()) * points.size)
+                                    .toInt()
+                                    .coerceIn(0, points.lastIndex)
+                                if (idx != selectedIdx) {
+                                    selectedIdx = idx
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                            }
+                        },
+                        onHorizontalDrag = { change, _ ->
+                            if (points.isNotEmpty() && size.width > 0) {
+                                val idx = ((change.position.x / size.width.toFloat()) * points.size)
+                                    .toInt()
+                                    .coerceIn(0, points.lastIndex)
+                                if (idx != selectedIdx) {
+                                    selectedIdx = idx
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                            }
+                        }
+                    )
+                }
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val count = points.size.coerceAtLeast(1)
                 val slotWidth = size.width / count
-                val barWidth = (slotWidth * 0.46f).coerceIn(20f, 76f)
+                val barWidth = (slotWidth * 0.48f).coerceIn(20f, 76f)
                 val chartHeight = size.height
 
-                // Draw background tracks & staggered spring-rising bars
+                // Draw background tracks & staggered spring-rising gradient bars
                 points.forEachIndexed { idx, pt ->
                     val centerX = slotWidth * idx + slotWidth / 2f
                     val left = centerX - barWidth / 2f
+                    val isSelected = selectedIdx == idx
+                    val isDimmed = selectedIdx != -1 && !isSelected
+
                     drawRoundRect(
-                        color = trackColor,
+                        color = trackColor.copy(alpha = if (isSelected) 0.85f else 0.45f),
                         topLeft = Offset(left, 0f),
                         size = Size(barWidth, chartHeight),
-                        cornerRadius = CornerRadius(14f, 14f)
+                        cornerRadius = CornerRadius(16f, 16f)
                     )
                     val progress = barAnimatables.getOrNull(idx)?.value ?: 1f
-                    val pctFraction = (pt.percentage.toFloat() / 100f).coerceIn(0.04f, 1f) * progress
+                    val pctFraction = (pt.percentage.toFloat() / 100f).coerceIn(0.05f, 1f) * progress
                     val barHeight = (chartHeight * pctFraction).coerceAtLeast(0f)
-                    val barColor = if (pt.percentage >= thresholdPercent) presentColor else absentColor
+                    val barTop = chartHeight - barHeight
+                    val barBaseColor = if (pt.percentage >= thresholdPercent) presentColor else absentColor
+                    val barAlpha = if (isDimmed) 0.36f else 1f
+
                     drawRoundRect(
-                        color = barColor,
-                        topLeft = Offset(left, chartHeight - barHeight),
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                barBaseColor.copy(alpha = barAlpha),
+                                barBaseColor.copy(alpha = barAlpha * 0.72f)
+                            ),
+                            startY = barTop,
+                            endY = chartHeight
+                        ),
+                        topLeft = Offset(left, barTop),
                         size = Size(barWidth, barHeight),
-                        cornerRadius = CornerRadius(14f, 14f)
+                        cornerRadius = CornerRadius(16f, 16f)
                     )
+
+                    // Specular luminous highlight cap & vertical guide on scrubbed bar
+                    if (isSelected && barHeight > 10f) {
+                        drawLine(
+                            color = barBaseColor.copy(alpha = 0.28f),
+                            start = Offset(centerX, 0f),
+                            end = Offset(centerX, barTop),
+                            strokeWidth = 2.5f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                        )
+                        drawCircle(
+                            color = barBaseColor.copy(alpha = 0.34f),
+                            radius = 12f,
+                            center = Offset(centerX, barTop + 6f)
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.95f),
+                            radius = 4.5f,
+                            center = Offset(centerX, barTop + 6f)
+                        )
+                    }
                 }
 
                 // Draw 80% dashed goal line across chart
@@ -1041,11 +1198,13 @@ private fun MonthlyAttendanceBarChart(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            points.forEach { pt ->
+            points.forEachIndexed { idx, pt ->
+                val isSelected = selectedIdx == idx
                 Text(
                     text = pt.shortLabel,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )

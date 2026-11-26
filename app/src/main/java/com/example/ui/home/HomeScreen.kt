@@ -137,7 +137,17 @@ import com.example.ui.reports.ParentSummaryPreviewDialog
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.DashboardScopeMode
 import com.example.viewmodel.StudentAppState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import com.example.ui.components.FloatingDeltaPillOverlay
+import com.example.ui.components.interactiveGlassTilt
+import com.example.ui.components.specularSheenSweep
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -187,6 +197,24 @@ fun HomeScreen(
     var dismissedBatchMilestoneDays by rememberSaveable { mutableStateOf<Int?>(null) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
+    var lastScopeForDelta by remember { mutableStateOf(scopeMode) }
+    var lastPercentForDelta by remember { mutableDoubleStateOf(activeStats.percentage) }
+    var floatingDeltaValue by remember { mutableStateOf<Double?>(null) }
+    var floatingDeltaTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(activeStats.percentage, scopeMode) {
+        if (scopeMode != lastScopeForDelta) {
+            lastScopeForDelta = scopeMode
+            lastPercentForDelta = activeStats.percentage
+        } else {
+            val diff = activeStats.percentage - lastPercentForDelta
+            if (kotlin.math.abs(diff) >= 0.05 && activeStats.totalCountedDays > 0) {
+                floatingDeltaValue = diff
+                floatingDeltaTrigger++
+            }
+            lastPercentForDelta = activeStats.percentage
+        }
+    }
 
     LaunchedEffect(Unit) {
         visible = true
@@ -447,6 +475,9 @@ fun HomeScreen(
                             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .interactiveGlassTilt(maxTiltDegrees = 2.6f)
+                                .clip(RoundedCornerShape(24.dp))
+                                .specularSheenSweep(maxAlpha = 0.24f)
                                 .bouncyClickable(pressedScale = 0.97f) {
                                     heroCountdownExpanded = false
                                     showAlTimelineSheet = true
@@ -636,7 +667,11 @@ fun HomeScreen(
                         shape = RoundedCornerShape(26.dp),
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .interactiveGlassTilt(maxTiltDegrees = 2.4f)
+                            .clip(RoundedCornerShape(26.dp))
+                            .specularSheenSweep(maxAlpha = 0.18f)
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -688,11 +723,20 @@ fun HomeScreen(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            AnimatedEligibilityGauge(
-                                stats = activeStats,
-                                privacyBlurred = privacyBlurred,
-                                onDoubleTapTogglePrivacy = { privacyBlurred = !privacyBlurred }
-                            )
+                            Box(contentAlignment = Alignment.TopCenter) {
+                                AnimatedEligibilityGauge(
+                                    stats = activeStats,
+                                    privacyBlurred = privacyBlurred,
+                                    onDoubleTapTogglePrivacy = { privacyBlurred = !privacyBlurred }
+                                )
+                                if (!privacyBlurred) {
+                                    FloatingDeltaPillOverlay(
+                                        deltaPercent = floatingDeltaValue,
+                                        triggerKey = floatingDeltaTrigger,
+                                        modifier = Modifier.padding(top = 6.dp)
+                                    )
+                                }
+                            }
 
                             Spacer(modifier = Modifier.height(6.dp))
                             FlowRow(
@@ -1062,6 +1106,26 @@ fun HomeScreen(
                     }
 
                     else -> {
+                        val checkInHaptic = LocalHapticFeedback.current
+                        var splashTrigger by remember { mutableIntStateOf(0) }
+                        var splashStatus by remember { mutableStateOf(todayRec?.statusEnum ?: AttendanceStatus.PRESENT) }
+                        val splashRadiusProgress = remember { Animatable(1f) }
+                        LaunchedEffect(splashTrigger) {
+                            if (splashTrigger > 0) {
+                                splashRadiusProgress.snapTo(0f)
+                                splashRadiusProgress.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = tween(durationMillis = 560, easing = FastOutSlowInEasing)
+                                )
+                            }
+                        }
+                        val splashColor = when (splashStatus) {
+                            AttendanceStatus.PRESENT -> semantic.present
+                            AttendanceStatus.ABSENT -> semantic.absent
+                            AttendanceStatus.MEDICAL -> semantic.medical
+                            AttendanceStatus.SCHOOL_EVENT -> semantic.schoolEvent
+                            AttendanceStatus.HOLIDAY -> semantic.poya
+                        }
                         Card(
                             shape = RoundedCornerShape(22.dp),
                             colors = CardDefaults.cardColors(
@@ -1072,7 +1136,25 @@ fun HomeScreen(
                                 }
                             ),
                             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(22.dp))
+                                .drawBehind {
+                                    val p = splashRadiusProgress.value
+                                    if (splashTrigger > 0 && p < 0.99f) {
+                                        val alpha = (1f - p).coerceIn(0f, 1f) * 0.30f
+                                        val maxR = size.maxDimension * 1.15f
+                                        drawCircle(
+                                            brush = Brush.radialGradient(
+                                                colors = listOf(splashColor.copy(alpha = alpha), Color.Transparent),
+                                                center = Offset(size.width * 0.5f, size.height * 0.72f),
+                                                radius = (maxR * (0.12f + p * 0.88f)).coerceAtLeast(1f)
+                                            ),
+                                            radius = maxR * (0.12f + p * 0.88f),
+                                            center = Offset(size.width * 0.5f, size.height * 0.72f)
+                                        )
+                                    }
+                                }
                         ) {
                             Column(
                                 modifier = Modifier
@@ -1188,6 +1270,9 @@ fun HomeScreen(
                                     selectedIndex = currentTodayIdx,
                                     onOptionSelected = { idx ->
                                         quickStatuses.getOrNull(idx)?.let { status ->
+                                            splashStatus = status
+                                            splashTrigger++
+                                            checkInHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onQuickLogDate(todayKey, status)
                                         }
                                     },

@@ -140,6 +140,7 @@ import com.example.ui.components.LiquidGlassBackdropHost
 import com.example.ui.components.LiquidGlassBottomBar
 import com.example.ui.components.LiquidGlassNavItem
 import com.example.ui.components.LiquidGlassNavigationRail
+import com.example.ui.components.LiquidGlassShimmerSkeleton
 import com.example.ui.components.SmoothTabContent
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -606,9 +607,7 @@ private fun AuthenticatedAppShell(
 
     // Loading state before first local/cloud profile snapshot
     if (state.isLoading) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        LiquidGlassShimmerSkeleton()
         return
     }
 

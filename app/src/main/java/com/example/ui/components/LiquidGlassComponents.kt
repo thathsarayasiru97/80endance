@@ -155,7 +155,17 @@ fun LiquidGlassBackdropHost(
     // Read strictly inside Canvas draw scope (never during composition) to keep 120Hz zero-recomposition
     val driftPhaseState = rememberAmbientDriftPhaseState(shouldAnimate)
 
-    val (orb1Base, orb2Base, orb3Base) = when (activePreset) {
+    val currentHour = remember { java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) }
+    val timeTint = remember(currentHour) {
+        when (currentHour) {
+            in 5..10 -> Color(0xFFF59E0B) // Crisp morning golden sky
+            in 11..15 -> Color(0xFF38BDF8) // Clear midday daylight
+            in 16..19 -> Color(0xFFFB7185) // Warm after-school sunset
+            else -> Color(0xFF6366F1) // Calm evening aurora
+        }
+    }
+
+    val (rawOrb1, rawOrb2, rawOrb3) = when (activePreset) {
         AmbientBackdropPreset.INDIGO_AURORA -> Triple(
             colorScheme.primary,
             colorScheme.secondary,
@@ -181,6 +191,16 @@ fun LiquidGlassBackdropHost(
             Color.Transparent,
             Color.Transparent
         )
+    }
+    // Gently harmonize orb3 with time-of-day lighting (strictly skipped for PURE_MINIMAL & OLED)
+    val orb1Base = rawOrb1
+    val orb2Base = rawOrb2
+    val orb3Base = remember(rawOrb3, timeTint, activePreset, isOled) {
+        if (activePreset == AmbientBackdropPreset.PURE_MINIMAL || isOled) {
+            rawOrb3
+        } else {
+            androidx.compose.ui.graphics.lerp(rawOrb3, timeTint, 0.28f)
+        }
     }
 
     val intensityBoost = lerp(0.82f, 1.18f, glassStyle.clampedIntensity)
@@ -533,7 +553,7 @@ fun LiquidGlassBottomBar(
             items.forEachIndexed { index, item ->
                 val isSelected = index == safeSelected
                 val iconScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.12f else 0.96f,
+                    targetValue = if (isSelected) 1.15f else 0.95f,
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioMediumBouncy,
                         stiffness = Spring.StiffnessMedium
@@ -541,12 +561,30 @@ fun LiquidGlassBottomBar(
                     label = "bottom_tab_icon_scale_$index"
                 )
                 val iconLiftPx by animateFloatAsState(
-                    targetValue = if (isSelected) -2.5f else 0f,
+                    targetValue = if (isSelected) -3.5f else 0f,
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioMediumBouncy,
                         stiffness = Spring.StiffnessMedium
                     ),
                     label = "bottom_tab_icon_lift_$index"
+                )
+                // Signature per-tab micro-motion: Settings gear turns 60°, Calendar tilts crisply, Reports pops
+                val iconRotationZ by animateFloatAsState(
+                    targetValue = when {
+                        isSelected && index == 3 -> 60f
+                        isSelected && index == 1 -> -7f
+                        else -> 0f
+                    },
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "bottom_tab_icon_rot_$index"
+                )
+                val iconTint by animateColorAsState(
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary else baseContentColor,
+                    animationSpec = tween(220),
+                    label = "bottom_tab_icon_tint_$index"
                 )
                 LiquidBottomTab(
                     onClick = {
@@ -560,13 +598,14 @@ fun LiquidGlassBottomBar(
                     Icon(
                         imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
                         contentDescription = item.label,
-                        tint = baseContentColor,
+                        tint = iconTint,
                         modifier = Modifier
                             .size(22.dp)
                             .graphicsLayer {
                                 scaleX = iconScale
                                 scaleY = iconScale
                                 translationY = iconLiftPx
+                                rotationZ = iconRotationZ
                             }
                     )
                     Text(
@@ -574,7 +613,7 @@ fun LiquidGlassBottomBar(
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                         ),
-                        color = baseContentColor,
+                        color = iconTint,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )

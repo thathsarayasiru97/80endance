@@ -226,11 +226,9 @@ fun ClassPulseBannerCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.LocalFireDepartment,
-                        contentDescription = null,
-                        tint = semantic.medical,
-                        modifier = Modifier.size(16.dp)
+                    LivingStreakFlameIcon(
+                        streak = summary.streakLeaderboard.maxOfOrNull { it.currentStreak } ?: 1,
+                        size = 18.dp
                     )
                     Text(
                         text = when {
@@ -684,11 +682,9 @@ private fun StreakArenaRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.LocalFireDepartment,
-                        contentDescription = null,
-                        tint = semantic.medical,
-                        modifier = Modifier.size(15.dp)
+                    LivingStreakFlameIcon(
+                        streak = entry.currentStreak,
+                        size = 17.dp
                     )
                     Text(
                         text = "${entry.currentStreak}d",
@@ -700,32 +696,38 @@ private fun StreakArenaRow(
             }
 
             if (!isMe) {
-                CheerBurstBounce(triggerKey = cheerTrigger) {
-                    LiquidGlassButton(
-                        onClick = {
-                            if (!alreadyCheeredToday) {
-                                cheerTrigger++
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onCheer()
-                            }
-                        },
-                        enabled = !alreadyCheeredToday,
-                        tint = if (alreadyCheeredToday) semantic.present else semantic.medical,
-                        contentColor = if (alreadyCheeredToday) semantic.present else semantic.onMedicalContainer,
-                        minHeight = 40.dp,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("cheer_classmate_btn_${entry.userId}")
-                    ) {
-                        Icon(
-                            imageVector = if (alreadyCheeredToday) Icons.Rounded.CheckCircle else Icons.Rounded.ThumbUp,
-                            contentDescription = if (alreadyCheeredToday) "Cheered" else "Cheer classmate",
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = if (alreadyCheeredToday) "Cheered" else "Cheer",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                Box(contentAlignment = Alignment.Center) {
+                    CheerSparkBurstOverlay(
+                        triggerKey = cheerTrigger,
+                        accentColor = semantic.medical
+                    )
+                    CheerBurstBounce(triggerKey = cheerTrigger) {
+                        LiquidGlassButton(
+                            onClick = {
+                                if (!alreadyCheeredToday) {
+                                    cheerTrigger++
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onCheer()
+                                }
+                            },
+                            enabled = !alreadyCheeredToday,
+                            tint = if (alreadyCheeredToday) semantic.present else semantic.medical,
+                            contentColor = if (alreadyCheeredToday) semantic.present else semantic.onMedicalContainer,
+                            minHeight = 40.dp,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("cheer_classmate_btn_${entry.userId}")
+                        ) {
+                            Icon(
+                                imageVector = if (alreadyCheeredToday) Icons.Rounded.CheckCircle else Icons.Rounded.ThumbUp,
+                                contentDescription = if (alreadyCheeredToday) "Cheered" else "Cheer classmate",
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = if (alreadyCheeredToday) "Cheered" else "Cheer",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

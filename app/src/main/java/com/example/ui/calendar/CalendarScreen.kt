@@ -806,6 +806,26 @@ fun CalendarScreen(
                                                 else -> MaterialTheme.colorScheme.onSurface
                                             }
 
+                                            val prevLockedInRow = isLocked && col > 0 && dayNum > 1 && run {
+                                                val prevKey = DateUtils.formatDateKey(gridYear, gridMonth, dayNum - 1)
+                                                (col - 1) < 5 && !DateUtils.isWeekend(prevKey) && !state.isBeforeSchoolStart(prevKey) && state.isDateLocked(prevKey)
+                                            }
+                                            val nextLockedInRow = isLocked && col < 4 && dayNum < daysCount && run {
+                                                val nextKey = DateUtils.formatDateKey(gridYear, gridMonth, dayNum + 1)
+                                                (col + 1) < 5 && !DateUtils.isWeekend(nextKey) && !state.isBeforeSchoolStart(nextKey) && state.isDateLocked(nextKey)
+                                            }
+                                            val cellShape = if (isLocked && !isBulkSelected && !isSlHoliday && !isSchoolOff) {
+                                                RoundedCornerShape(
+                                                    topStart = if (prevLockedInRow) 4.dp else 12.dp,
+                                                    bottomStart = if (prevLockedInRow) 4.dp else 12.dp,
+                                                    topEnd = if (nextLockedInRow) 4.dp else 12.dp,
+                                                    bottomEnd = if (nextLockedInRow) 4.dp else 12.dp
+                                                )
+                                            } else {
+                                                RoundedCornerShape(12.dp)
+                                            }
+                                            val lockedRibbonBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.28f)
+
                                             Box(
                                                 contentAlignment = Alignment.Center,
                                                 modifier = Modifier
@@ -815,9 +835,25 @@ fun CalendarScreen(
                                                         scaleX = dropletStretchX
                                                         scaleY = dropletSquashY
                                                     }
-                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .clip(cellShape)
                                                     .background(cellBg)
                                                     .drawBehind {
+                                                        if (isLocked && !isBulkSelected && !isSlHoliday && !isSchoolOff) {
+                                                            // Sleek top & bottom translucent ribbon highlights linking locked days
+                                                            val lineStroke = 1.2.dp.toPx()
+                                                            drawLine(
+                                                                color = lockedRibbonBorderColor,
+                                                                start = androidx.compose.ui.geometry.Offset(0f, lineStroke / 2f),
+                                                                end = androidx.compose.ui.geometry.Offset(size.width, lineStroke / 2f),
+                                                                strokeWidth = lineStroke
+                                                            )
+                                                            drawLine(
+                                                                color = lockedRibbonBorderColor,
+                                                                start = androidx.compose.ui.geometry.Offset(0f, size.height - lineStroke / 2f),
+                                                                end = androidx.compose.ui.geometry.Offset(size.width, size.height - lineStroke / 2f),
+                                                                strokeWidth = lineStroke
+                                                            )
+                                                        }
                                                         if (hasLiquidDroplet) {
                                                             val cr = 12.dp.toPx()
                                                             drawThinFilmLiquidBubble(
@@ -836,12 +872,12 @@ fun CalendarScreen(
                                                             isBulkSelected -> Modifier.border(
                                                                 width = 1.5.dp,
                                                                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                                                                shape = RoundedCornerShape(12.dp)
+                                                                shape = cellShape
                                                             )
                                                             isToday -> Modifier.border(
                                                                 width = 1.5.dp,
                                                                 color = (if (isWeekend) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary).copy(alpha = 0.65f),
-                                                                shape = RoundedCornerShape(12.dp)
+                                                                shape = cellShape
                                                             )
                                                             else -> Modifier
                                                         }

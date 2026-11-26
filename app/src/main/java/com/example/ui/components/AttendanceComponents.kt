@@ -99,8 +99,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
@@ -175,9 +177,13 @@ fun AnimatedEligibilityGauge(
     }
 
     val mutedNeutralColor = MaterialTheme.colorScheme.outlineVariant
+    val isTightEdge = stats.eligible &&
+        stats.totalCountedDays >= 5 &&
+        stats.percentage < (stats.thresholdPercent + 3.0)
     val accentColor by animateColorAsState(
         targetValue = when {
             privacyBlurred -> mutedNeutralColor
+            isTightEdge -> semantic.medical
             stats.eligible -> semantic.present
             else -> semantic.absent
         },
@@ -194,13 +200,23 @@ fun AnimatedEligibilityGauge(
         ),
         label = "gauge_halo_alpha"
     )
+    val wavePhaseState = pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "gauge_liquid_wave_phase"
+    )
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
     val thresholdColor = MaterialTheme.colorScheme.secondary
+    val isDarkGauge = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(198.dp)
+            .size(204.dp)
             .graphicsLayer {
                 scaleX = toggleSquish.value
                 scaleY = toggleSquish.value
@@ -222,12 +238,13 @@ fun AnimatedEligibilityGauge(
             .testTag("eligibility_gauge")
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val strokePx = 16.dp.toPx()
+            val strokePx = 15.dp.toPx()
             val inset = strokePx / 2f + 6.dp.toPx()
             val arcSize = Size(size.width - inset * 2f, size.height - inset * 2f)
             val topLeft = Offset(inset, inset)
             val startAngle = 140f
             val totalSweep = 260f
+            val centerPt = Offset(size.width / 2f, size.height / 2f)
 
             // Subtle breathing halo behind the active progress arc (suppressed while blurred)
             if (stats.totalCountedDays > 0 && !privacyBlurred) {
@@ -237,13 +254,108 @@ fun AnimatedEligibilityGauge(
                             accentColor.copy(alpha = haloAlpha),
                             Color.Transparent
                         ),
-                        center = Offset(size.width / 2f, size.height / 2f),
+                        center = centerPt,
                         radius = size.minDimension * 0.50f
                     ),
-                    center = Offset(size.width / 2f, size.height / 2f),
+                    center = centerPt,
                     radius = size.minDimension * 0.50f
                 )
             }
+
+            // Inner Living Liquid Glass Wave Orb (clipped inside the gauge ring)
+            val innerOrbRadius = (arcSize.width / 2f - strokePx * 0.86f).coerceAtLeast(16f)
+            val orbClipPath = Path().apply {
+                addOval(
+                    androidx.compose.ui.geometry.Rect(
+                        left = centerPt.x - innerOrbRadius,
+                        top = centerPt.y - innerOrbRadius,
+                        right = centerPt.x + innerOrbRadius,
+                        bottom = centerPt.y + innerOrbRadius
+                    )
+                )
+            }
+            clipPath(orbClipPath) {
+                // Soft inner glass sphere backing
+                drawCircle(
+                    color = if (isDarkGauge) Color.White.copy(alpha = 0.04f) else accentColor.copy(alpha = 0.05f),
+                    radius = innerOrbRadius,
+                    center = centerPt
+                )
+
+                val fillFraction = (animatedPercent / 100f).coerceIn(0.06f, 0.96f)
+                val orbTop = centerPt.y - innerOrbRadius
+                val orbBottom = centerPt.y + innerOrbRadius
+                val baseWaterY = orbBottom - (innerOrbRadius * 2f * fillFraction)
+                val wavePhase = wavePhaseState.value
+                val waveAmp = (innerOrbRadius * 0.085f).coerceIn(3f, 8f)
+                val steps = 28
+
+                // Back secondary liquid crest
+                val backWave = Path().apply {
+                    val leftX = centerPt.x - innerOrbRadius
+                    val spanX = innerOrbRadius * 2f
+                    moveTo(leftX, orbBottom)
+                    for (i in 0..steps) {
+                        val frac = i.toFloat() / steps
+                        val x = leftX + spanX * frac
+                        val y = baseWaterY + sin(frac * 2f * PI.toFloat() - wavePhase * 1.15f + 1.2f) * (waveAmp * 0.8f)
+                        lineTo(x, y)
+                    }
+                    lineTo(centerPt.x + innerOrbRadius, orbBottom)
+                    close()
+                }
+                drawPath(
+                    path = backWave,
+                    color = accentColor.copy(alpha = if (privacyBlurred) 0.08f else if (isDarkGauge) 0.14f else 0.11f)
+                )
+
+                // Front primary liquid crest with gentle translucent sheen
+                val frontWave = Path().apply {
+                    val leftX = centerPt.x - innerOrbRadius
+                    val spanX = innerOrbRadius * 2f
+                    moveTo(leftX, orbBottom)
+                    for (i in 0..steps) {
+                        val frac = i.toFloat() / steps
+                        val x = leftX + spanX * frac
+                        val y = baseWaterY + sin(frac * 2f * PI.toFloat() + wavePhase) * waveAmp
+                        lineTo(x, y)
+                    }
+                    lineTo(centerPt.x + innerOrbRadius, orbBottom)
+                    close()
+                }
+                drawPath(
+                    path = frontWave,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            accentColor.copy(alpha = if (privacyBlurred) 0.12f else if (isDarkGauge) 0.28f else 0.20f),
+                            accentColor.copy(alpha = if (privacyBlurred) 0.05f else if (isDarkGauge) 0.11f else 0.08f)
+                        ),
+                        startY = baseWaterY - waveAmp,
+                        endY = orbBottom
+                    )
+                )
+
+                // Top specular crystal glass highlight crescent
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = if (isDarkGauge) 0.16f else 0.42f),
+                            Color.Transparent
+                        ),
+                        center = Offset(centerPt.x - innerOrbRadius * 0.25f, centerPt.y - innerOrbRadius * 0.55f),
+                        radius = innerOrbRadius * 0.85f
+                    ),
+                    radius = innerOrbRadius,
+                    center = centerPt
+                )
+            }
+            // Delicate hairline rim around the liquid orb
+            drawCircle(
+                color = accentColor.copy(alpha = if (privacyBlurred) 0.12f else 0.22f),
+                radius = innerOrbRadius,
+                center = centerPt,
+                style = Stroke(width = 1.dp.toPx())
+            )
 
             // Background track
             drawArc(
@@ -308,12 +420,22 @@ fun AnimatedEligibilityGauge(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = if (animatedBlur > 0.dp) Modifier.blur(animatedBlur) else Modifier
         ) {
-            Text(
-                text = if (privacyBlurred) "••.•%" else String.format(Locale.US, "%.1f%%", animatedPercent),
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.testTag("gauge_percent_text")
-            )
+            if (privacyBlurred) {
+                Text(
+                    text = "••.•%",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.testTag("gauge_percent_text")
+                )
+            } else {
+                AnimatedOdometerText(
+                    text = String.format(Locale.US, "%.1f%%", targetPercent),
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.testTag("gauge_percent_text")
+                )
+            }
             Spacer(modifier = Modifier.height(2.dp))
             AnimatedContent(
                 targetState = privacyBlurred to stats.eligible,
@@ -722,17 +844,6 @@ fun StreakAndWeeklyCard(
                     )
                 }
 
-                val flameTransition = rememberInfiniteTransition(label = "streak_flame_pulse")
-                val flameScale by flameTransition.animateFloat(
-                    initialValue = 1.0f,
-                    targetValue = if (streak > 0) 1.18f else 1.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "flame_scale"
-                )
-
                 Surface(
                     color = if (streak > 0) semantic.poyaContainer else MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(14.dp)
@@ -741,22 +852,16 @@ fun StreakAndWeeklyCard(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.LocalFireDepartment,
-                            contentDescription = "Attendance streak",
-                            tint = if (streak > 0) semantic.poya else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(18.dp)
-                                .graphicsLayer {
-                                    scaleX = flameScale
-                                    scaleY = flameScale
-                                }
+                        LivingStreakFlameIcon(
+                            streak = streak,
+                            size = 22.dp
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         RollingCounterText(
                             count = streak,
                             suffix = "d",
                             style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
                             color = if (streak > 0) semantic.onPoyaContainer else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
