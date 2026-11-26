@@ -199,9 +199,42 @@ data class NextDayPollSummary(
     val goingPercent: Double = 0.0,
     val notGoingPercent: Double = 0.0,
     val myVoteGoing: Boolean? = null,
+    val myVoteReasonTag: String? = null,
     val myClassGoingCount: Int = 0,
     val myClassTotalCount: Int = 0,
-    val myClassGoingPercent: Double? = null
+    val myClassGoingPercent: Double? = null,
+    val topClassReasons: List<Pair<NextDayVoteReason, Int>> = emptyList(),
+    val topSchoolReasons: List<Pair<NextDayVoteReason, Int>> = emptyList()
+)
+
+data class ClassPodiumEntry(
+    val className: String,
+    val grade: String,
+    val alStream: String,
+    val averagePercent: Double,
+    val studentCount: Int,
+    val isMyClass: Boolean
+)
+
+data class ClassWeeklyChallenge(
+    val title: String,
+    val subtitle: String,
+    val currentPercent: Double,
+    val targetPercent: Double = 85.0,
+    val activeParticipants: Int,
+    val isCompleted: Boolean
+)
+
+data class ClassPulseSummary(
+    val myClassName: String = "",
+    val myGrade: String = "",
+    val currentWeekKey: String = "",
+    val weeklyChallenge: ClassWeeklyChallenge? = null,
+    val gradeClassPodium: List<ClassPodiumEntry> = emptyList(),
+    val myClassRank: Int? = null,
+    val streakLeaderboard: List<ClassStreakEntry> = emptyList(),
+    val myStreakRank: Int? = null,
+    val myOwnEntry: ClassStreakEntry? = null
 )
 
 object AttendanceCalculator {
@@ -1936,7 +1969,9 @@ object AttendanceCalculator {
         val notGoing = (total - going).coerceAtLeast(0)
         val goingPct = if (total > 0) (going * 100.0) / total else 0.0
         val notGoingPct = if (total > 0) 100.0 - goingPct else 0.0
-        val myVote = scopedVotes.firstOrNull { it.userId == currentUserId }?.going
+        val myVoteDoc = scopedVotes.firstOrNull { it.userId == currentUserId }
+        val myVote = myVoteDoc?.going
+        val myReasonTag = myVoteDoc?.reasonEnum?.raw
 
         val cleanClass = myClassName?.trim()?.takeIf { it.isNotEmpty() }
         val classVotes = if (cleanClass != null) {
@@ -1948,6 +1983,24 @@ object AttendanceCalculator {
         val classGoing = classVotes.count { it.going }
         val classPct = if (classTotal > 0) (classGoing * 100.0) / classTotal else null
 
+        val topClassReasons = classVotes
+            .mapNotNull { it.reasonEnum }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(3)
+            .map { it.key to it.value }
+
+        val topSchoolReasons = scopedVotes
+            .mapNotNull { it.reasonEnum }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(3)
+            .map { it.key to it.value }
+
         return NextDayPollSummary(
             targetDateKey = targetDateKey,
             totalVotes = total,
@@ -1956,9 +2009,127 @@ object AttendanceCalculator {
             goingPercent = goingPct,
             notGoingPercent = notGoingPct,
             myVoteGoing = myVote,
+            myVoteReasonTag = myReasonTag,
             myClassGoingCount = classGoing,
             myClassTotalCount = classTotal,
-            myClassGoingPercent = classPct
+            myClassGoingPercent = classPct,
+            topClassReasons = topClassReasons,
+            topSchoolReasons = topSchoolReasons
+        )
+    }
+
+    /**
+     * Computes privacy-safe Class Pulse metrics:
+     * - Friendly Grade Class Podium from anonymous [StudentTrendSummary] records
+     * - Weekly Squad Goal progress for the student's own class
+     * - Opt-in Class Streak Arena leaderboard
+     */
+    fun calculateClassPulseSummary(
+        profile: UserProfile?,
+        currentUserId: String,
+        trendSummaries: List<StudentTrendSummary>,
+        streakEntries: List<ClassStreakEntry>,
+        ownWeeklySummary: List<WeekDaySummary>,
+        todayKey: String = DateUtils.todayKey()
+    ): ClassPulseSummary {
+        val myClass = profile?.className?.trim().orEmpty()
+        val myGrade = profile?.grade?.trim().orEmpty()
+        val weekKey = DateUtils.isoWeekKey(todayKey)
+
+        // 1) Friendly Grade-Level Class Podium (from zero-PII student_trend_summaries)
+        val scopedSummaries = trendSummaries.filter { summary ->
+            val cls = summary.className?.trim().orEmpty()
+            cls.isNotEmpty() &&
+                summary.totalCounted > 0 &&
+                (myGrade.isBlank() || summary.grade?.trim().equals(myGrade, ignoreCase = true))
+        }
+        val podium = scopedSummaries
+            .groupBy { it.className!!.trim().uppercase() }
+            .mapNotNull { (_, group) ->
+                val sample = group.first()
+                val totalAtt = group.sumOf { it.totalAttended }
+                val totalCnt = group.sumOf { it.totalCounted }
+                if (totalCnt <= 0) return@mapNotNull null
+                val pct = (totalAtt * 100.0) / totalCnt
+                ClassPodiumEntry(
+                    className = sample.className!!.trim(),
+                    grade = sample.grade?.trim().orEmpty(),
+                    alStream = sample.alStream?.trim().orEmpty(),
+                    averagePercent = pct,
+                    studentCount = group.size,
+                    isMyClass = myClass.isNotBlank() && sample.className.trim().equals(myClass, ignoreCase = true)
+                )
+            }
+            .sortedWith(compareByDescending<ClassPodiumEntry> { it.averagePercent }.thenByDescending { it.studentCount })
+            .take(6)
+
+        val myClassRank = podium.indexOfFirst { it.isMyClass }.takeIf { it >= 0 }?.plus(1)
+
+        // 2) Opt-In Class Streak Arena (strictly classmates who opted in)
+        val myOwnEntry = streakEntries.firstOrNull { it.userId == currentUserId }
+        val classStreaks = streakEntries
+            .filter { entry ->
+                entry.optedIn &&
+                    myClass.isNotBlank() &&
+                    entry.className.trim().equals(myClass, ignoreCase = true)
+            }
+            .sortedWith(
+                compareByDescending<ClassStreakEntry> { it.currentStreak }
+                    .thenByDescending { it.bestStreak }
+                    .thenByDescending { it.cheerCount }
+            )
+            .take(20)
+        val myStreakRank = classStreaks.indexOfFirst { it.userId == currentUserId }.takeIf { it >= 0 }?.plus(1)
+
+        // 3) Weekly Squad Challenge (85% class attendance target this week)
+        val classWeekEntries = streakEntries.filter { entry ->
+            myClass.isNotBlank() &&
+                entry.className.trim().equals(myClass, ignoreCase = true) &&
+                entry.weekKey == weekKey &&
+                entry.weeklyTotal > 0
+        }
+        val ownWeekAtt = ownWeeklySummary.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+        val ownWeekTot = ownWeeklySummary.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.ABSENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+
+        val challenge = if (myClass.isNotBlank()) {
+            val participants = classWeekEntries.size.coerceAtLeast(if (ownWeekTot > 0) 1 else 0)
+            val weekAttSum = if (classWeekEntries.isNotEmpty()) {
+                classWeekEntries.sumOf { it.weeklyAttended } + if (classWeekEntries.none { it.userId == currentUserId }) ownWeekAtt else 0
+            } else {
+                ownWeekAtt
+            }
+            val weekTotSum = if (classWeekEntries.isNotEmpty()) {
+                classWeekEntries.sumOf { it.weeklyTotal } + if (classWeekEntries.none { it.userId == currentUserId }) ownWeekTot else 0
+            } else {
+                ownWeekTot
+            }
+            val pct = if (weekTotSum > 0) (weekAttSum * 100.0) / weekTotSum else 0.0
+            ClassWeeklyChallenge(
+                title = "$myClass Weekly Squad Goal",
+                subtitle = if (pct >= 85.0 && weekTotSum > 0) {
+                    "Goal crushed! $myClass is above 85% this week"
+                } else {
+                    "Hit 85%+ combined class attendance this week"
+                },
+                currentPercent = pct,
+                targetPercent = 85.0,
+                activeParticipants = participants,
+                isCompleted = pct >= 85.0 && weekTotSum > 0
+            )
+        } else {
+            null
+        }
+
+        return ClassPulseSummary(
+            myClassName = myClass,
+            myGrade = myGrade,
+            currentWeekKey = weekKey,
+            weeklyChallenge = challenge,
+            gradeClassPodium = podium,
+            myClassRank = myClassRank,
+            streakLeaderboard = classStreaks,
+            myStreakRank = myStreakRank,
+            myOwnEntry = myOwnEntry
         )
     }
 

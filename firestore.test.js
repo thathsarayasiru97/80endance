@@ -753,3 +753,149 @@ test("Notice tip category & app_settings schoolStartDate: admin allowed with val
     })
   );
 });
+
+test("v4.0 rules: directApkDownloadUrl on app_settings, reasonTag on next_day_votes, and class_streak_entries +1 peer cheer", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+  const studentB = testEnv.authenticatedContext(STUDENT_B_UID, {
+    email: "b@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+  const later = new Date(Date.now() - 500);
+
+  // 1) app_settings directApkDownloadUrl & directApkVersion (admin only + HTTPS required)
+  await assertSucceeds(
+    adminDb.collection("app_settings").doc("global").set({
+      defaultEligibilityPercent: 80,
+      defaultReminderHour: 14,
+      defaultReminderMinute: 0,
+      currentAcademicYear: 2026,
+      al2026ExamDate: "2026-11-25",
+      al2027ExamDate: "2027-08-09",
+      al2028ExamDate: "2028-08-07",
+      nextDayPollEnabled: true,
+      directApkDownloadUrl: "https://github.com/thathsarayasiru97/80endence/releases/download/v4.0/80endance-v4.0.apk",
+      directApkVersion: "4.0",
+      updatedAt: now,
+    })
+  );
+  // Reject non-HTTPS APK URL
+  await assertFails(
+    adminDb.collection("app_settings").doc("global").update({
+      directApkDownloadUrl: "http://insecure.example.com/app.apk",
+      updatedAt: later,
+    })
+  );
+  // Student cannot update directApkDownloadUrl
+  await assertFails(
+    studentA.collection("app_settings").doc("global").update({
+      directApkDownloadUrl: "https://evil.example.com/app.apk",
+      updatedAt: later,
+    })
+  );
+
+  // 2) next_day_votes optional bounded reasonTag
+  const targetDate = "2026-11-26";
+  const voteIdA = `${targetDate}_${STUDENT_A_UID}`;
+  await assertSucceeds(
+    studentA.collection("next_day_votes").doc(voteIdA).set({
+      userId: STUDENT_A_UID,
+      targetDateKey: targetDate,
+      going: true,
+      grade: "Grade 13",
+      alStream: "Physical Science",
+      className: "13M2",
+      reasonTag: "practical_lab",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  // Reject arbitrary/unlisted reasonTag
+  await assertFails(
+    studentA.collection("next_day_votes").doc(voteIdA).update({
+      reasonTag: "my_free_text_pii",
+      updatedAt: later,
+    })
+  );
+
+  // 3) class_streak_entries zero-PII CRUD & peer +1 cheer
+  await assertFails(unauthDb.collection("class_streak_entries").get());
+  const validStreakA = {
+    userId: STUDENT_A_UID,
+    displayAlias: "Kavi",
+    grade: "Grade 13",
+    alStream: "Physical Science",
+    className: "13M2",
+    currentStreak: 6,
+    bestStreak: 12,
+    weeklyAttended: 4,
+    weeklyTotal: 5,
+    weekKey: "2026-W48",
+    cheerCount: 0,
+    optedIn: true,
+    updatedAt: now,
+  };
+  // Owner cannot self-inflate cheerCount on create or inject email PII
+  await assertFails(
+    studentA.collection("class_streak_entries").doc(STUDENT_A_UID).set({ ...validStreakA, cheerCount: 5 })
+  );
+  await assertFails(
+    studentA.collection("class_streak_entries").doc(STUDENT_A_UID).set({ ...validStreakA, email: "a@royal.lk" })
+  );
+  // Valid owner create & read
+  await assertSucceeds(
+    studentA.collection("class_streak_entries").doc(STUDENT_A_UID).set(validStreakA)
+  );
+  await assertSucceeds(studentB.collection("class_streak_entries").get());
+
+  // Owner updates streak (preserving cheerCount)
+  await assertSucceeds(
+    studentA.collection("class_streak_entries").doc(STUDENT_A_UID).update({
+      currentStreak: 7,
+      weeklyAttended: 5,
+      updatedAt: later,
+    })
+  );
+  // Owner cannot cheer themselves
+  await assertFails(
+    studentA.collection("class_streak_entries").doc(STUDENT_A_UID).update({
+      cheerCount: 1,
+      updatedAt: later,
+    })
+  );
+
+  // Peer (studentB) can send strictly +1 cheer
+  await assertSucceeds(
+    studentB.collection("class_streak_entries").doc(STUDENT_A_UID).update({
+      cheerCount: 1,
+      updatedAt: later,
+    })
+  );
+  // Peer cannot jump cheers by +5 or tamper with displayAlias/currentStreak
+  await assertFails(
+    studentB.collection("class_streak_entries").doc(STUDENT_A_UID).update({
+      cheerCount: 6,
+      updatedAt: later,
+    })
+  );
+  await assertFails(
+    studentB.collection("class_streak_entries").doc(STUDENT_A_UID).update({
+      cheerCount: 2,
+      displayAlias: "Hacked",
+      updatedAt: later,
+    })
+  );
+  // Peer cannot delete owner's streak entry; owner can delete
+  await assertFails(studentB.collection("class_streak_entries").doc(STUDENT_A_UID).delete());
+  await assertSucceeds(studentA.collection("class_streak_entries").doc(STUDENT_A_UID).delete());
+});
+

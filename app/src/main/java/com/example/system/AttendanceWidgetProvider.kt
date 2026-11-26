@@ -20,6 +20,7 @@ import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStatus
 import com.example.data.DateUtils
 import com.example.data.WeekDaySummary
+import com.example.data.WidgetThemeStyle
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,30 @@ object AttendanceWidgetStore {
     private const val KEY_UNDO_PREV_NOTE = "ext_undo_prev_note"
     private const val KEY_UNDO_SOURCE = "ext_undo_source"
     private const val KEY_UNDO_TS = "ext_undo_ts"
+    private const val KEY_WIDGET_THEME_STYLE = "widget_theme_style"
+    private const val KEY_WIDGET_ACCENT = "widget_accent_palette"
+    private const val KEY_WIDGET_THEME_MODE = "widget_theme_mode"
+    private const val KEY_POLL_ENABLED = "widget_poll_enabled"
+    private const val KEY_POLL_OPEN = "widget_poll_open"
+    private const val KEY_POLL_TARGET_DATE = "widget_poll_target_date"
+    private const val KEY_POLL_MY_VOTE = "widget_poll_my_vote" // -1 none, 1 going, 0 skip
+    private const val KEY_POLL_CLASS_PCT = "widget_poll_class_pct"
+    private const val KEY_POLL_TOTAL_VOTES = "widget_poll_total_votes"
+
+    data class WidgetThemePrefs(
+        val style: WidgetThemeStyle = WidgetThemeStyle.AUTO_SYNC,
+        val accentPaletteRaw: String = "royal_blue",
+        val themeModeRaw: String = "system"
+    )
+
+    data class WidgetPollState(
+        val pollEnabled: Boolean = false,
+        val pollOpen: Boolean = false,
+        val targetDateKey: String = "",
+        val myVoteGoing: Boolean? = null,
+        val classGoingPercent: Int = 0,
+        val totalVotes: Int = 0
+    )
 
     data class PendingExternalUndo(
         val dateKey: String,
@@ -92,6 +117,98 @@ object AttendanceWidgetStore {
         val source: String,
         val timestampMillis: Long
     )
+
+    fun updateThemePrefs(
+        context: Context,
+        widgetThemeStyleRaw: String,
+        accentPaletteRaw: String,
+        themeModeRaw: String
+    ) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_WIDGET_THEME_STYLE, widgetThemeStyleRaw)
+            .putString(KEY_WIDGET_ACCENT, accentPaletteRaw)
+            .putString(KEY_WIDGET_THEME_MODE, themeModeRaw)
+            .apply()
+        AttendanceWidgetProvider.refreshAll(context.applicationContext)
+        AttendancePillWidgetProvider.refreshAll(context.applicationContext)
+    }
+
+    fun loadThemePrefs(context: Context): WidgetThemePrefs {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return WidgetThemePrefs(
+            style = WidgetThemeStyle.fromRaw(prefs.getString(KEY_WIDGET_THEME_STYLE, null)),
+            accentPaletteRaw = prefs.getString(KEY_WIDGET_ACCENT, "royal_blue") ?: "royal_blue",
+            themeModeRaw = prefs.getString(KEY_WIDGET_THEME_MODE, "system") ?: "system"
+        )
+    }
+
+    fun updatePollState(
+        context: Context,
+        pollEnabled: Boolean,
+        pollOpen: Boolean,
+        targetDateKey: String,
+        myVoteGoing: Boolean?,
+        classGoingPercent: Int,
+        totalVotes: Int
+    ) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val voteCode = when (myVoteGoing) {
+            true -> 1
+            false -> 0
+            null -> -1
+        }
+        prefs.edit()
+            .putBoolean(KEY_POLL_ENABLED, pollEnabled)
+            .putBoolean(KEY_POLL_OPEN, pollOpen)
+            .putString(KEY_POLL_TARGET_DATE, targetDateKey)
+            .putInt(KEY_POLL_MY_VOTE, voteCode)
+            .putInt(KEY_POLL_CLASS_PCT, classGoingPercent.coerceIn(0, 100))
+            .putInt(KEY_POLL_TOTAL_VOTES, totalVotes.coerceAtLeast(0))
+            .apply()
+        AttendanceWidgetProvider.refreshAll(context.applicationContext)
+    }
+
+    fun loadPollState(context: Context): WidgetPollState {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val voteCode = prefs.getInt(KEY_POLL_MY_VOTE, -1)
+        return WidgetPollState(
+            pollEnabled = prefs.getBoolean(KEY_POLL_ENABLED, false),
+            pollOpen = prefs.getBoolean(KEY_POLL_OPEN, false),
+            targetDateKey = prefs.getString(KEY_POLL_TARGET_DATE, "") ?: "",
+            myVoteGoing = when (voteCode) {
+                1 -> true
+                0 -> false
+                else -> null
+            },
+            classGoingPercent = prefs.getInt(KEY_POLL_CLASS_PCT, 0),
+            totalVotes = prefs.getInt(KEY_POLL_TOTAL_VOTES, 0)
+        )
+    }
+
+    /**
+     * Non-destructive peek for a recent (< 20s old) external check-in so the widget can render
+     * a live 1-tap Undo strip directly on the home screen.
+     */
+    fun peekRecentExternalUndo(
+        context: Context,
+        nowMillis: Long = System.currentTimeMillis(),
+        maxAgeMillis: Long = 20_000L
+    ): PendingExternalUndo? {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val dateKey = prefs.getString(KEY_UNDO_DATE, null) ?: return null
+        val label = prefs.getString(KEY_UNDO_LABEL, null) ?: return null
+        val ts = prefs.getLong(KEY_UNDO_TS, 0L)
+        if (ts <= 0L || (nowMillis - ts) > maxAgeMillis) return null
+        return PendingExternalUndo(
+            dateKey = dateKey,
+            statusLabel = label,
+            previousStatusRaw = prefs.getString(KEY_UNDO_PREV_STATUS, null),
+            previousNote = prefs.getString(KEY_UNDO_PREV_NOTE, null),
+            source = prefs.getString(KEY_UNDO_SOURCE, "widget") ?: "widget",
+            timestampMillis = ts
+        )
+    }
 
     fun savePendingExternalUndo(
         context: Context,
@@ -421,6 +538,7 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             val todayIsWeekend = DateUtils.isWeekend(snap.todayDateKey)
             val openPending = buildOpenAppPendingIntent(context)
             views.setOnClickPendingIntent(R.id.widget_root, openPending)
+            val isLightGlass = applyWidgetThemeBackground(context, views)
 
             views.setTextViewText(R.id.widget_term_label, "80endance")
             views.setTextViewText(R.id.widget_streak_badge, "${snap.streak}d")
@@ -430,8 +548,16 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             )
             views.setTextColor(
                 R.id.widget_percent_text,
-                if (snap.eligible) Color.parseColor("#34D399") else Color.parseColor("#FB7185")
+                if (snap.eligible) {
+                    if (isLightGlass) Color.parseColor("#0F766E") else Color.parseColor("#34D399")
+                } else {
+                    if (isLightGlass) Color.parseColor("#DC2626") else Color.parseColor("#FB7185")
+                }
             )
+            if (isLightGlass) {
+                views.setTextColor(R.id.widget_term_label, Color.parseColor("#1E293B"))
+                views.setTextColor(R.id.widget_forecast_sub, Color.parseColor("#334155"))
+            }
             val sub = when {
                 !snap.signedIn -> "Tap to sign in"
                 snap.totalCountedDays == 0 -> "Ready to track"
@@ -548,6 +674,29 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             return views
         }
 
+        private fun applyWidgetThemeBackground(context: Context, views: RemoteViews): Boolean {
+            val themePrefs = AttendanceWidgetStore.loadThemePrefs(context)
+            val useLightGlass = when (themePrefs.style) {
+                WidgetThemeStyle.FROSTED_LIGHT -> true
+                WidgetThemeStyle.SMOKED_DARK, WidgetThemeStyle.ACCENT_TINT -> false
+                WidgetThemeStyle.AUTO_SYNC -> themePrefs.themeModeRaw == "light"
+            }
+            val bgRes = when (themePrefs.style) {
+                WidgetThemeStyle.FROSTED_LIGHT -> R.drawable.widget_bg_glass_light
+                WidgetThemeStyle.SMOKED_DARK -> R.drawable.widget_bg_glass_dark
+                WidgetThemeStyle.ACCENT_TINT -> R.drawable.widget_bg_glass_accent
+                WidgetThemeStyle.AUTO_SYNC -> if (useLightGlass) {
+                    R.drawable.widget_bg_glass_light
+                } else if (themePrefs.themeModeRaw == "oled_black") {
+                    R.drawable.widget_bg_glass_dark
+                } else {
+                    R.drawable.widget_glass_bg
+                }
+            }
+            views.setInt(R.id.widget_root, "setBackgroundResource", bgRes)
+            return useLightGlass
+        }
+
         private fun bindSharedHeaderAndStats(
             context: Context,
             views: RemoteViews,
@@ -557,6 +706,7 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             val openPending = buildOpenAppPendingIntent(context)
             views.setOnClickPendingIntent(R.id.widget_root, openPending)
             views.setOnClickPendingIntent(R.id.widget_refresh_btn, buildRefreshPendingIntent(context))
+            val isLightGlass = applyWidgetThemeBackground(context, views)
 
             views.setTextViewText(R.id.widget_term_label, "80endance • ${snap.termName}")
             views.setTextViewText(R.id.widget_streak_badge, "${snap.streak}d streak")
@@ -575,8 +725,17 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
             )
             views.setTextColor(
                 R.id.widget_percent_text,
-                if (snap.eligible) Color.parseColor("#34D399") else Color.parseColor("#FB7185")
+                if (snap.eligible) {
+                    if (isLightGlass) Color.parseColor("#0F766E") else Color.parseColor("#34D399")
+                } else {
+                    if (isLightGlass) Color.parseColor("#DC2626") else Color.parseColor("#FB7185")
+                }
             )
+            if (isLightGlass) {
+                views.setTextColor(R.id.widget_term_label, Color.parseColor("#1E293B"))
+                views.setTextColor(R.id.widget_status_headline, Color.parseColor("#0F172A"))
+                views.setTextColor(R.id.widget_forecast_sub, Color.parseColor("#334155"))
+            }
 
             val headline = when {
                 !snap.signedIn -> "Open 80endance"
@@ -602,6 +761,9 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
                     R.id.widget_counted_days,
                     "${snap.effectiveAttended} of ${snap.totalCountedDays} counted school days"
                 )
+                if (isLightGlass) {
+                    views.setTextColor(R.id.widget_counted_days, Color.parseColor("#475569"))
+                }
             }
         }
 
@@ -612,30 +774,103 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
         ) {
             val todayIsWeekend = DateUtils.isWeekend(snap.todayDateKey)
             val openPending = buildOpenAppPendingIntent(context)
+            val recentUndo = AttendanceWidgetStore.peekRecentExternalUndo(context)
+            val pollState = AttendanceWidgetStore.loadPollState(context)
+            val (hourNow, _) = DateUtils.currentHourMinute()
+            val isEveningPollHour = hourNow >= 20 || hourNow < 5
+            val showEveningPoll = snap.signedIn &&
+                pollState.pollEnabled &&
+                pollState.pollOpen &&
+                isEveningPollHour &&
+                pollState.targetDateKey.isNotBlank() &&
+                (recentUndo == null) &&
+                (!snap.todayStatusLabel.isNullOrBlank() || todayIsWeekend || !snap.todayNoSchoolTitle.isNullOrBlank())
+
+            views.setViewVisibility(R.id.widget_actions_row, View.GONE)
+            views.setViewVisibility(R.id.widget_undo_row, View.GONE)
+            views.setViewVisibility(R.id.widget_poll_row, View.GONE)
+            views.setViewVisibility(R.id.widget_done_banner, View.GONE)
+
             when {
                 !snap.signedIn -> {
-                    views.setViewVisibility(R.id.widget_actions_row, View.GONE)
                     views.setViewVisibility(R.id.widget_done_banner, View.VISIBLE)
                     views.setTextViewText(R.id.widget_done_banner, "Tap to sign in & track")
                     views.setOnClickPendingIntent(R.id.widget_done_banner, openPending)
                 }
 
+                recentUndo != null && recentUndo.dateKey == snap.todayDateKey && !snap.todayStatusLabel.isNullOrBlank() -> {
+                    views.setViewVisibility(R.id.widget_undo_row, View.VISIBLE)
+                    views.setTextViewText(R.id.widget_undo_label, "Marked ${recentUndo.statusLabel} ✓")
+                    val undoIntent = Intent(context, DailyReminderReceiver::class.java).apply {
+                        action = ReminderScheduler.ACTION_QUICK_UNDO
+                        putExtra(ReminderScheduler.EXTRA_TARGET_DATE, recentUndo.dateKey)
+                        if (!recentUndo.previousStatusRaw.isNullOrBlank()) {
+                            putExtra(ReminderScheduler.EXTRA_PREVIOUS_STATUS, recentUndo.previousStatusRaw)
+                        }
+                        if (!recentUndo.previousNote.isNullOrBlank()) {
+                            putExtra(ReminderScheduler.EXTRA_PREVIOUS_NOTE, recentUndo.previousNote)
+                        }
+                    }
+                    val undoPending = PendingIntent.getBroadcast(
+                        context,
+                        8104,
+                        undoIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    views.setOnClickPendingIntent(R.id.widget_btn_undo, undoPending)
+                }
+
+                showEveningPoll -> {
+                    views.setViewVisibility(R.id.widget_poll_row, View.VISIBLE)
+                    val label = when {
+                        pollState.myVoteGoing == true && pollState.totalVotes > 0 ->
+                            "Coming ✓ • ${pollState.classGoingPercent}%"
+                        pollState.myVoteGoing == false && pollState.totalVotes > 0 ->
+                            "Skipping • ${pollState.classGoingPercent}%"
+                        pollState.totalVotes > 0 ->
+                            "Tomorrow? ${pollState.classGoingPercent}% yes"
+                        else -> "Tomorrow? Poll"
+                    }
+                    views.setTextViewText(R.id.widget_poll_label, label)
+
+                    val yesIntent = Intent(context, DailyReminderReceiver::class.java).apply {
+                        action = ReminderScheduler.ACTION_POLL_VOTE_YES
+                        putExtra(ReminderScheduler.EXTRA_POLL_TARGET_DATE, pollState.targetDateKey)
+                    }
+                    val yesPending = PendingIntent.getBroadcast(
+                        context,
+                        8105,
+                        yesIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    views.setOnClickPendingIntent(R.id.widget_btn_poll_yes, yesPending)
+
+                    val noIntent = Intent(context, DailyReminderReceiver::class.java).apply {
+                        action = ReminderScheduler.ACTION_POLL_VOTE_NO
+                        putExtra(ReminderScheduler.EXTRA_POLL_TARGET_DATE, pollState.targetDateKey)
+                    }
+                    val noPending = PendingIntent.getBroadcast(
+                        context,
+                        8106,
+                        noIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    views.setOnClickPendingIntent(R.id.widget_btn_poll_no, noPending)
+                }
+
                 todayIsWeekend -> {
-                    views.setViewVisibility(R.id.widget_actions_row, View.GONE)
                     views.setViewVisibility(R.id.widget_done_banner, View.VISIBLE)
                     views.setTextViewText(R.id.widget_done_banner, "Enjoy your weekend!")
                     views.setOnClickPendingIntent(R.id.widget_done_banner, openPending)
                 }
 
                 !snap.todayNoSchoolTitle.isNullOrBlank() && snap.todayStatusLabel == null -> {
-                    views.setViewVisibility(R.id.widget_actions_row, View.GONE)
                     views.setViewVisibility(R.id.widget_done_banner, View.VISIBLE)
                     views.setTextViewText(R.id.widget_done_banner, "No School • ${snap.todayNoSchoolTitle}")
                     views.setOnClickPendingIntent(R.id.widget_done_banner, openPending)
                 }
 
                 !snap.todayStatusLabel.isNullOrBlank() -> {
-                    views.setViewVisibility(R.id.widget_actions_row, View.GONE)
                     views.setViewVisibility(R.id.widget_done_banner, View.VISIBLE)
                     views.setTextViewText(R.id.widget_done_banner, "Today: ${snap.todayStatusLabel} ✓")
                     views.setOnClickPendingIntent(R.id.widget_done_banner, openPending)
@@ -643,7 +878,6 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
 
                 else -> {
                     views.setViewVisibility(R.id.widget_actions_row, View.VISIBLE)
-                    views.setViewVisibility(R.id.widget_done_banner, View.GONE)
 
                     val presentIntent = Intent(context, DailyReminderReceiver::class.java).apply {
                         action = ReminderScheduler.ACTION_QUICK_YES
@@ -668,6 +902,18 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                     views.setOnClickPendingIntent(R.id.widget_btn_absent, absentPending)
+
+                    val medicalIntent = Intent(context, DailyReminderReceiver::class.java).apply {
+                        action = ReminderScheduler.ACTION_QUICK_MEDICAL
+                        putExtra(ReminderScheduler.EXTRA_SOURCE, "widget")
+                    }
+                    val medicalPending = PendingIntent.getBroadcast(
+                        context,
+                        8107,
+                        medicalIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    views.setOnClickPendingIntent(R.id.widget_btn_medical, medicalPending)
                 }
             }
         }

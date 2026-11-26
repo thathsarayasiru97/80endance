@@ -1,8 +1,13 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -38,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
@@ -66,7 +72,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.lerp
+import com.example.data.AmbientBackdropPreset
 import com.example.ui.theme.LocalIsOledBlack
+import com.example.ui.theme.LocalLiquidGlassStyle
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -100,18 +108,68 @@ data class LiquidGlassNavItem(
 )
 
 /**
- * Captures a subtle Indigo & Saffron ambient light-mesh background into a [Backdrop]
+ * Captures a customizable ambient light-mesh background into a [Backdrop]
  * and provides it via [LocalGlassBackdrop] to foreground content.
+ *
+ * Supports 5 curated [AmbientBackdropPreset] styles plus optional gentle breathing motion
+ * while automatically keeping True Black AMOLED mode ultra-subtle.
  */
 @Composable
 fun LiquidGlassBackdropHost(
     modifier: Modifier = Modifier,
+    backdropPresetOverride: AmbientBackdropPreset? = null,
     content: @Composable BoxScope.(ambientBackdrop: Backdrop) -> Unit
 ) {
     val ambientBackdrop = rememberLayerBackdrop()
     val colorScheme = MaterialTheme.colorScheme
     val isDark = colorScheme.background.luminance() < 0.5f
     val isOled = LocalIsOledBlack.current
+    val glassStyle = LocalLiquidGlassStyle.current
+    val activePreset = backdropPresetOverride ?: glassStyle.ambientBackdropPreset
+
+    val shouldAnimate = glassStyle.ambientMotionEnabled &&
+        !isOled &&
+        activePreset != AmbientBackdropPreset.PURE_MINIMAL
+
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient_mesh_motion")
+    val driftPhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 16_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ambient_drift_phase"
+    )
+    val effectivePhase = if (shouldAnimate) driftPhase else 0f
+
+    val (orb1Base, orb2Base, orb3Base) = when (activePreset) {
+        AmbientBackdropPreset.INDIGO_AURORA -> Triple(
+            colorScheme.primary,
+            colorScheme.secondary,
+            colorScheme.tertiary
+        )
+        AmbientBackdropPreset.SUNSET_SAFFRON -> Triple(
+            Color(0xFFF59E0B),
+            Color(0xFFFB7185),
+            Color(0xFF6366F1)
+        )
+        AmbientBackdropPreset.EMERALD_LAGOON -> Triple(
+            Color(0xFF10B981),
+            Color(0xFF06B6D4),
+            Color(0xFF3B82F6)
+        )
+        AmbientBackdropPreset.MIDNIGHT_PRISM -> Triple(
+            Color(0xFF8B5CF6),
+            Color(0xFFEC4899),
+            Color(0xFF38BDF8)
+        )
+        AmbientBackdropPreset.PURE_MINIMAL -> Triple(
+            Color.Transparent,
+            Color.Transparent,
+            Color.Transparent
+        )
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         // Layer 0: Atmospheric background captured into ambientBackdrop (sibling to foreground UI)
@@ -122,57 +180,73 @@ fun LiquidGlassBackdropHost(
         ) {
             drawRect(color = colorScheme.background)
 
-            val primaryGlow = colorScheme.primary.copy(
-                alpha = when {
-                    isOled -> 0.08f
-                    isDark -> 0.22f
-                    else -> 0.14f
-                }
-            )
-            val secondaryGlow = colorScheme.secondary.copy(
-                alpha = when {
-                    isOled -> 0.05f
-                    isDark -> 0.18f
-                    else -> 0.13f
-                }
-            )
-            val tertiaryGlow = colorScheme.tertiary.copy(
-                alpha = when {
-                    isOled -> 0.04f
-                    isDark -> 0.14f
-                    else -> 0.09f
-                }
-            )
+            if (activePreset != AmbientBackdropPreset.PURE_MINIMAL) {
+                val intensityBoost = lerp(0.82f, 1.18f, glassStyle.clampedIntensity)
+                val primaryGlow = orb1Base.copy(
+                    alpha = (when {
+                        isOled -> 0.08f
+                        isDark -> 0.24f
+                        else -> 0.16f
+                    } * intensityBoost).coerceAtMost(0.36f)
+                )
+                val secondaryGlow = orb2Base.copy(
+                    alpha = (when {
+                        isOled -> 0.05f
+                        isDark -> 0.19f
+                        else -> 0.14f
+                    } * intensityBoost).coerceAtMost(0.30f)
+                )
+                val tertiaryGlow = orb3Base.copy(
+                    alpha = (when {
+                        isOled -> 0.04f
+                        isDark -> 0.16f
+                        else -> 0.11f
+                    } * intensityBoost).coerceAtMost(0.26f)
+                )
 
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(primaryGlow, Color.Transparent),
-                    center = Offset(size.width * 0.14f, size.height * 0.12f),
-                    radius = size.minDimension * 0.72f
-                ),
-                center = Offset(size.width * 0.14f, size.height * 0.12f),
-                radius = size.minDimension * 0.72f
-            )
+                val dx1 = cos(effectivePhase) * size.width * 0.04f
+                val dy1 = sin(effectivePhase) * size.height * 0.03f
+                val dx2 = sin(effectivePhase * 0.85f) * size.width * 0.045f
+                val dy2 = cos(effectivePhase * 0.85f) * size.height * 0.035f
+                val dx3 = cos(effectivePhase * 0.7f + 1.4f) * size.width * 0.04f
+                val dy3 = sin(effectivePhase * 0.7f + 1.4f) * size.height * 0.03f
 
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(secondaryGlow, Color.Transparent),
-                    center = Offset(size.width * 0.88f, size.height * 0.36f),
-                    radius = size.minDimension * 0.65f
-                ),
-                center = Offset(size.width * 0.88f, size.height * 0.36f),
-                radius = size.minDimension * 0.65f
-            )
+                val c1 = Offset(size.width * 0.14f + dx1, size.height * 0.12f + dy1)
+                val r1 = size.minDimension * 0.72f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(primaryGlow, Color.Transparent),
+                        center = c1,
+                        radius = r1
+                    ),
+                    center = c1,
+                    radius = r1
+                )
 
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(tertiaryGlow, Color.Transparent),
-                    center = Offset(size.width * 0.32f, size.height * 0.86f),
-                    radius = size.minDimension * 0.68f
-                ),
-                center = Offset(size.width * 0.32f, size.height * 0.86f),
-                radius = size.minDimension * 0.68f
-            )
+                val c2 = Offset(size.width * 0.88f + dx2, size.height * 0.36f + dy2)
+                val r2 = size.minDimension * 0.65f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(secondaryGlow, Color.Transparent),
+                        center = c2,
+                        radius = r2
+                    ),
+                    center = c2,
+                    radius = r2
+                )
+
+                val c3 = Offset(size.width * 0.32f + dx3, size.height * 0.86f + dy3)
+                val r3 = size.minDimension * 0.68f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(tertiaryGlow, Color.Transparent),
+                        center = c3,
+                        radius = r3
+                    ),
+                    center = c3,
+                    radius = r3
+                )
+            }
         }
 
         // Layer 1+: Foreground UI with ambientBackdrop provided via CompositionLocal
@@ -180,6 +254,88 @@ fun LiquidGlassBackdropHost(
             content(ambientBackdrop)
         }
     }
+}
+
+/**
+ * Dual-mode Hero Card: when [LocalLiquidGlassStyle.current.frostedHeroCardsEnabled] (or [forceFrosted])
+ * is enabled and a [Backdrop] is available, renders a refractive frosted Liquid Glass surface with a
+ * specular hairline rim; otherwise renders a clean Material 3 elevated container.
+ */
+@Composable
+fun FrostedHeroCard(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(24.dp),
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+    tint: Color = Color.Unspecified,
+    forceFrosted: Boolean = false,
+    backdrop: Backdrop? = LocalGlassBackdrop.current,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val glassStyle = LocalLiquidGlassStyle.current
+    val useGlass = (forceFrosted || glassStyle.frostedHeroCardsEnabled) && backdrop != null
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val intensity = glassStyle.clampedIntensity
+
+    if (!useGlass || backdrop == null) {
+        Surface(
+            modifier = modifier,
+            shape = shape,
+            color = containerColor,
+            tonalElevation = 2.dp
+        ) {
+            Box(modifier = Modifier.fillMaxWidth(), content = content)
+        }
+        return
+    }
+
+    val blurDp = lerp(6f, 20f, intensity)
+    val lensHeightDp = lerp(6f, 14f, intensity)
+    val lensAmountDp = lerp(10f, 22f, intensity)
+    val veilAlpha = if (isDark) {
+        lerp(0.10f, 0.24f, intensity)
+    } else {
+        lerp(0.46f, 0.72f, intensity)
+    }
+    val rimBrush = remember(isDark, intensity) {
+        Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = if (isDark) lerp(0.28f, 0.48f, intensity) else lerp(0.75f, 0.95f, intensity)),
+                Color.White.copy(alpha = if (isDark) 0.08f else 0.25f),
+                Color.White.copy(alpha = if (isDark) 0.20f else 0.55f)
+            )
+        )
+    }
+
+    Box(
+        modifier = modifier
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { shape },
+                effects = {
+                    vibrancy()
+                    blur(blurDp.dp.toPx())
+                    lens(
+                        refractionHeight = lensHeightDp.dp.toPx(),
+                        refractionAmount = lensAmountDp.dp.toPx(),
+                        chromaticAberration = intensity > 0.35f
+                    )
+                },
+                highlight = { Highlight.Default.copy(alpha = lerp(0.45f, 0.9f, intensity)) },
+                shadow = { Shadow(radius = 8.dp, color = Color.Black.copy(alpha = if (isDark) 0.24f else 0.08f)) },
+                onDrawSurface = {
+                    if (tint.isSpecified) {
+                        drawRect(tint.copy(alpha = if (isDark) 0.16f else 0.10f))
+                    }
+                    drawRect(
+                        if (isDark) Color(0xFF141B2D).copy(alpha = veilAlpha)
+                        else Color.White.copy(alpha = veilAlpha)
+                    )
+                }
+            )
+            .border(width = 1.dp, brush = rimBrush, shape = shape)
+            .clip(shape),
+        content = content
+    )
 }
 
 /**
@@ -202,6 +358,7 @@ fun LiquidGlassButton(
     content: @Composable RowScope.() -> Unit
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val glassIntensity = LocalLiquidGlassStyle.current.clampedIntensity
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight = remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
@@ -209,9 +366,9 @@ fun LiquidGlassButton(
 
     val effectiveTint = tint ?: Color.Unspecified
     val defaultSurfaceColor = if (isDark) {
-        Color.White.copy(alpha = if (enabled) 0.14f else 0.06f)
+        Color.White.copy(alpha = if (enabled) lerp(0.08f, 0.22f, glassIntensity) else 0.06f)
     } else {
-        Color.White.copy(alpha = if (enabled) 0.50f else 0.25f)
+        Color.White.copy(alpha = if (enabled) lerp(0.36f, 0.64f, glassIntensity) else 0.25f)
     }
     val effectiveContentColor = if (enabled) contentColor else contentColor.copy(alpha = 0.45f)
 
@@ -221,8 +378,11 @@ fun LiquidGlassButton(
             shape = { shape },
             effects = {
                 vibrancy()
-                blur(2f.dp.toPx())
-                lens(12f.dp.toPx(), 24f.dp.toPx())
+                blur(lerp(1.5f, 8f, glassIntensity).dp.toPx())
+                lens(
+                    lerp(8f, 15f, glassIntensity).dp.toPx(),
+                    lerp(16f, 28f, glassIntensity).dp.toPx()
+                )
             },
             highlight = { Highlight.Default },
             shadow = { Shadow.Default },
@@ -389,12 +549,13 @@ fun LiquidGlassNavigationRail(
     modifier: Modifier = Modifier
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val glassIntensity = LocalLiquidGlassStyle.current.clampedIntensity
     val railShape = RoundedCornerShape(32.dp)
 
     val surfaceVeil = if (isDark) {
-        Color.White.copy(alpha = 0.11f)
+        Color.White.copy(alpha = lerp(0.07f, 0.20f, glassIntensity))
     } else {
-        Color.White.copy(alpha = 0.40f)
+        Color.White.copy(alpha = lerp(0.28f, 0.58f, glassIntensity))
     }
     val rimBrush = remember(isDark) {
         Brush.verticalGradient(
@@ -422,10 +583,10 @@ fun LiquidGlassNavigationRail(
                     shape = { railShape },
                     effects = {
                         vibrancy()
-                        blur(16f.dp.toPx())
+                        blur(lerp(8f, 22f, glassIntensity).dp.toPx())
                         lens(
-                            refractionHeight = 14f.dp.toPx(),
-                            refractionAmount = 24f.dp.toPx(),
+                            refractionHeight = lerp(10f, 18f, glassIntensity).dp.toPx(),
+                            refractionAmount = lerp(16f, 28f, glassIntensity).dp.toPx(),
                             chromaticAberration = true
                         )
                     },

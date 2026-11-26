@@ -21,13 +21,28 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
+import com.example.data.AppSettings
+import java.util.Locale
+
 data class AppUpdateInfo(
     val currentVersion: String,
     val latestVersion: String,
     val releaseTitle: String,
     val releaseNotes: String,
     val releaseUrl: String,
-    val isPrerelease: Boolean = false
+    val isPrerelease: Boolean = false,
+    val directApkUrl: String? = null,
+    val directApkName: String? = null,
+    val directApkSizeBytes: Long? = null
+)
+
+data class ResolvedUpdateTarget(
+    val url: String,
+    val isDirectApk: Boolean,
+    val sourceLabel: String,
+    val fileName: String? = null,
+    val fileSizeBytes: Long? = null,
+    val fallbackReleaseUrl: String
 )
 
 sealed class UpdateCheckResult {
@@ -321,6 +336,7 @@ object AppUpdateChecker {
             "80endance ${formatVersionLabel(effectiveTag)}"
         }
         val releaseNotes = json.optString("body", "").trim()
+        val apkAsset = extractBestApkAsset(json.optJSONArray("assets"))
 
         return UpdateCheckResult.UpdateAvailable(
             AppUpdateInfo(
@@ -329,9 +345,115 @@ object AppUpdateChecker {
                 releaseTitle = releaseTitle,
                 releaseNotes = releaseNotes,
                 releaseUrl = safeUrl,
-                isPrerelease = isPrerelease
+                isPrerelease = isPrerelease,
+                directApkUrl = apkAsset?.first,
+                directApkName = apkAsset?.second,
+                directApkSizeBytes = apkAsset?.third
             )
         )
+    }
+
+    /**
+     * Extracts the best attached `.apk` asset from a GitHub Release `assets` JSON array,
+     * preferring universal/release APKs over debug/split APKs.
+     */
+    private fun extractBestApkAsset(assets: JSONArray?): Triple<String, String, Long?>? {
+        if (assets == null || assets.length() == 0) return null
+        val candidates = mutableListOf<Triple<String, String, Long?>>()
+        for (i in 0 until assets.length()) {
+            val item = assets.optJSONObject(i) ?: continue
+            val name = item.optString("name", "").trim()
+            val url = item.optString("browser_download_url", "").trim()
+            val contentType = item.optString("content_type", "").trim()
+            val isApk = name.endsWith(".apk", ignoreCase = true) ||
+                contentType.equals("application/vnd.android.package-archive", ignoreCase = true)
+            if (isApk && url.startsWith("https://", ignoreCase = true)) {
+                val size = item.optLong("size", -1L).takeIf { it > 0L }
+                candidates.add(Triple(url, name.ifEmpty { "80endance-update.apk" }, size))
+            }
+        }
+        if (candidates.isEmpty()) return null
+        return candidates.sortedByDescending { (_, name, _) ->
+            val lower = name.lowercase(Locale.ROOT)
+            var score = 0
+            if (lower.contains("universal") || lower.contains("release")) score += 4
+            if (lower.contains("arm64")) score += 2
+            if (lower.contains("80endance") || lower.contains("80endence")) score += 2
+            if (lower.contains("debug") || lower.contains("dev")) score -= 3
+            score
+        }.first()
+    }
+
+    /**
+     * Checks whether the Admin-configured Direct APK override version is outdated compared
+     * to [latestGithubVersion]. Supports semantic versions (e.g. `4.0`, `v4.0`) and numeric version codes.
+     */
+    fun isAdminApkOverrideOutdated(
+        configuredVersion: String?,
+        latestGithubVersion: String?
+    ): Boolean {
+        val cleanConfigured = configuredVersion?.trim().orEmpty()
+        val cleanLatest = latestGithubVersion?.trim().orEmpty()
+        if (cleanConfigured.isEmpty()) return true
+        if (cleanLatest.isEmpty()) return false
+        // If latest GitHub tag is strictly newer than the configured version, the override is outdated.
+        return isNewerVersion(latestTag = cleanLatest, currentVersion = cleanConfigured)
+    }
+
+    /**
+     * 3-Tier Direct APK Resolver:
+     * 1) Admin Direct APK Override (when valid HTTPS URL is set and its version is >= latest GitHub release)
+     * 2) Automatic GitHub Release `.apk` asset `browser_download_url`
+     * 3) Standard GitHub Release web page fallback
+     */
+    fun resolveBestDownloadTarget(
+        info: AppUpdateInfo,
+        appSettings: AppSettings?
+    ): ResolvedUpdateTarget {
+        val adminUrl = appSettings?.validDirectApkDownloadUrl
+        val adminVersion = appSettings?.cleanDirectApkVersion
+        if (adminUrl != null && !isAdminApkOverrideOutdated(adminVersion, info.latestVersion)) {
+            val fileName = Uri.parse(adminUrl).lastPathSegment
+                ?.takeIf { it.endsWith(".apk", ignoreCase = true) }
+                ?: "80endance-${formatVersionLabel(adminVersion ?: info.latestVersion)}.apk"
+            return ResolvedUpdateTarget(
+                url = adminUrl,
+                isDirectApk = true,
+                sourceLabel = "Direct APK Download",
+                fileName = fileName,
+                fileSizeBytes = null,
+                fallbackReleaseUrl = info.releaseUrl
+            )
+        }
+        if (!info.directApkUrl.isNullOrBlank()) {
+            return ResolvedUpdateTarget(
+                url = info.directApkUrl,
+                isDirectApk = true,
+                sourceLabel = "GitHub Direct APK",
+                fileName = info.directApkName,
+                fileSizeBytes = info.directApkSizeBytes,
+                fallbackReleaseUrl = info.releaseUrl
+            )
+        }
+        return ResolvedUpdateTarget(
+            url = info.releaseUrl,
+            isDirectApk = false,
+            sourceLabel = "GitHub Releases",
+            fileName = null,
+            fileSizeBytes = null,
+            fallbackReleaseUrl = info.releaseUrl
+        )
+    }
+
+    fun formatApkFileSize(bytes: Long?): String? {
+        if (bytes == null || bytes <= 0L) return null
+        val mb = bytes.toDouble() / (1024.0 * 1024.0)
+        return if (mb >= 1.0) {
+            String.format(Locale.US, "%.1f MB", mb)
+        } else {
+            val kb = (bytes / 1024L).coerceAtLeast(1L)
+            "$kb KB"
+        }
     }
 
     /**
@@ -378,7 +500,18 @@ object AppUpdateChecker {
         } else {
             GITHUB_RELEASES_WEB
         }
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+        return openSafeHttpsUrl(context, targetUrl)
+    }
+
+    fun openSafeHttpsUrl(
+        context: Context,
+        url: String
+    ): Boolean {
+        val clean = url.trim()
+        if (!clean.startsWith("https://", ignoreCase = true) || clean.contains(' ')) {
+            return false
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(clean)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {

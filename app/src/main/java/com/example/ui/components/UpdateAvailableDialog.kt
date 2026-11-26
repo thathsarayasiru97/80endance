@@ -21,13 +21,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,21 +38,29 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.system.AppUpdateChecker
 import com.example.system.AppUpdateInfo
+import com.example.system.ResolvedUpdateTarget
+import com.example.ui.theme.LocalAttendanceColors
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 @Composable
 fun UpdateAvailableDialog(
     updateInfo: AppUpdateInfo,
+    resolvedTarget: ResolvedUpdateTarget = AppUpdateChecker.resolveBestDownloadTarget(updateInfo, null),
     onUpdateNow: () -> Unit,
+    onViewReleasePage: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
+    val attendanceColors = LocalAttendanceColors.current
+    val formattedSize = AppUpdateChecker.formatApkFileSize(resolvedTarget.fileSizeBytes)
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -131,40 +142,91 @@ fun UpdateAvailableDialog(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Version transition badge (e.g., v1.0 -> v1.1)
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(50)
+                    // Version transition badge + Direct APK status chip
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(50)
                         ) {
-                            Text(
-                                text = AppUpdateChecker.formatVersionLabel(updateInfo.currentVersion),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = AppUpdateChecker.formatVersionLabel(updateInfo.latestVersion),
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = AppUpdateChecker.formatVersionLabel(updateInfo.currentVersion),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = AppUpdateChecker.formatVersionLabel(updateInfo.latestVersion),
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+
+                        if (resolvedTarget.isDirectApk) {
+                            Surface(
+                                color = attendanceColors.presentContainer,
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Verified,
+                                        contentDescription = null,
+                                        tint = attendanceColors.onPresentContainer,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Direct APK Ready",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = attendanceColors.onPresentContainer
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    if (resolvedTarget.isDirectApk && (!resolvedTarget.fileName.isNullOrBlank() || formattedSize != null)) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = buildString {
+                                append(resolvedTarget.fileName ?: "80endance.apk")
+                                if (formattedSize != null) {
+                                    append(" • ")
+                                    append(formattedSize)
+                                }
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = stringResource(R.string.update_available_subtitle),
+                        text = if (resolvedTarget.isDirectApk) {
+                            "Downloads directly — tap the finished download notification to install."
+                        } else {
+                            stringResource(R.string.update_available_subtitle)
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -179,7 +241,7 @@ fun UpdateAvailableDialog(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 180.dp)
+                                    .heightIn(max = 172.dp)
                                     .verticalScroll(rememberScrollState())
                                     .padding(14.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -198,7 +260,7 @@ fun UpdateAvailableDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -223,19 +285,49 @@ fun UpdateAvailableDialog(
                             minHeight = 50.dp,
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                             modifier = Modifier
-                                .weight(1.35f)
+                                .weight(1.45f)
                                 .testTag("update_now_button")
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                imageVector = if (resolvedTarget.isDirectApk) Icons.Rounded.Download else Icons.AutoMirrored.Rounded.OpenInNew,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = stringResource(R.string.update_now),
-                                style = MaterialTheme.typography.labelLarge
+                                text = when {
+                                    resolvedTarget.isDirectApk && formattedSize != null -> "Download ($formattedSize)"
+                                    resolvedTarget.isDirectApk -> "Download APK"
+                                    else -> stringResource(R.string.update_now)
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                        }
+                    }
+
+                    if (resolvedTarget.isDirectApk && onViewReleasePage != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            TextButton(
+                                onClick = onViewReleasePage,
+                                modifier = Modifier.testTag("update_view_release_page_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "View Release Page Instead",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
                         }
                     }
                 }

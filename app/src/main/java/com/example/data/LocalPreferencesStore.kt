@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -56,10 +57,22 @@ data class LocalReminderPrefs(
     val lastCelebratedWeekKey: String = "",
     val lastCelebratedStreak: Int = 0,
     val wasBelowThreshold: Boolean = false,
-    val cachedNextDayPollEnabled: Boolean = false
+    val cachedNextDayPollEnabled: Boolean = false,
+    val glassMaterialPresetRaw: String = GlassMaterialPreset.BALANCED.raw,
+    val glassIntensity: Float = GlassMaterialPreset.BALANCED.defaultIntensity,
+    val ambientBackdropPresetRaw: String = AmbientBackdropPreset.INDIGO_AURORA.raw,
+    val ambientMotionEnabled: Boolean = true,
+    val frostedHeroCardsEnabled: Boolean = false,
+    val widgetThemeStyleRaw: String = WidgetThemeStyle.AUTO_SYNC.raw,
+    val streakArenaOptIn: Boolean = false,
+    val streakArenaUseAnonymousAlias: Boolean = false,
+    val cheeredPeerTokens: Set<String> = emptySet()
 ) {
     val themeMode: AppThemeMode get() = AppThemeMode.fromRaw(themeModeRaw)
     val accentPalette: AppAccentPalette get() = AppAccentPalette.fromRaw(accentPaletteRaw)
+    val glassMaterialPreset: GlassMaterialPreset get() = GlassMaterialPreset.fromRaw(glassMaterialPresetRaw)
+    val ambientBackdropPreset: AmbientBackdropPreset get() = AmbientBackdropPreset.fromRaw(ambientBackdropPresetRaw)
+    val widgetThemeStyle: WidgetThemeStyle get() = WidgetThemeStyle.fromRaw(widgetThemeStyleRaw)
 
     fun toCachedUserProfile(): UserProfile? {
         if (cachedUserId.isBlank() || !cachedSetupCompleted) return null
@@ -103,6 +116,15 @@ class LocalPreferencesStore(private val context: Context) {
     private val keyLastCelebratedStreak = intPreferencesKey("last_celebrated_streak")
     private val keyWasBelowThreshold = booleanPreferencesKey("was_below_threshold")
     private val keyCachedNextDayPollEnabled = booleanPreferencesKey("cached_next_day_poll_enabled")
+    private val keyGlassMaterialPreset = stringPreferencesKey("glass_material_preset")
+    private val keyGlassIntensity = floatPreferencesKey("glass_intensity")
+    private val keyAmbientBackdropPreset = stringPreferencesKey("ambient_backdrop_preset")
+    private val keyAmbientMotionEnabled = booleanPreferencesKey("ambient_motion_enabled")
+    private val keyFrostedHeroCardsEnabled = booleanPreferencesKey("frosted_hero_cards_enabled")
+    private val keyWidgetThemeStyle = stringPreferencesKey("widget_theme_style")
+    private val keyStreakArenaOptIn = booleanPreferencesKey("streak_arena_opt_in")
+    private val keyStreakArenaAnon = booleanPreferencesKey("streak_arena_use_anonymous_alias")
+    private val keyCheeredPeerTokens = stringSetPreferencesKey("cheered_peer_tokens")
 
     val prefsFlow: Flow<LocalReminderPrefs> = context.appPrefsDataStore.data.map { prefs ->
         LocalReminderPrefs(
@@ -133,7 +155,16 @@ class LocalPreferencesStore(private val context: Context) {
             lastCelebratedWeekKey = prefs[keyLastCelebratedWeekKey] ?: "",
             lastCelebratedStreak = prefs[keyLastCelebratedStreak] ?: 0,
             wasBelowThreshold = prefs[keyWasBelowThreshold] ?: false,
-            cachedNextDayPollEnabled = prefs[keyCachedNextDayPollEnabled] ?: false
+            cachedNextDayPollEnabled = prefs[keyCachedNextDayPollEnabled] ?: false,
+            glassMaterialPresetRaw = prefs[keyGlassMaterialPreset] ?: GlassMaterialPreset.BALANCED.raw,
+            glassIntensity = (prefs[keyGlassIntensity] ?: GlassMaterialPreset.BALANCED.defaultIntensity).coerceIn(0.35f, 1.0f),
+            ambientBackdropPresetRaw = prefs[keyAmbientBackdropPreset] ?: AmbientBackdropPreset.INDIGO_AURORA.raw,
+            ambientMotionEnabled = prefs[keyAmbientMotionEnabled] ?: true,
+            frostedHeroCardsEnabled = prefs[keyFrostedHeroCardsEnabled] ?: false,
+            widgetThemeStyleRaw = prefs[keyWidgetThemeStyle] ?: WidgetThemeStyle.AUTO_SYNC.raw,
+            streakArenaOptIn = prefs[keyStreakArenaOptIn] ?: false,
+            streakArenaUseAnonymousAlias = prefs[keyStreakArenaAnon] ?: false,
+            cheeredPeerTokens = prefs[keyCheeredPeerTokens] ?: emptySet()
         )
     }
 
@@ -303,6 +334,47 @@ class LocalPreferencesStore(private val context: Context) {
     suspend fun saveCachedNextDayPollEnabled(enabled: Boolean) {
         context.appPrefsDataStore.edit { prefs ->
             prefs[keyCachedNextDayPollEnabled] = enabled
+        }
+    }
+
+    suspend fun saveLiquidGlassStyle(
+        preset: GlassMaterialPreset,
+        intensity: Float,
+        ambientBackdropPreset: AmbientBackdropPreset,
+        ambientMotionEnabled: Boolean,
+        frostedHeroCardsEnabled: Boolean
+    ) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyGlassMaterialPreset] = preset.raw
+            prefs[keyGlassIntensity] = intensity.coerceIn(0.35f, 1.0f)
+            prefs[keyAmbientBackdropPreset] = ambientBackdropPreset.raw
+            prefs[keyAmbientMotionEnabled] = ambientMotionEnabled
+            prefs[keyFrostedHeroCardsEnabled] = frostedHeroCardsEnabled
+        }
+    }
+
+    suspend fun saveWidgetThemeStyle(style: WidgetThemeStyle) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyWidgetThemeStyle] = style.raw
+        }
+    }
+
+    suspend fun saveStreakArenaPreferences(optedIn: Boolean, useAnonymousAlias: Boolean) {
+        context.appPrefsDataStore.edit { prefs ->
+            prefs[keyStreakArenaOptIn] = optedIn
+            prefs[keyStreakArenaAnon] = useAnonymousAlias
+        }
+    }
+
+    suspend fun markPeerCheeredToday(dateKey: String, targetUserId: String) {
+        val token = "$dateKey:$targetUserId"
+        context.appPrefsDataStore.edit { prefs ->
+            val current = prefs[keyCheeredPeerTokens]
+                ?.filter { it.startsWith("$dateKey:") }
+                ?.toMutableSet()
+                ?: mutableSetOf()
+            current.add(token)
+            prefs[keyCheeredPeerTokens] = current.take(80).toSet()
         }
     }
 }

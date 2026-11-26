@@ -13,8 +13,23 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.example.data.AmbientBackdropPreset
 import com.example.data.AppAccentPalette
 import com.example.data.AppThemeMode
+import com.example.data.GlassMaterialPreset
+
+@Immutable
+data class LiquidGlassStyleConfig(
+    val preset: GlassMaterialPreset = GlassMaterialPreset.BALANCED,
+    val intensity: Float = GlassMaterialPreset.BALANCED.defaultIntensity,
+    val ambientBackdropPreset: AmbientBackdropPreset = AmbientBackdropPreset.INDIGO_AURORA,
+    val ambientMotionEnabled: Boolean = true,
+    val frostedHeroCardsEnabled: Boolean = false
+) {
+    val clampedIntensity: Float get() = intensity.coerceIn(0f, 1f)
+}
+
+val LocalLiquidGlassStyle = staticCompositionLocalOf { LiquidGlassStyleConfig() }
 
 @Immutable
 data class AttendanceSemanticColors(
@@ -149,6 +164,8 @@ fun accentSwatchColor(palette: AppAccentPalette, isDark: Boolean): Color = when 
     AppAccentPalette.EMERALD -> if (isDark) EmeraldAccentDarkPrimary else EmeraldAccentLightPrimary
     AppAccentPalette.CRIMSON -> if (isDark) CrimsonAccentDarkPrimary else CrimsonAccentLightPrimary
     AppAccentPalette.AMETHYST -> if (isDark) AmethystAccentDarkPrimary else AmethystAccentLightPrimary
+    AppAccentPalette.SUNSET_AMBER -> if (isDark) SunsetAmberAccentDarkPrimary else SunsetAmberAccentLightPrimary
+    AppAccentPalette.OCEAN_TEAL -> if (isDark) OceanTealAccentDarkPrimary else OceanTealAccentLightPrimary
 }
 
 private fun buildColorScheme(
@@ -222,6 +239,36 @@ private fun buildColorScheme(
                 secondary = AmethystAccentLightSecondary
             )
         }
+        AppAccentPalette.SUNSET_AMBER -> if (isDark) {
+            base.copy(
+                primary = SunsetAmberAccentDarkPrimary,
+                onPrimary = SunsetAmberAccentDarkOnPrimary,
+                primaryContainer = SunsetAmberAccentDarkPrimaryContainer,
+                onPrimaryContainer = SunsetAmberAccentDarkOnPrimaryContainer
+            )
+        } else {
+            base.copy(
+                primary = SunsetAmberAccentLightPrimary,
+                primaryContainer = SunsetAmberAccentLightPrimaryContainer,
+                onPrimaryContainer = SunsetAmberAccentLightOnPrimaryContainer,
+                secondary = SunsetAmberAccentLightSecondary
+            )
+        }
+        AppAccentPalette.OCEAN_TEAL -> if (isDark) {
+            base.copy(
+                primary = OceanTealAccentDarkPrimary,
+                onPrimary = OceanTealAccentDarkOnPrimary,
+                primaryContainer = OceanTealAccentDarkPrimaryContainer,
+                onPrimaryContainer = OceanTealAccentDarkOnPrimaryContainer
+            )
+        } else {
+            base.copy(
+                primary = OceanTealAccentLightPrimary,
+                primaryContainer = OceanTealAccentLightPrimaryContainer,
+                onPrimaryContainer = OceanTealAccentLightOnPrimaryContainer,
+                secondary = OceanTealAccentLightSecondary
+            )
+        }
     }
 }
 
@@ -230,6 +277,7 @@ fun EightyEndanceTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     accentPalette: AppAccentPalette = AppAccentPalette.ROYAL_BLUE,
+    liquidGlassStyle: LiquidGlassStyleConfig = LiquidGlassStyleConfig(),
     content: @Composable () -> Unit
 ) {
     val resolvedDark = when (themeMode) {
@@ -243,7 +291,8 @@ fun EightyEndanceTheme(
 
     CompositionLocalProvider(
         LocalAttendanceColors provides semanticColors,
-        LocalIsOledBlack provides isOledBlack
+        LocalIsOledBlack provides isOledBlack,
+        LocalLiquidGlassStyle provides liquidGlassStyle
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

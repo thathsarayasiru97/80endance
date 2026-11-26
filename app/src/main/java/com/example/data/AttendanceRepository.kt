@@ -1335,7 +1335,8 @@ class AttendanceRepository(
         userId: String,
         targetDateKey: String,
         going: Boolean,
-        profile: UserProfile?
+        profile: UserProfile?,
+        reasonTag: String? = null
     ): Result<Unit> {
         val docId = "${targetDateKey}_$userId"
         val path = "next_day_votes/$docId"
@@ -1352,6 +1353,7 @@ class AttendanceRepository(
             val cleanGrade = profile?.grade?.trim()?.take(32)?.ifEmpty { null }
             val cleanStream = profile?.alStream?.trim()?.take(48)?.ifEmpty { null }
             val cleanClass = profile?.className?.trim()?.take(32)?.ifEmpty { null }
+            val cleanReason = NextDayVoteReason.fromRaw(reasonTag)?.raw
 
             if (alreadyExists) {
                 val updates = mutableMapOf<String, Any>(
@@ -1361,6 +1363,7 @@ class AttendanceRepository(
                 if (cleanGrade != null) updates["grade"] = cleanGrade
                 if (cleanStream != null) updates["alStream"] = cleanStream
                 if (cleanClass != null) updates["className"] = cleanClass
+                updates["reasonTag"] = cleanReason ?: ""
                 docRef.update(updates).awaitOfflineAware()
             } else {
                 val payload = mapOf(
@@ -1370,6 +1373,7 @@ class AttendanceRepository(
                     "grade" to cleanGrade,
                     "alStream" to cleanStream,
                     "className" to cleanClass,
+                    "reasonTag" to cleanReason,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 ).filterValues { it != null }
@@ -1381,6 +1385,127 @@ class AttendanceRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    // --- CLASS STREAK ARENA & FRIENDLY CHEERS (ZERO PII) ---
+
+    fun observeClassStreakEntries(): Flow<List<ClassStreakEntry>> = flow {
+        val uid = requireUserId()
+        val path = "class_streak_entries"
+        emitAll(
+            db.collection("class_streak_entries")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        ClassStreakEntry::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    suspend fun upsertOwnClassStreakEntry(
+        userId: String,
+        displayAlias: String,
+        grade: String,
+        alStream: String,
+        className: String,
+        currentStreak: Int,
+        bestStreak: Int,
+        weeklyAttended: Int,
+        weeklyTotal: Int,
+        weekKey: String,
+        optedIn: Boolean
+    ): Result<Unit> {
+        if (userId.isBlank() || auth.currentUser?.uid != userId) return Result.success(Unit)
+        val cleanClass = className.trim().take(20)
+        if (cleanClass.isEmpty()) return Result.success(Unit)
+        val path = "class_streak_entries/$userId"
+        return try {
+            val cleanAlias = displayAlias.trim().ifEmpty { "Anonymous Student" }.take(24)
+            val safeGrade = if (grade in AppConstants.GRADES) grade else "Grade 13"
+            val safeStream = if (alStream in AppConstants.AL_STREAMS) alStream else "Physical Science"
+            val safeCurrent = currentStreak.coerceIn(0, 400)
+            val safeBest = maxOf(bestStreak, safeCurrent).coerceIn(safeCurrent, 400)
+            val safeWeekTotal = weeklyTotal.coerceIn(0, 7)
+            val safeWeekAtt = weeklyAttended.coerceIn(0, safeWeekTotal)
+            val safeWeekKey = weekKey.trim().ifEmpty { DateUtils.isoWeekKey() }.take(12)
+
+            val docRef = db.collection("class_streak_entries").document(userId)
+            val existing = runCatching {
+                withTimeoutOrNull(2_000L) { docRef.get().await() }
+            }.getOrNull()
+
+            if (existing != null && existing.exists()) {
+                val updates = mapOf(
+                    "displayAlias" to cleanAlias,
+                    "grade" to safeGrade,
+                    "alStream" to safeStream,
+                    "className" to cleanClass,
+                    "currentStreak" to safeCurrent,
+                    "bestStreak" to safeBest,
+                    "weeklyAttended" to safeWeekAtt,
+                    "weeklyTotal" to safeWeekTotal,
+                    "weekKey" to safeWeekKey,
+                    "optedIn" to optedIn,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.update(updates).awaitOfflineAware()
+            } else {
+                val payload = mapOf(
+                    "userId" to userId,
+                    "displayAlias" to cleanAlias,
+                    "grade" to safeGrade,
+                    "alStream" to safeStream,
+                    "className" to cleanClass,
+                    "currentStreak" to safeCurrent,
+                    "bestStreak" to safeBest,
+                    "weeklyAttended" to safeWeekAtt,
+                    "weeklyTotal" to safeWeekTotal,
+                    "weekKey" to safeWeekKey,
+                    "cheerCount" to 0,
+                    "optedIn" to optedIn,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(payload).awaitOfflineAware()
+            }
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("AttendanceRepo", "Class streak sync skipped: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    suspend fun cheerClassmate(targetUserId: String): Result<Unit> {
+        val currentUid = auth.currentUser?.uid.orEmpty()
+        if (currentUid.isBlank() || targetUserId.isBlank() || currentUid == targetUserId) {
+            return Result.failure(IllegalArgumentException("Cannot cheer own entry"))
+        }
+        val path = "class_streak_entries/$targetUserId"
+        return try {
+            db.collection("class_streak_entries").document(targetUserId)
+                .update(
+                    mapOf(
+                        "cheerCount" to FieldValue.increment(1L),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -2191,6 +2316,8 @@ class AttendanceRepository(
                 "al2028ExamDate" to settings.al2028ExamDate,
                 "nextDayPollEnabled" to settings.nextDayPollEnabled,
                 "schoolStartDate" to (settings.validSchoolStartDate ?: ""),
+                "directApkDownloadUrl" to (settings.validDirectApkDownloadUrl ?: ""),
+                "directApkVersion" to (settings.cleanDirectApkVersion ?: ""),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             db.collection("app_settings").document("global").set(payload).awaitOfflineAware()

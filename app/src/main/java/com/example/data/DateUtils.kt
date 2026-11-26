@@ -257,6 +257,17 @@ object DateUtils {
         return formatDateKey(cal)
     }
 
+    /** Returns an ISO-style week identifier such as `2026-W48` for the week containing [dateKey]. */
+    fun isoWeekKey(dateKey: String = todayKey()): String {
+        val monday = mondayOfWeek(dateKey)
+        val cal = parseDateKey(monday) ?: Calendar.getInstance()
+        cal.firstDayOfWeek = Calendar.MONDAY
+        cal.minimalDaysInFirstWeek = 4
+        val week = cal.get(Calendar.WEEK_OF_YEAR)
+        val year = cal.get(Calendar.YEAR)
+        return String.format(Locale.US, "%04d-W%02d", year, week)
+    }
+
     fun formatTime12Hour(hour: Int, minute: Int): String {
         val amPm = if (hour < 12) "AM" else "PM"
         val displayHour = when {

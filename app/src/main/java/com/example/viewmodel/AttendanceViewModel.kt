@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
+import com.example.data.AmbientBackdropPreset
 import com.example.data.AppAccentPalette
 import com.example.data.AppSettings
 import com.example.data.AppThemeMode
@@ -24,16 +25,20 @@ import com.example.data.CalendarEventTargetType
 import com.example.data.CalendarEventType
 import com.example.data.CelebrationEvent
 import com.example.data.CelebrationType
+import com.example.data.ClassPulseSummary
+import com.example.data.ClassStreakEntry
 import com.example.data.CommunityStats
 import com.example.data.DateUtils
 import com.example.data.FeedbackReport
 import com.example.data.FeedbackStatus
 import com.example.data.FeedbackType
+import com.example.data.GlassMaterialPreset
 import com.example.data.LocalPreferencesStore
 import com.example.data.LocalReminderPrefs
 import com.example.data.NextDayPollSummary
 import com.example.data.NextDayPollWindow
 import com.example.data.NextDaySchoolVote
+import com.example.data.NextDayVoteReason
 import com.example.data.Notice
 import com.example.data.PersonalAcademicMarker
 import com.example.data.PersonalMarkerCategory
@@ -43,6 +48,7 @@ import com.example.data.SyncStatus
 import com.example.data.UndoableCheckInAction
 import com.example.data.UserProfile
 import com.example.data.WeekDaySummary
+import com.example.data.WidgetThemeStyle
 import com.example.system.AttendanceWidgetStore
 import com.example.system.BackgroundBroadcastChecker
 import com.example.system.ReminderScheduler
@@ -130,7 +136,17 @@ data class StudentAppState(
     val isInDangerZone: Boolean = false,
     val pollWindow: NextDayPollWindow = NextDayPollWindow(),
     val nextDayPollSummary: NextDayPollSummary = NextDayPollSummary(),
-    val autoOfferedSwipeDeckThisLaunch: Boolean = false
+    val autoOfferedSwipeDeckThisLaunch: Boolean = false,
+    val glassMaterialPreset: GlassMaterialPreset = GlassMaterialPreset.BALANCED,
+    val glassIntensity: Float = GlassMaterialPreset.BALANCED.defaultIntensity,
+    val ambientBackdropPreset: AmbientBackdropPreset = AmbientBackdropPreset.INDIGO_AURORA,
+    val ambientMotionEnabled: Boolean = true,
+    val frostedHeroCardsEnabled: Boolean = false,
+    val widgetThemeStyle: WidgetThemeStyle = WidgetThemeStyle.AUTO_SYNC,
+    val streakArenaOptIn: Boolean = false,
+    val streakArenaUseAnonymousAlias: Boolean = false,
+    val cheeredPeerIdsToday: Set<String> = emptySet(),
+    val classPulseSummary: ClassPulseSummary = ClassPulseSummary()
 ) {
     val effectiveSchoolStartDateKey: String
         get() = appSettings.effectiveSchoolStartDate(profile?.alExamYear)
@@ -179,7 +195,8 @@ private data class CommunityExtrasBundle(
     val periodBlocks: List<AttendancePeriodBlock> = emptyList(),
     val communityTrendSummaries: List<StudentTrendSummary> = emptyList(),
     val personalMarkers: List<PersonalAcademicMarker> = emptyList(),
-    val nextDayVotes: List<NextDaySchoolVote> = emptyList()
+    val nextDayVotes: List<NextDaySchoolVote> = emptyList(),
+    val classStreakEntries: List<ClassStreakEntry> = emptyList()
 )
 
 private data class LocalSessionState(
@@ -234,6 +251,7 @@ class AttendanceViewModel(
     private var lastReconciledCounterSignature: String = ""
     private var lastDangerNudgeTriggeredDate: String = ""
     private var lastSyncedPollEnabled: Boolean? = null
+    private var lastSyncedStreakSignature: String = ""
 
     private fun <T> Flow<T>.safeFirestoreFlow(fallback: T, tag: String): Flow<Pair<T, String?>> =
         this.combine(MutableStateFlow(Unit)) { value, _ -> value to (null as String?) }
@@ -342,16 +360,21 @@ class AttendanceViewModel(
         }
     }
 
+    private val classStreakEntriesFlow: Flow<List<ClassStreakEntry>> =
+        repository.observeClassStreakEntries()
+            .safeFirestoreFlow(emptyList(), "classStreaks")
+            .map { it.first }
+
     private val extrasBundleFlow: Flow<CommunityExtrasBundle> = combine(
         repository.observeAppSettings().safeFirestoreFlow(AppSettings(), "settings"),
         repository.observeCommunityStats().safeFirestoreFlow(CommunityStats(), "communityStats"),
         repository.observeBroadcastNotifications().safeFirestoreFlow(emptyList(), "broadcasts"),
         adminStreamFlow,
-        combine(studentExtraDataFlow, nextDayVotesFlow) { studentExtras, votes ->
-            studentExtras to votes
+        combine(studentExtraDataFlow, nextDayVotesFlow, classStreakEntriesFlow) { studentExtras, votes, streaks ->
+            Triple(studentExtras, votes, streaks)
         }
-    ) { settingsPair, statsPair, broadcastsPair, adminBundle, extrasWithVotes ->
-        val (studentExtras, votes) = extrasWithVotes
+    ) { settingsPair, statsPair, broadcastsPair, adminBundle, extrasTriple ->
+        val (studentExtras, votes, streaks) = extrasTriple
         CommunityExtrasBundle(
             settings = settingsPair.first,
             communityStats = statsPair.first,
@@ -362,7 +385,8 @@ class AttendanceViewModel(
             periodBlocks = studentExtras.periodBlocks,
             communityTrendSummaries = studentExtras.communityTrendSummaries,
             personalMarkers = studentExtras.personalMarkers,
-            nextDayVotes = votes
+            nextDayVotes = votes,
+            classStreakEntries = streaks
         )
     }
 
@@ -722,6 +746,55 @@ class AttendanceViewModel(
             }
         }
 
+        val classPulseSummary = AttendanceCalculator.calculateClassPulseSummary(
+            profile = profile,
+            currentUserId = currentUserId,
+            trendSummaries = mergedCommunitySummaries,
+            streakEntries = extras.classStreakEntries,
+            ownWeeklySummary = weekly,
+            todayKey = todayKey
+        )
+        val cheeredTodaySet = prefs.cheeredPeerTokens
+            .filter { it.startsWith("$todayKey:") }
+            .map { it.removePrefix("$todayKey:") }
+            .toSet()
+
+        // Keep opt-in zero-PII class streak entry synced whenever opted in and values change
+        if (localState.prefsLoaded && profile != null && profile.setupCompleted && profile.className.isNotBlank() && prefs.streakArenaOptIn) {
+            val alias = if (prefs.streakArenaUseAnonymousAlias) {
+                "Anonymous Student"
+            } else {
+                profile.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: profile.firstName.trim().takeIf { it.isNotEmpty() }
+                    ?: "Anonymous Student"
+            }.take(24)
+            val weekKey = DateUtils.isoWeekKey(todayKey)
+            val weekAtt = weekly.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+            val weekTot = weekly.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.ABSENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+            val existingBest = classPulseSummary.myOwnEntry?.bestStreak ?: 0
+            val bestStreak = maxOf(existingBest, streak)
+            val streakSig = "$alias|${profile.className}|$streak|$bestStreak|$weekAtt|$weekTot|$weekKey|true"
+            if (streakSig != lastSyncedStreakSignature) {
+                lastSyncedStreakSignature = streakSig
+                val p = profile
+                viewModelScope.launch {
+                    repository.upsertOwnClassStreakEntry(
+                        userId = currentUserId,
+                        displayAlias = alias,
+                        grade = p.grade,
+                        alStream = p.alStream,
+                        className = p.className,
+                        currentStreak = streak,
+                        bestStreak = bestStreak,
+                        weeklyAttended = weekAtt,
+                        weeklyTotal = weekTot,
+                        weekKey = weekKey,
+                        optedIn = true
+                    )
+                }
+            }
+        }
+
         StudentAppState(
             isLoading = !bundle.profileLoaded,
             errorMessage = bundle.streamError,
@@ -782,7 +855,17 @@ class AttendanceViewModel(
             isInDangerZone = inDangerZone,
             pollWindow = pollWindow,
             nextDayPollSummary = pollSummary,
-            autoOfferedSwipeDeckThisLaunch = localState.autoOfferedSwipeDeckThisLaunch
+            autoOfferedSwipeDeckThisLaunch = localState.autoOfferedSwipeDeckThisLaunch,
+            glassMaterialPreset = prefs.glassMaterialPreset,
+            glassIntensity = prefs.glassIntensity,
+            ambientBackdropPreset = prefs.ambientBackdropPreset,
+            ambientMotionEnabled = prefs.ambientMotionEnabled,
+            frostedHeroCardsEnabled = prefs.frostedHeroCardsEnabled,
+            widgetThemeStyle = prefs.widgetThemeStyle,
+            streakArenaOptIn = prefs.streakArenaOptIn,
+            streakArenaUseAnonymousAlias = prefs.streakArenaUseAnonymousAlias,
+            cheeredPeerIdsToday = cheeredTodaySet,
+            classPulseSummary = classPulseSummary
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1647,6 +1730,104 @@ class AttendanceViewModel(
     fun setAppearance(themeMode: AppThemeMode, accentPalette: AppAccentPalette) {
         viewModelScope.launch {
             localPrefs.saveAppearance(themeMode, accentPalette)
+            AttendanceWidgetStore.updateThemePrefs(
+                context = appContext,
+                widgetThemeStyleRaw = uiState.value.widgetThemeStyle.raw,
+                accentPaletteRaw = accentPalette.raw,
+                themeModeRaw = themeMode.raw
+            )
+        }
+    }
+
+    fun setLiquidGlassStyle(
+        preset: GlassMaterialPreset,
+        intensity: Float,
+        ambientBackdropPreset: AmbientBackdropPreset,
+        ambientMotionEnabled: Boolean,
+        frostedHeroCardsEnabled: Boolean
+    ) {
+        viewModelScope.launch {
+            localPrefs.saveLiquidGlassStyle(
+                preset = preset,
+                intensity = intensity,
+                ambientBackdropPreset = ambientBackdropPreset,
+                ambientMotionEnabled = ambientMotionEnabled,
+                frostedHeroCardsEnabled = frostedHeroCardsEnabled
+            )
+        }
+    }
+
+    fun setWidgetThemeStyle(style: WidgetThemeStyle) {
+        viewModelScope.launch {
+            localPrefs.saveWidgetThemeStyle(style)
+            val snap = uiState.value
+            AttendanceWidgetStore.updateThemePrefs(
+                context = appContext,
+                widgetThemeStyleRaw = style.raw,
+                accentPaletteRaw = snap.accentPalette.raw,
+                themeModeRaw = snap.themeMode.raw
+            )
+            _snackbarMessage.value = "Widget style set to ${style.label}"
+        }
+    }
+
+    fun setStreakArenaPreferences(optedIn: Boolean, useAnonymousAlias: Boolean) {
+        val snapshot = uiState.value
+        val profile = snapshot.profile
+        viewModelScope.launch {
+            localPrefs.saveStreakArenaPreferences(optedIn, useAnonymousAlias)
+            if (profile != null && profile.className.isNotBlank()) {
+                val alias = if (useAnonymousAlias) {
+                    "Anonymous Student"
+                } else {
+                    profile.nickname?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: profile.firstName.trim().takeIf { it.isNotEmpty() }
+                        ?: "Anonymous Student"
+                }.take(24)
+                val todayKey = DateUtils.todayKey()
+                val weekKey = DateUtils.isoWeekKey(todayKey)
+                val weekAtt = snapshot.weeklySummary.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+                val weekTot = snapshot.weeklySummary.count { it.status == AttendanceStatus.PRESENT || it.status == AttendanceStatus.ABSENT || it.status == AttendanceStatus.MEDICAL || it.status == AttendanceStatus.SCHOOL_EVENT }
+                val existingBest = snapshot.classPulseSummary.myOwnEntry?.bestStreak ?: 0
+                val bestStreak = maxOf(existingBest, snapshot.currentStreak)
+                lastSyncedStreakSignature = ""
+                repository.upsertOwnClassStreakEntry(
+                    userId = currentUserId,
+                    displayAlias = alias,
+                    grade = profile.grade,
+                    alStream = profile.alStream,
+                    className = profile.className,
+                    currentStreak = snapshot.currentStreak,
+                    bestStreak = bestStreak,
+                    weeklyAttended = weekAtt,
+                    weeklyTotal = weekTot,
+                    weekKey = weekKey,
+                    optedIn = optedIn
+                )
+            }
+            _snackbarMessage.value = if (optedIn) {
+                "Joined ${profile?.className?.ifBlank { "Class" } ?: "Class"} Streak Arena!"
+            } else {
+                "Hidden from Class Streak Arena — your stats stay private"
+            }
+        }
+    }
+
+    fun cheerClassmate(targetUserId: String, displayAlias: String) {
+        val todayKey = DateUtils.todayKey()
+        if (targetUserId.isBlank() || targetUserId == currentUserId) return
+        if (targetUserId in uiState.value.cheeredPeerIdsToday) {
+            _snackbarMessage.value = "You already cheered $displayAlias today!"
+            return
+        }
+        viewModelScope.launch {
+            val res = repository.cheerClassmate(targetUserId)
+            res.onSuccess {
+                localPrefs.markPeerCheeredToday(todayKey, targetUserId)
+                _snackbarMessage.value = "Sent a streak cheer to $displayAlias!"
+            }.onFailure { err ->
+                _snackbarMessage.value = err.message ?: "Could not send cheer right now"
+            }
         }
     }
 
@@ -1721,7 +1902,7 @@ class AttendanceViewModel(
         }
     }
 
-    fun submitNextDayVote(going: Boolean) {
+    fun submitNextDayVote(going: Boolean, reasonTag: String? = null) {
         val snapshot = uiState.value
         if (!snapshot.appSettings.nextDayPollEnabled) return
         val window = snapshot.pollWindow
@@ -1729,12 +1910,16 @@ class AttendanceViewModel(
             _snackbarMessage.value = "Poll is only open from 8:00 PM to 5:00 AM before a school day"
             return
         }
+        val effectiveReason = reasonTag ?: snapshot.nextDayPollSummary.myVoteReasonTag?.takeIf { tag ->
+            NextDayVoteReason.fromRaw(tag)?.forGoing == going
+        }
         viewModelScope.launch {
             val res = repository.submitNextDayVote(
                 userId = currentUserId,
                 targetDateKey = window.targetDateKey,
                 going = going,
-                profile = snapshot.profile
+                profile = snapshot.profile,
+                reasonTag = effectiveReason
             )
             res.onSuccess {
                 runCatching {
@@ -1748,7 +1933,8 @@ class AttendanceViewModel(
                     going = going,
                     grade = snapshot.profile?.grade,
                     alStream = snapshot.profile?.alStream,
-                    className = snapshot.profile?.className
+                    className = snapshot.profile?.className,
+                    reasonTag = effectiveReason
                 )
                 val merged = fetchedVotes.filterNot { it.userId == currentUserId } + myVoteEntry
                 val summary = AttendanceCalculator.calculateNextDayPollSummary(
@@ -1757,14 +1943,24 @@ class AttendanceViewModel(
                     myClassName = snapshot.profile?.className,
                     targetDateKey = window.targetDateKey
                 )
+                AttendanceWidgetStore.updatePollState(
+                    context = appContext,
+                    pollEnabled = true,
+                    pollOpen = true,
+                    targetDateKey = window.targetDateKey,
+                    myVoteGoing = going,
+                    classGoingPercent = (summary.myClassGoingPercent ?: summary.goingPercent).roundToInt(),
+                    totalVotes = summary.totalVotes
+                )
                 ReminderScheduler.showNextDayPollAnalysisNotification(
                     context = appContext,
                     summary = summary,
                     userVotedGoing = going
                 )
                 val comingPct = summary.goingPercent.roundToInt()
+                val reasonSuffix = NextDayVoteReason.fromRaw(effectiveReason)?.let { " • ${it.label}" }.orEmpty()
                 _snackbarMessage.value =
-                    "Voted ${if (going) "Coming" else "Not Coming"} • $comingPct% coming (${summary.totalVotes} voted)"
+                    "Voted ${if (going) "Coming" else "Not Coming"}$reasonSuffix • $comingPct% coming (${summary.totalVotes} voted)"
             }.onFailure { err ->
                 _snackbarMessage.value = err.message ?: "Could not save your vote"
             }

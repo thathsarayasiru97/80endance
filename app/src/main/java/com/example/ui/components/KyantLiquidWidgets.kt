@@ -61,6 +61,7 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
+import com.example.ui.theme.LocalLiquidGlassStyle
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberBackdrop
@@ -107,14 +108,15 @@ fun LiquidBottomTabs(
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
     val isLightTheme = !isDark
+    val glassIntensity = LocalLiquidGlassStyle.current.clampedIntensity
     val accentColor = when {
         accentColorOverride.isSpecified -> accentColorOverride
         isLightTheme -> Color(0xFF0088FF)
         else -> Color(0xFF0091FF)
     }
     val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFA).copy(0.42f)
-        else Color(0xFF121212).copy(0.45f)
+        if (isLightTheme) Color(0xFFFAFAFA).copy(lerp(0.28f, 0.62f, glassIntensity))
+        else Color(0xFF121212).copy(lerp(0.32f, 0.64f, glassIntensity))
 
     val haptic = LocalHapticFeedback.current
     val latestSelectedTabIndex by rememberUpdatedState(selectedTabIndex)
@@ -259,8 +261,11 @@ fun LiquidBottomTabs(
                     effects = {
                         if (enableBarEffects) {
                             vibrancy()
-                            blur(8f.dp.toPx())
-                            lens(20f.dp.toPx(), 20f.dp.toPx())
+                            blur(lerp(4f, 16f, glassIntensity).dp.toPx())
+                            lens(
+                                lerp(14f, 24f, glassIntensity).dp.toPx(),
+                                lerp(14f, 24f, glassIntensity).dp.toPx()
+                            )
                         }
                     },
                     layerBlock = {

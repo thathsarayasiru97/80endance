@@ -138,6 +138,8 @@
         "al2028ExamDate": { "type": "string", "description": "ISO date YYYY-MM-DD for 2028 A/L exam start." },
         "nextDayPollEnabled": { "type": "boolean", "description": "Whether the 8:00 PM - 5:00 AM Next-Day School Poll feature is enabled globally." },
         "schoolStartDate": { "type": "string", "description": "Optional ISO date YYYY-MM-DD marking the school/A-L journey start date before which attendance cannot be logged." },
+        "directApkDownloadUrl": { "type": "string", "description": "Optional admin-configured HTTPS direct APK download override URL." },
+        "directApkVersion": { "type": "string", "description": "Optional version tag or code corresponding to directApkDownloadUrl so stale links auto-fallback." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
       },
       "required": [
@@ -214,10 +216,32 @@
         "grade": { "type": "string", "description": "Optional A/L grade for aggregated class pulse." },
         "alStream": { "type": "string", "description": "Optional A/L stream for aggregated pulse." },
         "className": { "type": "string", "description": "Optional class code (e.g., 13M2) for classmate summary." },
+        "reasonTag": { "type": "string", "enum": ["normal_day", "practical_lab", "sports_event", "exam_prep", "sick_rest", "tuition_clash"], "description": "Optional anonymous reason chip for attending or skipping tomorrow." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
       },
       "required": ["userId", "targetDateKey", "going", "createdAt", "updatedAt"]
+    },
+    "ClassStreakEntry": {
+      "title": "ClassStreakEntry",
+      "description": "Zero-PII opt-in class streak arena & weekly squad challenge entry keyed by student UID.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID matching document ID." },
+        "displayAlias": { "type": "string", "description": "Opt-in nickname or Anonymous Student alias (max 24 chars, zero PII)." },
+        "grade": { "type": "string", "enum": ["Grade 12", "Grade 13"] },
+        "alStream": { "type": "string", "enum": ["Physical Science", "Bio Science", "Commerce", "Arts", "Technology"] },
+        "className": { "type": "string", "description": "Class code such as 13M2." },
+        "currentStreak": { "type": "integer", "description": "Current consecutive attended school days." },
+        "bestStreak": { "type": "integer", "description": "Personal best consecutive attended school days." },
+        "weeklyAttended": { "type": "integer", "description": "Days attended in current ISO week (0-7)." },
+        "weeklyTotal": { "type": "integer", "description": "Counted school days in current ISO week (0-7)." },
+        "weekKey": { "type": "string", "description": "Current ISO week identifier (e.g., 2026-W48)." },
+        "cheerCount": { "type": "integer", "description": "Total classmate cheers received." },
+        "optedIn": { "type": "boolean", "description": "Whether the student has opted in to appear in the Class Streak Arena." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["userId", "displayAlias", "grade", "alStream", "className", "currentStreak", "bestStreak", "weeklyAttended", "weeklyTotal", "weekKey", "cheerCount", "optedIn", "updatedAt"]
     }
   },
   "firestore": {
@@ -264,6 +288,10 @@
     "/next_day_votes/{voteId}": {
       "schema": { "$ref": "#/entities/NextDaySchoolVote" },
       "description": "Zero-PII daily roll-call votes keyed deterministically by {targetDateKey}_{userId}."
+    },
+    "/class_streak_entries/{userId}": {
+      "schema": { "$ref": "#/entities/ClassStreakEntry" },
+      "description": "Zero-PII opt-in class streak arena entries with rate-limited +1 peer cheers."
     }
   }
 }

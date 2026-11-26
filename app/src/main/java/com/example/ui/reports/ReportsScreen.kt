@@ -57,6 +57,10 @@ import com.example.data.AcademicTerm
 import com.example.data.AttendanceCalculator
 import com.example.data.AttendanceStatus
 import com.example.data.DateUtils
+import com.example.ui.components.AnimatedOdometerText
+import com.example.ui.components.ClassPulseBannerCard
+import com.example.ui.components.ClassPulseBottomSheet
+import com.example.ui.components.FrostedHeroCard
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.LiquidGlassSegmentOption
 import com.example.ui.components.RollingCounterText
@@ -71,6 +75,8 @@ import java.util.Locale
 fun ReportsScreen(
     state: StudentAppState,
     onToggleCountExcused: (Boolean) -> Unit = {},
+    onSetStreakArenaPrefs: (Boolean, Boolean) -> Unit = { _, _ -> },
+    onCheerClassmate: (String, String) -> Unit = { _, _ -> },
     bottomBarPadding: Dp = 24.dp
 ) {
     val context = LocalContext.current
@@ -80,6 +86,7 @@ fun ReportsScreen(
     var selectedScopeIndex by remember { mutableStateOf(0) } // 0 = Overall, 1 = This Term, 2 = This Month
     var showMonthlyWrapped by remember { mutableStateOf(false) }
     var showParentSummary by remember { mutableStateOf(false) }
+    var showClassPulseSheet by remember { mutableStateOf(false) }
 
     val personalInsightsForWrapped = remember(
         state.attendanceRecords,
@@ -246,12 +253,10 @@ fun ReportsScreen(
                     )
                 }
                 StaggeredReveal(index = 2) {
-                    Card(
+                    FrostedHeroCard(
                         shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        tint = summaryAccent,
                         modifier = Modifier
                             .fillMaxWidth()
                             .animateContentSize(
@@ -291,9 +296,10 @@ fun ReportsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Text(
-                                    text = String.format(Locale.US, "%.1f%%", animatedPct),
+                                AnimatedOdometerText(
+                                    text = String.format(Locale.US, "%.1f%%", stats.percentage),
                                     style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.ExtraBold,
                                     color = summaryAccent
                                 )
                             }
@@ -563,6 +569,16 @@ fun ReportsScreen(
                 }
             }
 
+            if (!profile?.className.isNullOrBlank()) {
+                item(key = "reports_class_pulse_card") {
+                    ClassPulseBannerCard(
+                        summary = state.classPulseSummary,
+                        optedInArena = state.streakArenaOptIn,
+                        onOpenSheet = { showClassPulseSheet = true }
+                    )
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
     }
@@ -586,6 +602,19 @@ fun ReportsScreen(
             stats = stats,
             overallStats = state.overallStats,
             onDismiss = { showParentSummary = false }
+        )
+    }
+
+    if (showClassPulseSheet) {
+        ClassPulseBottomSheet(
+            summary = state.classPulseSummary,
+            currentUserId = profile?.userId?.ifBlank { profile.id }.orEmpty(),
+            optedInArena = state.streakArenaOptIn,
+            useAnonymousAlias = state.streakArenaUseAnonymousAlias,
+            cheeredPeerIdsToday = state.cheeredPeerIdsToday,
+            onUpdateArenaPrefs = onSetStreakArenaPrefs,
+            onCheerClassmate = onCheerClassmate,
+            onDismiss = { showClassPulseSheet = false }
         )
     }
 }

@@ -89,11 +89,63 @@ enum class AppAccentPalette(val raw: String, val label: String) {
     ROYAL_BLUE("royal_blue", "Royal Blue"),
     EMERALD("emerald", "Emerald"),
     CRIMSON("crimson", "Crimson"),
-    AMETHYST("amethyst", "Amethyst");
+    AMETHYST("amethyst", "Amethyst"),
+    SUNSET_AMBER("sunset_amber", "Sunset Amber"),
+    OCEAN_TEAL("ocean_teal", "Ocean Teal");
 
     companion object {
         fun fromRaw(raw: String?): AppAccentPalette =
             entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: ROYAL_BLUE
+    }
+}
+
+enum class GlassMaterialPreset(val raw: String, val label: String, val defaultIntensity: Float) {
+    CRYSTAL("crystal", "Crystal Clear", 0.48f),
+    BALANCED("balanced", "Balanced", 0.72f),
+    FROSTED("frosted", "Deep Frosted", 0.94f);
+
+    companion object {
+        fun fromRaw(raw: String?): GlassMaterialPreset =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: BALANCED
+    }
+}
+
+enum class AmbientBackdropPreset(val raw: String, val label: String) {
+    INDIGO_AURORA("indigo_aurora", "Indigo Aurora"),
+    SUNSET_SAFFRON("sunset_saffron", "Sunset Saffron"),
+    EMERALD_LAGOON("emerald_lagoon", "Emerald Lagoon"),
+    MIDNIGHT_PRISM("midnight_prism", "Midnight Prism"),
+    PURE_MINIMAL("pure_minimal", "Pure Minimal");
+
+    companion object {
+        fun fromRaw(raw: String?): AmbientBackdropPreset =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: INDIGO_AURORA
+    }
+}
+
+enum class WidgetThemeStyle(val raw: String, val label: String) {
+    AUTO_SYNC("auto_sync", "Auto Glass"),
+    FROSTED_LIGHT("frosted_light", "Frosted Light"),
+    SMOKED_DARK("smoked_dark", "Smoked Dark"),
+    ACCENT_TINT("accent_tint", "Accent Glass");
+
+    companion object {
+        fun fromRaw(raw: String?): WidgetThemeStyle =
+            entries.firstOrNull { it.raw.equals(raw, ignoreCase = true) } ?: AUTO_SYNC
+    }
+}
+
+enum class NextDayVoteReason(val raw: String, val label: String, val forGoing: Boolean) {
+    NORMAL_DAY("normal_day", "Normal Day", true),
+    PRACTICAL_LAB("practical_lab", "Practical / Lab", true),
+    SPORTS_EVENT("sports_event", "Sports / Event", true),
+    EXAM_PREP("exam_prep", "Exam / Test", true),
+    SICK_REST("sick_rest", "Rest / Unwell", false),
+    TUITION_CLASH("tuition_clash", "Study / Tuition", false);
+
+    companion object {
+        fun fromRaw(raw: String?): NextDayVoteReason? =
+            entries.firstOrNull { it.raw.equals(raw?.trim(), ignoreCase = true) }
     }
 }
 
@@ -458,10 +510,20 @@ data class AppSettings(
     val al2028ExamDate: String = "2028-08-07",
     val nextDayPollEnabled: Boolean = false,
     val schoolStartDate: String? = null,
+    val directApkDownloadUrl: String? = null,
+    val directApkVersion: String? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     val validSchoolStartDate: String?
         get() = schoolStartDate?.trim()?.takeIf { it.matches(DATE_KEY_REGEX) }
+
+    val validDirectApkDownloadUrl: String?
+        get() = directApkDownloadUrl?.trim()?.takeIf {
+            it.startsWith("https://", ignoreCase = true) && it.length in 12..500 && !it.contains(' ')
+        }
+
+    val cleanDirectApkVersion: String?
+        get() = directApkVersion?.trim()?.take(32)?.takeIf { it.isNotEmpty() }
 
     fun effectiveSchoolStartDate(examYear: Int? = null): String {
         validSchoolStartDate?.let { return it }
@@ -683,7 +745,34 @@ data class NextDaySchoolVote(
     val grade: String? = null,
     val alStream: String? = null,
     val className: String? = null,
+    val reasonTag: String? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val reasonEnum: NextDayVoteReason?
+        get() = NextDayVoteReason.fromRaw(reasonTag)
+}
+
+/**
+ * Privacy-safe, zero-PII opt-in entry for the Class Streak Arena & Weekly Squad Challenges.
+ * Never stores email, full name, or individual attendance dates.
+ */
+@Keep
+@IgnoreExtraProperties
+data class ClassStreakEntry(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val displayAlias: String = "Anonymous Student",
+    val grade: String = "Grade 13",
+    val alStream: String = "Physical Science",
+    val className: String = "",
+    val currentStreak: Int = 0,
+    val bestStreak: Int = 0,
+    val weeklyAttended: Int = 0,
+    val weeklyTotal: Int = 0,
+    val weekKey: String = "",
+    val cheerCount: Int = 0,
+    val optedIn: Boolean = false,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 

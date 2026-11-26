@@ -42,6 +42,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
                     ReminderScheduler.ACTION_UNLOCK_REMINDER -> handleDailyReminder(context, rescheduleRegular = false)
                     ReminderScheduler.ACTION_SNOOZE_1H -> handleSnoozeOneHour(context)
                     ReminderScheduler.ACTION_QUICK_YES -> handleQuickCheckIn(context, AttendanceStatus.PRESENT, source)
+                    ReminderScheduler.ACTION_QUICK_MEDICAL -> handleQuickCheckIn(context, AttendanceStatus.MEDICAL, source)
                     ReminderScheduler.ACTION_QUICK_EXCUSED -> handleQuickCheckIn(context, AttendanceStatus.SCHOOL_EVENT, source)
                     ReminderScheduler.ACTION_QUICK_NO -> handleQuickCheckIn(context, AttendanceStatus.ABSENT, source)
                     ReminderScheduler.ACTION_QUICK_UNDO -> handleQuickUndo(
@@ -529,6 +530,15 @@ class DailyReminderReceiver : BroadcastReceiver() {
             currentUserId = uid,
             myClassName = profile?.className,
             targetDateKey = window.targetDateKey
+        )
+        AttendanceWidgetStore.updatePollState(
+            context = appCtx,
+            pollEnabled = true,
+            pollOpen = true,
+            targetDateKey = window.targetDateKey,
+            myVoteGoing = going,
+            classGoingPercent = (summary.myClassGoingPercent ?: summary.goingPercent).toInt(),
+            totalVotes = summary.totalVotes
         )
         ReminderScheduler.showNextDayPollAnalysisNotification(
             context = appCtx,

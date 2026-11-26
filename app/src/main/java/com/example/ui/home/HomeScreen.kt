@@ -98,12 +98,16 @@ import com.example.data.CelebrationEvent
 import com.example.data.DateUtils
 import com.example.data.NextDayPollSummary
 import com.example.data.NextDayPollWindow
+import com.example.data.NextDayVoteReason
 import kotlin.math.roundToInt
 import com.example.data.Notice
 import com.example.ui.components.AlJourneyTimelineSheet
 import com.example.ui.components.AnimatedAlCountdownPill
 import com.example.ui.components.AnimatedEligibilityGauge
 import com.example.ui.components.CelebrationOverlay
+import com.example.ui.components.ClassPulseBannerCard
+import com.example.ui.components.ClassPulseBottomSheet
+import com.example.ui.components.FrostedHeroCard
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
@@ -142,7 +146,9 @@ fun HomeScreen(
     onSyncClick: () -> Unit,
     onQuickLogDate: (String, AttendanceStatus) -> Unit = { _, _ -> },
     onUndoSwipeDate: (String) -> Unit = {},
-    onVoteNextDay: (Boolean) -> Unit = {},
+    onVoteNextDay: (Boolean, String?) -> Unit = { _, _ -> },
+    onSetStreakArenaPrefs: (Boolean, Boolean) -> Unit = { _, _ -> },
+    onCheerClassmate: (String, String) -> Unit = { _, _ -> },
     onSaveCustomAvatar: (String?) -> Unit = {},
     onDismissBroadcast: (String) -> Unit = {},
     onDismissResolvedFeedback: (String) -> Unit = {},
@@ -173,6 +179,7 @@ fun HomeScreen(
     var showParentSummary by remember { mutableStateOf(false) }
     var showAdminOnlineUsersSheet by remember { mutableStateOf(false) }
     var showAdminMembersSheet by remember { mutableStateOf(false) }
+    var showClassPulseSheet by remember { mutableStateOf(false) }
     var dismissedBatchMilestoneDays by rememberSaveable { mutableStateOf<Int?>(null) }
     var visible by remember { mutableStateOf(false) }
     var heroCountdownExpanded by remember { mutableStateOf(state.daysUntilAlExam > 0) }
@@ -621,12 +628,10 @@ fun HomeScreen(
                     visible = visible,
                     enter = fadeIn() + slideInVertically(spring(stiffness = Spring.StiffnessLow)) { 30 }
                 ) {
-                    Card(
+                    FrostedHeroCard(
                         shape = RoundedCornerShape(26.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
@@ -1346,6 +1351,19 @@ fun HomeScreen(
                 }
             }
 
+            // 5b. Class Pulse Banner (Weekly Squad Goal, Grade Podium & Opt-In Streak Arena)
+            if (!profile?.className.isNullOrBlank()) {
+                item(key = "home_class_pulse_card") {
+                    StaggeredReveal(index = 4) {
+                        ClassPulseBannerCard(
+                            summary = state.classPulseSummary,
+                            optedInArena = state.streakArenaOptIn,
+                            onOpenSheet = { showClassPulseSheet = true }
+                        )
+                    }
+                }
+            }
+
             // 6. Next Sri Lankan Poya Day / Holiday Card
             state.nextPoyaOrHoliday?.let { nextHoliday ->
                 item {
@@ -1521,14 +1539,27 @@ fun HomeScreen(
             onDismiss = { showPhotoDialog = false }
         )
     }
+    if (showClassPulseSheet) {
+        ClassPulseBottomSheet(
+            summary = state.classPulseSummary,
+            currentUserId = profile?.userId?.ifBlank { profile.id }.orEmpty(),
+            optedInArena = state.streakArenaOptIn,
+            useAnonymousAlias = state.streakArenaUseAnonymousAlias,
+            cheeredPeerIdsToday = state.cheeredPeerIdsToday,
+            onUpdateArenaPrefs = onSetStreakArenaPrefs,
+            onCheerClassmate = onCheerClassmate,
+            onDismiss = { showClassPulseSheet = false }
+        )
+    }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun NextDaySchoolPollCard(
     window: NextDayPollWindow,
     summary: NextDayPollSummary,
     myClassName: String?,
-    onVote: (Boolean) -> Unit
+    onVote: (Boolean, String?) -> Unit
 ) {
     val semantic = LocalAttendanceColors.current
     val myVote = summary.myVoteGoing
@@ -1649,7 +1680,7 @@ private fun NextDaySchoolPollCard(
                 val noSelected = myVote == false
 
                 LiquidGlassButton(
-                    onClick = { onVote(true) },
+                    onClick = { onVote(true, null) },
                     tint = if (yesSelected) semantic.present else semantic.present.copy(alpha = 0.55f),
                     contentColor = if (yesSelected) semantic.present else semantic.onPresentContainer,
                     minHeight = 50.dp,
@@ -1673,7 +1704,7 @@ private fun NextDaySchoolPollCard(
                 }
 
                 LiquidGlassButton(
-                    onClick = { onVote(false) },
+                    onClick = { onVote(false, null) },
                     tint = if (noSelected) semantic.absent else MaterialTheme.colorScheme.outline,
                     contentColor = if (noSelected) semantic.absent else MaterialTheme.colorScheme.onSurface,
                     minHeight = 50.dp,
@@ -1694,6 +1725,62 @@ private fun NextDaySchoolPollCard(
                         overflow = TextOverflow.Ellipsis,
                         fontWeight = if (noSelected) FontWeight.Bold else FontWeight.SemiBold
                     )
+                }
+            }
+
+            // Optional 1-tap anonymous reason chips after choosing Coming / Skipping
+            if (myVote != null) {
+                val matchingReasons = remember(myVote) {
+                    NextDayVoteReason.entries.filter { it.forGoing == myVote }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Optional anonymous reason (tap to tag):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        matchingReasons.forEach { reason ->
+                            val isSelected = summary.myVoteReasonTag == reason.raw
+                            Surface(
+                                color = if (isSelected) {
+                                    if (myVote) semantic.presentContainer else semantic.absentContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerLow
+                                },
+                                shape = RoundedCornerShape(50),
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = if (isSelected) {
+                                        if (myVote) semantic.present else semantic.absent
+                                    } else {
+                                        MaterialTheme.colorScheme.outlineVariant
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .clickable {
+                                        onVote(myVote, if (isSelected) "" else reason.raw)
+                                    }
+                                    .testTag("poll_reason_chip_${reason.raw}")
+                            ) {
+                                Text(
+                                    text = reason.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) {
+                                        if (myVote) semantic.onPresentContainer else semantic.onAbsentContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1746,13 +1833,66 @@ private fun NextDaySchoolPollCard(
                             )
                         }
                     }
-                    val classSuffix = if (summary.myClassTotalCount > 0 && !myClassName.isNullOrBlank()) {
-                        " • ${summary.myClassGoingCount}/${summary.myClassTotalCount} in $myClassName coming"
-                    } else {
-                        ""
+
+                    // Class vs. School turnout split pill
+                    if (summary.myClassTotalCount > 0 && !myClassName.isNullOrBlank()) {
+                        val classPct = (summary.myClassGoingPercent ?: 0.0).roundToInt()
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "$myClassName: $classPct% coming (${summary.myClassGoingCount}/${summary.myClassTotalCount})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "School: $comingPctInt%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
+
+                    // Top anonymous reasons pills
+                    val topReasons = if (summary.topClassReasons.isNotEmpty()) {
+                        summary.topClassReasons
+                    } else {
+                        summary.topSchoolReasons
+                    }
+                    if (topReasons.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            topReasons.take(2).forEach { (reason, count) ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+                                    shape = RoundedCornerShape(50)
+                                ) {
+                                    Text(
+                                        text = "Top reason: ${reason.label} ($count)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Text(
-                        text = "Switch your vote anytime before 5:00 AM$classSuffix",
+                        text = "Switch your vote anytime before 5:00 AM",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

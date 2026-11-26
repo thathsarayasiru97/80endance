@@ -546,6 +546,33 @@ class AdminViewModel(
         }
     }
 
+    fun saveDirectApkOverride(url: String, version: String) {
+        val cleanUrl = url.trim()
+        val cleanVersion = version.trim().take(32)
+        if (cleanUrl.isNotEmpty() && (!cleanUrl.startsWith("https://", ignoreCase = true) || cleanUrl.contains(' '))) {
+            _snackbar.value = "Direct APK link must be a valid https:// URL"
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val updated = uiState.value.appSettings.copy(
+                directApkDownloadUrl = cleanUrl.ifEmpty { null },
+                directApkVersion = if (cleanUrl.isEmpty()) null else cleanVersion.ifEmpty { null }
+            )
+            val res = repository.saveAppSettings(updated)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = if (cleanUrl.isEmpty()) {
+                    "Direct APK override cleared — using automatic GitHub release APK"
+                } else {
+                    "Direct APK download link saved for ${cleanVersion.ifEmpty { "latest release" }}"
+                }
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not save direct APK link"
+            }
+        }
+    }
+
     fun rolloverTerm(
         targetTerm: AcademicTerm,
         alsoPostNotice: Boolean,

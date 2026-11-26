@@ -107,7 +107,9 @@ import com.example.ui.home.HomeScreen
 import com.example.ui.reports.ReportsScreen
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.setup.AcademicSetupScreen
+import com.example.data.AppSettings
 import com.example.ui.theme.EightyEndanceTheme
+import com.example.ui.theme.LiquidGlassStyleConfig
 import com.example.viewmodel.AdminViewModel
 import com.example.viewmodel.AttendanceViewModel
 import com.google.firebase.Firebase
@@ -149,7 +151,14 @@ class MainActivity : ComponentActivity() {
 
             EightyEndanceTheme(
                 themeMode = localPrefs.themeMode,
-                accentPalette = localPrefs.accentPalette
+                accentPalette = localPrefs.accentPalette,
+                liquidGlassStyle = LiquidGlassStyleConfig(
+                    preset = localPrefs.glassMaterialPreset,
+                    intensity = localPrefs.glassIntensity,
+                    ambientBackdropPreset = localPrefs.ambientBackdropPreset,
+                    ambientMotionEnabled = localPrefs.ambientMotionEnabled,
+                    frostedHeroCardsEnabled = localPrefs.frostedHeroCardsEnabled
+                )
             ) {
                 AppRoot(
                     openCheckInFromNotification = openCheckInTrigger,
@@ -211,6 +220,7 @@ private fun AppRoot(
     var isCheckingUpdates by remember { mutableStateOf(false) }
     var updateFeedbackMessage by remember { mutableStateOf<String?>(null) }
     var updateStatusSummary by remember { mutableStateOf<UpdateCheckStatusSummary?>(null) }
+    var latestAppSettings by remember { mutableStateOf<AppSettings?>(null) }
 
     fun buildUpdateSummary(result: UpdateCheckResult): UpdateCheckStatusSummary {
         val now = System.currentTimeMillis()
@@ -345,7 +355,8 @@ private fun AppRoot(
                         updateFeedbackMessage = updateFeedbackMessage,
                         onConsumeUpdateFeedback = { updateFeedbackMessage = null },
                         onCheckForUpdates = runManualUpdateCheck,
-                        onOpenGitHubReleases = openGitHubReleases
+                        onOpenGitHubReleases = openGitHubReleases,
+                        onAppSettingsUpdated = { latestAppSettings = it }
                     )
                 }
             }
@@ -353,9 +364,21 @@ private fun AppRoot(
     }
 
     pendingUpdateInfo?.let { info ->
+        val resolvedTarget = remember(info, latestAppSettings) {
+            AppUpdateChecker.resolveBestDownloadTarget(info, latestAppSettings)
+        }
         UpdateAvailableDialog(
             updateInfo = info,
+            resolvedTarget = resolvedTarget,
             onUpdateNow = {
+                val opened = AppUpdateChecker.openSafeHttpsUrl(context, resolvedTarget.url) ||
+                    AppUpdateChecker.openLatestRelease(context, resolvedTarget.fallbackReleaseUrl)
+                if (!opened) {
+                    updateFeedbackMessage = context.getString(R.string.update_browser_error)
+                }
+                pendingUpdateInfo = null
+            },
+            onViewReleasePage = {
                 val opened = AppUpdateChecker.openLatestRelease(context, info.releaseUrl)
                 if (!opened) {
                     updateFeedbackMessage = context.getString(R.string.update_browser_error)
@@ -379,7 +402,8 @@ private fun AuthenticatedAppShell(
     updateFeedbackMessage: String?,
     onConsumeUpdateFeedback: () -> Unit,
     onCheckForUpdates: () -> Unit,
-    onOpenGitHubReleases: () -> Unit
+    onOpenGitHubReleases: () -> Unit,
+    onAppSettingsUpdated: (AppSettings) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -436,6 +460,9 @@ private fun AuthenticatedAppShell(
     }
 
     val state by attendanceViewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(state.appSettings) {
+        onAppSettingsUpdated(state.appSettings)
+    }
     val scopeMode by attendanceViewModel.scopeMode.collectAsStateWithLifecycle()
     val manualCheckInDate by attendanceViewModel.manualCheckInDate.collectAsStateWithLifecycle()
     val snackbarMessage by attendanceViewModel.snackbarMessage.collectAsStateWithLifecycle()
@@ -695,7 +722,13 @@ private fun AuthenticatedAppShell(
                             onSyncClick = { attendanceViewModel.triggerManualSync() },
                             onQuickLogDate = { dateKey, status -> attendanceViewModel.quickLogAttendance(dateKey, status) },
                             onUndoSwipeDate = { dateKey -> attendanceViewModel.deleteAttendance(dateKey) },
-                            onVoteNextDay = { going -> attendanceViewModel.submitNextDayVote(going) },
+                            onVoteNextDay = { going, reasonTag -> attendanceViewModel.submitNextDayVote(going, reasonTag) },
+                            onSetStreakArenaPrefs = { optedIn, anon ->
+                                attendanceViewModel.setStreakArenaPreferences(optedIn, anon)
+                            },
+                            onCheerClassmate = { uid, alias ->
+                                attendanceViewModel.cheerClassmate(uid, alias)
+                            },
                             onSaveCustomAvatar = { base64 -> attendanceViewModel.updateCustomAvatar(base64) },
                             onDismissBroadcast = { id -> attendanceViewModel.dismissBroadcastAlert(id) },
                             onDismissResolvedFeedback = { id -> attendanceViewModel.dismissResolvedFeedbackAlert(id) },
@@ -748,6 +781,12 @@ private fun AuthenticatedAppShell(
                         AppTab.REPORTS -> ReportsScreen(
                             state = state,
                             onToggleCountExcused = {},
+                            onSetStreakArenaPrefs = { optedIn, anon ->
+                                attendanceViewModel.setStreakArenaPreferences(optedIn, anon)
+                            },
+                            onCheerClassmate = { uid, alias ->
+                                attendanceViewModel.cheerClassmate(uid, alias)
+                            },
                             bottomBarPadding = bottomScrollPadding
                         )
 
@@ -792,6 +831,18 @@ private fun AuthenticatedAppShell(
                             },
                             isCheckingBackgroundAlerts = isCheckingBackgroundAlerts,
                             onUpdateAppearance = { mode, palette -> attendanceViewModel.setAppearance(mode, palette) },
+                            onUpdateLiquidGlassStyle = { preset, intensity, ambient, motion, frostedHero ->
+                                attendanceViewModel.setLiquidGlassStyle(
+                                    preset = preset,
+                                    intensity = intensity,
+                                    ambientBackdropPreset = ambient,
+                                    ambientMotionEnabled = motion,
+                                    frostedHeroCardsEnabled = frostedHero
+                                )
+                            },
+                            onUpdateWidgetThemeStyle = { style ->
+                                attendanceViewModel.setWidgetThemeStyle(style)
+                            },
                             onSubmitFeedback = { type, title, message, onDone ->
                                 attendanceViewModel.submitFeedback(type, title, message, onDone)
                             },

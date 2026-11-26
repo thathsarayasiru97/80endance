@@ -150,7 +150,10 @@ service cloud.firestore {
              isValidDateKey(data.al2027ExamDate) &&
              isValidDateKey(data.al2028ExamDate) &&
              (!('nextDayPollEnabled' in data) || data.nextDayPollEnabled is bool) &&
-             (!('schoolStartDate' in data) || data.schoolStartDate == null || data.schoolStartDate == '' || isValidDateKey(data.schoolStartDate));
+             (!('schoolStartDate' in data) || data.schoolStartDate == null || data.schoolStartDate == '' || isValidDateKey(data.schoolStartDate)) &&
+             (!('directApkDownloadUrl' in data) || data.directApkDownloadUrl == null || data.directApkDownloadUrl == '' ||
+               (data.directApkDownloadUrl is string && data.directApkDownloadUrl.size() <= 500 && data.directApkDownloadUrl.matches('^https://.*$'))) &&
+             isOptionalString(data, 'directApkVersion', 0, 32);
     }
 
     function isValidFeedbackReport(data) {
@@ -241,7 +244,24 @@ service cloud.firestore {
              data.going is bool &&
              isOptionalString(data, 'grade', 0, 32) &&
              isOptionalString(data, 'alStream', 0, 48) &&
-             isOptionalString(data, 'className', 0, 32);
+             isOptionalString(data, 'className', 0, 32) &&
+             (!('reasonTag' in data) || data.reasonTag == null || data.reasonTag == '' ||
+               data.reasonTag in ['normal_day', 'practical_lab', 'sports_event', 'exam_prep', 'sick_rest', 'tuition_clash']);
+    }
+
+    function isValidClassStreakEntry(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayAlias is string && data.displayAlias.size() >= 1 && data.displayAlias.size() <= 24 &&
+             data.grade in ['Grade 12', 'Grade 13'] &&
+             data.alStream in ['Physical Science', 'Bio Science', 'Commerce', 'Arts', 'Technology'] &&
+             data.className is string && data.className.size() >= 1 && data.className.size() <= 20 &&
+             data.currentStreak is int && data.currentStreak >= 0 && data.currentStreak <= 400 &&
+             data.bestStreak is int && data.bestStreak >= data.currentStreak && data.bestStreak <= 400 &&
+             data.weeklyAttended is int && data.weeklyAttended >= 0 && data.weeklyAttended <= 7 &&
+             data.weeklyTotal is int && data.weeklyTotal >= data.weeklyAttended && data.weeklyTotal <= 7 &&
+             data.weekKey is string && data.weekKey.size() >= 6 && data.weekKey.size() <= 12 &&
+             data.cheerCount is int && data.cheerCount >= 0 && data.cheerCount <= 100000 &&
+             data.optedIn is bool;
     }
 
     // --- COLLECTION 1: USER PROFILES (PII STRICTLY ISOLATED) ---
@@ -546,7 +566,7 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
                          'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
-                         'nextDayPollEnabled', 'schoolStartDate', 'updatedAt'
+                         'nextDayPollEnabled', 'schoolStartDate', 'directApkDownloadUrl', 'directApkVersion', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().updatedAt);
 
@@ -557,12 +577,12 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
                          'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
-                         'nextDayPollEnabled', 'schoolStartDate', 'updatedAt'
+                         'nextDayPollEnabled', 'schoolStartDate', 'directApkDownloadUrl', 'directApkVersion', 'updatedAt'
                        ]) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'defaultEligibilityPercent', 'defaultReminderHour', 'defaultReminderMinute',
                          'currentAcademicYear', 'al2026ExamDate', 'al2027ExamDate', 'al2028ExamDate',
-                         'nextDayPollEnabled', 'schoolStartDate', 'updatedAt'
+                         'nextDayPollEnabled', 'schoolStartDate', 'directApkDownloadUrl', 'directApkVersion', 'updatedAt'
                        ]);
 
       allow delete: if false;
@@ -719,7 +739,7 @@ service cloud.firestore {
                          'userId', 'targetDateKey', 'going', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'createdAt', 'updatedAt'
+                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'reasonTag', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt);
@@ -733,13 +753,68 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        incoming().keys().hasOnly([
-                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'createdAt', 'updatedAt'
+                         'userId', 'targetDateKey', 'going', 'grade', 'alStream', 'className', 'reasonTag', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'going', 'grade', 'alStream', 'className', 'updatedAt'
+                         'going', 'grade', 'alStream', 'className', 'reasonTag', 'updatedAt'
                        ]);
 
       allow delete: if isSignedIn() && isValidId(voteId) && (isOwner(existing().userId) || isAdmin());
+    }
+
+    // --- COLLECTION 13: OPT-IN CLASS STREAK ARENA & FRIENDLY CHEERS (ZERO PII) ---
+    match /class_streak_entries/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       (isOwner(userId) || isAdmin()) &&
+                       isValidClassStreakEntry(incoming()) &&
+                       incoming().userId == userId &&
+                       (isAdmin() || incoming().cheerCount == 0) &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayAlias', 'grade', 'alStream', 'className',
+                         'currentStreak', 'bestStreak', 'weeklyAttended', 'weeklyTotal',
+                         'weekKey', 'cheerCount', 'optedIn', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayAlias', 'grade', 'alStream', 'className',
+                         'currentStreak', 'bestStreak', 'weeklyAttended', 'weeklyTotal',
+                         'weekKey', 'cheerCount', 'optedIn', 'updatedAt'
+                       ]) &&
+                       isValidTimestamp(incoming().updatedAt);
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidClassStreakEntry(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayAlias', 'grade', 'alStream', 'className',
+                         'currentStreak', 'bestStreak', 'weeklyAttended', 'weeklyTotal',
+                         'weekKey', 'cheerCount', 'optedIn', 'updatedAt'
+                       ]) &&
+                       (
+                         isAdmin() ||
+                         (
+                           isOwner(userId) &&
+                           incoming().cheerCount == existing().cheerCount &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayAlias', 'grade', 'alStream', 'className',
+                             'currentStreak', 'bestStreak', 'weeklyAttended', 'weeklyTotal',
+                             'weekKey', 'optedIn', 'updatedAt'
+                           ])
+                         ) ||
+                         (
+                           request.auth.uid != userId &&
+                           existing().optedIn == true &&
+                           incoming().cheerCount == existing().cheerCount + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['cheerCount', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
     }
   }
 }

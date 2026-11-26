@@ -1,22 +1,24 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,54 +27,118 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.delay
 
 /**
- * Staggered spring reveal for screen cards and sections.
- * Reserves stable LazyColumn layout bounds while gliding cards upward with soft spring scale & fade.
+ * Rolling odometer counter for integer counts with optional prefix/suffix (streaks, votes, A/L countdown).
+ */
+@Composable
+fun RollingCounterText(
+    count: Int,
+    modifier: Modifier = Modifier,
+    prefix: String = "",
+    suffix: String = "",
+    style: TextStyle = LocalTextStyle.current,
+    fontWeight: FontWeight? = null,
+    color: Color = Color.Unspecified
+) {
+    AnimatedOdometerText(
+        text = "$prefix$count$suffix",
+        modifier = modifier,
+        style = style,
+        color = color,
+        fontWeight = fontWeight
+    )
+}
+
+/**
+ * Rolling odometer counter that smoothly transitions individual digits vertically
+ * when values change (attendance percentages, streaks, poll counts).
+ */
+@Composable
+fun AnimatedOdometerText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+    fontWeight: FontWeight? = null
+) {
+    val resolvedStyle = if (fontWeight != null) style.copy(fontWeight = fontWeight) else style
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        text.forEachIndexed { index, char ->
+            AnimatedContent(
+                targetState = char,
+                transitionSpec = {
+                    val rollingUp = targetState >= initialState
+                    val enter = slideInVertically(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    ) { height -> if (rollingUp) height / 2 else -height / 2 } + fadeIn(tween(150))
+                    val exit = slideOutVertically(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    ) { height -> if (rollingUp) -height / 2 else height / 2 } + fadeOut(tween(120))
+                    (enter togetherWith exit).using(SizeTransform(clip = false))
+                },
+                label = "odometer_char_$index"
+            ) { targetChar ->
+                Text(
+                    text = targetChar.toString(),
+                    style = resolvedStyle,
+                    color = color,
+                    softWrap = false,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Calm one-shot staggered entrance reveal for dashboard, calendar, and report sections.
+ * Never replays when scrolling or recomposing.
  */
 @Composable
 fun StaggeredReveal(
-    index: Int,
+    index: Int = 0,
+    delayMillis: Int = (index.coerceIn(0, 8)) * 42,
     modifier: Modifier = Modifier,
-    stepDelayMs: Long = 45L,
-    slideOffsetPx: Float = 36f,
     content: @Composable () -> Unit
 ) {
-    var revealed by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(delayMillis <= 0) }
     LaunchedEffect(Unit) {
-        val delayMs = (index.coerceIn(0, 10) * stepDelayMs)
-        if (delayMs > 0L) delay(delayMs)
-        revealed = true
+        if (!visible) {
+            delay(delayMillis.toLong())
+            visible = true
+        }
     }
-
     val progress by animateFloatAsState(
-        targetValue = if (revealed) 1f else 0f,
+        targetValue = if (visible) 1f else 0f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioLowBouncy,
+            dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMediumLow
         ),
-        label = "staggered_reveal_$index"
+        label = "staggered_reveal"
     )
-    val alpha by animateFloatAsState(
-        targetValue = if (revealed) 1f else 0f,
-        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
-        label = "staggered_alpha_$index"
-    )
-
-    androidx.compose.foundation.layout.Box(
+    Box(
         modifier = modifier.graphicsLayer {
-            this.alpha = alpha.coerceIn(0f, 1f)
-            translationY = (1f - progress) * slideOffsetPx
-            val s = 0.95f + (0.05f * progress)
-            scaleX = s
-            scaleY = s
+            alpha = progress
+            translationY = (1f - progress) * 18f
         }
     ) {
         content()
@@ -80,7 +146,7 @@ fun StaggeredReveal(
 }
 
 /**
- * Tactile spring press scale (squish & bouncy rebound) paired with an optional click handler.
+ * Tactile 120Hz bouncy clickable modifier for cards, pills, and calendar cells.
  */
 fun Modifier.bouncyClickable(
     enabled: Boolean = true,
@@ -95,7 +161,7 @@ fun Modifier.bouncyClickable(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
-        label = "bouncy_press_scale"
+        label = "bouncy_click_scale"
     )
     this
         .graphicsLayer {
@@ -104,75 +170,103 @@ fun Modifier.bouncyClickable(
         }
         .clickable(
             interactionSource = interactionSource,
-            indication = androidx.compose.material3.ripple(),
+            indication = null,
             enabled = enabled,
             onClick = onClick
         )
 }
 
 /**
- * Odometer-style vertical rolling counter for live numbers (account count, streaks, day totals).
+ * Tactile 120Hz press-scale spring feedback for clickable cards and action chips without consuming click.
+ */
+fun Modifier.springPressScale(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.965f
+): Modifier = composed {
+    if (!enabled) return@composed this
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "spring_press_scale"
+    )
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .pointerInput(enabled) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitFirstDown(requireUnconsumed = false)
+                    pressed = true
+                    waitForUpOrCancellation()
+                    pressed = false
+                }
+            }
+        }
+}
+
+/**
+ * Micro-celebration scale pop triggered whenever [triggerKey] increments (e.g., cheering a classmate).
  */
 @Composable
-fun RollingCounterText(
-    count: Int,
+fun CheerBurstBounce(
+    triggerKey: Int,
     modifier: Modifier = Modifier,
-    prefix: String = "",
-    suffix: String = "",
-    style: TextStyle = LocalTextStyle.current,
-    fontWeight: FontWeight? = null,
-    color: Color = Color.Unspecified
+    content: @Composable () -> Unit
 ) {
-    AnimatedContent(
-        targetState = count,
-        transitionSpec = {
-            if (targetState >= initialState) {
-                (slideInVertically(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) { it / 2 } + fadeIn(tween(180)))
-                    .togetherWith(
-                        slideOutVertically(tween(150)) { -it / 2 } + fadeOut(tween(140))
-                    )
-            } else {
-                (slideInVertically(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) { -it / 2 } + fadeIn(tween(180)))
-                    .togetherWith(
-                        slideOutVertically(tween(150)) { it / 2 } + fadeOut(tween(140))
-                    )
-            }
-        },
-        label = "rolling_counter",
-        modifier = modifier
-    ) { value ->
-        Text(
-            text = "$prefix$value$suffix",
-            style = style,
-            fontWeight = fontWeight,
-            color = color
-        )
+    val scale = remember { Animatable(1f) }
+    LaunchedEffect(triggerKey) {
+        if (triggerKey > 0) {
+            scale.snapTo(1f)
+            scale.animateTo(
+                targetValue = 1.24f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessHigh
+                )
+            )
+            scale.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            )
+        }
+    }
+    Box(
+        modifier = modifier.graphicsLayer {
+            scaleX = scale.value
+            scaleY = scale.value
+        }
+    ) {
+        content()
     }
 }
 
 /**
- * Finite gentle chime/wiggle rotation played once when a notification banner or achievement appears.
+ * Subtle damped bell/trophy chime rotation in degrees triggered whenever [triggerKey] changes.
  */
 @Composable
 fun rememberChimeRotation(triggerKey: Any?): Float {
-    val rotation = remember(triggerKey) { Animatable(0f) }
+    val rotation = remember { Animatable(0f) }
     LaunchedEffect(triggerKey) {
-        rotation.snapTo(0f)
-        rotation.animateTo(16f, tween(90, easing = FastOutSlowInEasing))
-        rotation.animateTo(-14f, tween(100, easing = FastOutSlowInEasing))
-        rotation.animateTo(10f, tween(90, easing = FastOutSlowInEasing))
-        rotation.animateTo(-6f, tween(80, easing = FastOutSlowInEasing))
-        rotation.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+        if (triggerKey != null) {
+            rotation.snapTo(0f)
+            val peaks = listOf(-14f, 12f, -8f, 5f, 0f)
+            for (angle in peaks) {
+                rotation.animateTo(
+                    targetValue = angle,
+                    animationSpec = tween(durationMillis = 85)
+                )
+            }
+        }
     }
     return rotation.value
 }
+

@@ -1,12 +1,15 @@
 package com.example.ui.settings
 
 import android.Manifest
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
@@ -31,6 +34,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -68,6 +73,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -95,6 +101,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -106,11 +113,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.R
+import com.example.data.AmbientBackdropPreset
 import com.example.data.AppAccentPalette
 import com.example.data.AppThemeMode
 import com.example.data.DateUtils
 import com.example.data.FeedbackType
+import com.example.data.GlassMaterialPreset
+import com.example.data.WidgetThemeStyle
 import com.example.system.AppUpdateChecker
+import com.example.system.AttendanceWidgetProvider
 import com.example.system.ReminderScheduler
 import com.example.system.UpdateCheckStatusSummary
 import com.example.ui.components.BubbleLookPreset
@@ -118,7 +129,9 @@ import com.example.ui.components.DevelopedByAtayaFooter
 import com.example.ui.components.FeedbackReportDialog
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.LiquidGlassSegmentOption
+import com.example.ui.components.LiquidSlider
 import com.example.ui.components.LiquidToggle
+import com.example.ui.components.LocalGlassBackdrop
 import com.example.ui.components.MorphingThemeToggleButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.ProfileAvatar
@@ -127,10 +140,13 @@ import com.example.ui.components.SlidableLiquidGlassSegmentedBar
 import com.example.ui.components.SyncStatusPill
 import com.example.ui.components.ThinFilmBubbleInteractiveCard
 import com.example.ui.reports.RegisterVerificationDialog
+import com.example.ui.theme.LocalAttendanceColors
 import com.example.ui.theme.accentSwatchColor
 import com.example.viewmodel.StudentAppState
+import java.util.Locale
+import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     state: StudentAppState,
@@ -152,6 +168,14 @@ fun SettingsScreen(
     onCheckBackgroundNotificationsNow: () -> Unit = {},
     isCheckingBackgroundAlerts: Boolean = false,
     onUpdateAppearance: (AppThemeMode, AppAccentPalette) -> Unit = { _, _ -> },
+    onUpdateLiquidGlassStyle: (
+        preset: GlassMaterialPreset,
+        intensity: Float,
+        ambientBackdropPreset: AmbientBackdropPreset,
+        ambientMotionEnabled: Boolean,
+        frostedHeroCardsEnabled: Boolean
+    ) -> Unit = { _, _, _, _, _ -> },
+    onUpdateWidgetThemeStyle: (WidgetThemeStyle) -> Unit = {},
     onSubmitFeedback: (type: FeedbackType, title: String, message: String, onDone: () -> Unit) -> Unit = { _, _, _, _ -> },
     isSubmittingFeedback: Boolean = false,
     isCheckingUpdates: Boolean = false,
@@ -957,10 +981,10 @@ fun SettingsScreen(
                                 .testTag("settings_theme_mode_row")
                         )
 
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             AppAccentPalette.entries.forEach { palette ->
                                 val selected = state.accentPalette == palette
@@ -985,7 +1009,7 @@ fun SettingsScreen(
                                                 scaleX = scale
                                                 scaleY = scale
                                             }
-                                            .size(44.dp)
+                                            .size(42.dp)
                                             .clip(CircleShape)
                                             .background(swatchColor)
                                             .border(
@@ -1003,7 +1027,7 @@ fun SettingsScreen(
                                                 imageVector = Icons.Rounded.Check,
                                                 contentDescription = "${palette.label} selected",
                                                 tint = if (previewDark) Color.Black else Color.White,
-                                                modifier = Modifier.size(20.dp)
+                                                modifier = Modifier.size(19.dp)
                                             )
                                         }
                                     }
@@ -1017,6 +1041,445 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        // Liquid Glass 2.0 Personalization Studio
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Liquid Glass Studio",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        val materialPresetOptions = remember {
+                            GlassMaterialPreset.entries.map { preset ->
+                                LiquidGlassSegmentOption(
+                                    label = preset.label,
+                                    testTag = "glass_preset_${preset.raw}"
+                                )
+                            }
+                        }
+                        SlidableLiquidGlassSegmentedBar(
+                            options = materialPresetOptions,
+                            selectedIndex = GlassMaterialPreset.entries.indexOf(state.glassMaterialPreset).coerceAtLeast(0),
+                            onOptionSelected = { idx ->
+                                GlassMaterialPreset.entries.getOrNull(idx)?.let { preset ->
+                                    onUpdateLiquidGlassStyle(
+                                        preset,
+                                        preset.defaultIntensity,
+                                        state.ambientBackdropPreset,
+                                        state.ambientMotionEnabled,
+                                        state.frostedHeroCardsEnabled
+                                    )
+                                }
+                            },
+                            barHeight = 42.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_glass_preset_bar")
+                        )
+
+                        // Live Glass Intensity Slider
+                        val glassBackdrop = LocalGlassBackdrop.current
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Glass Refraction & Frost",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${(state.glassIntensity * 100f).roundToInt()}%",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (glassBackdrop != null) {
+                                LiquidSlider(
+                                    value = { state.glassIntensity },
+                                    onValueChange = { nextVal ->
+                                        onUpdateLiquidGlassStyle(
+                                            state.glassMaterialPreset,
+                                            nextVal.coerceIn(0f, 1f),
+                                            state.ambientBackdropPreset,
+                                            state.ambientMotionEnabled,
+                                            state.frostedHeroCardsEnabled
+                                        )
+                                    },
+                                    valueRange = 0f..1f,
+                                    visibilityThreshold = 0.01f,
+                                    backdrop = glassBackdrop,
+                                    accentColorOverride = MaterialTheme.colorScheme.primary,
+                                    snapToStepsOnRelease = false,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_glass_intensity_slider")
+                                )
+                            }
+                        }
+
+                        // 5 Ambient Light-Mesh Backdrops
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Ambient Light-Mesh Backdrop",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                AmbientBackdropPreset.entries.forEach { preset ->
+                                    val isSelected = state.ambientBackdropPreset == preset
+                                    val swatchGradient = when (preset) {
+                                        AmbientBackdropPreset.INDIGO_AURORA -> listOf(Color(0xFF3B82F6), Color(0xFFF59E0B))
+                                        AmbientBackdropPreset.SUNSET_SAFFRON -> listOf(Color(0xFFF59E0B), Color(0xFFFB7185))
+                                        AmbientBackdropPreset.EMERALD_LAGOON -> listOf(Color(0xFF10B981), Color(0xFF06B6D4))
+                                        AmbientBackdropPreset.MIDNIGHT_PRISM -> listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))
+                                        AmbientBackdropPreset.PURE_MINIMAL -> listOf(Color(0xFF94A3B8), Color(0xFF64748B))
+                                    }
+                                    Surface(
+                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                                        shape = RoundedCornerShape(50),
+                                        modifier = Modifier
+                                            .border(
+                                                width = if (isSelected) 1.5.dp else 1.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                                shape = RoundedCornerShape(50)
+                                            )
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable {
+                                                onUpdateLiquidGlassStyle(
+                                                    state.glassMaterialPreset,
+                                                    state.glassIntensity,
+                                                    preset,
+                                                    state.ambientMotionEnabled,
+                                                    state.frostedHeroCardsEnabled
+                                                )
+                                            }
+                                            .testTag("ambient_preset_${preset.raw}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(14.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Brush.linearGradient(swatchGradient))
+                                            )
+                                            Text(
+                                                text = preset.label,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Breathing Ambient Motion Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Breathing Ambient Motion", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = "Subtle 120Hz light-mesh drift behind glass surfaces",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            LiquidToggle(
+                                selected = { state.ambientMotionEnabled },
+                                onSelect = { enabled ->
+                                    onUpdateLiquidGlassStyle(
+                                        state.glassMaterialPreset,
+                                        state.glassIntensity,
+                                        state.ambientBackdropPreset,
+                                        enabled,
+                                        state.frostedHeroCardsEnabled
+                                    )
+                                },
+                                modifier = Modifier.testTag("settings_ambient_motion_toggle")
+                            )
+                        }
+
+                        // Frosted Glass Hero Cards Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Frosted Glass Hero Cards", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = "Apply refractive glass & specular rims to main summary cards",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            LiquidToggle(
+                                selected = { state.frostedHeroCardsEnabled },
+                                onSelect = { enabled ->
+                                    onUpdateLiquidGlassStyle(
+                                        state.glassMaterialPreset,
+                                        state.glassIntensity,
+                                        state.ambientBackdropPreset,
+                                        state.ambientMotionEnabled,
+                                        enabled
+                                    )
+                                },
+                                modifier = Modifier.testTag("settings_frosted_hero_cards_toggle")
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Home Screen Widget Studio (Liquid Glass Widget Theme Sync + 1-Tap Pin)
+            item(key = "settings_widget_studio_card") {
+                val semantic = LocalAttendanceColors.current
+                val widgetStyleOptions = remember {
+                    WidgetThemeStyle.entries.map { style ->
+                        LiquidGlassSegmentOption(
+                            label = when (style) {
+                                WidgetThemeStyle.AUTO_SYNC -> "Auto"
+                                WidgetThemeStyle.FROSTED_LIGHT -> "Light"
+                                WidgetThemeStyle.SMOKED_DARK -> "Dark"
+                                WidgetThemeStyle.ACCENT_TINT -> "Accent"
+                            },
+                            testTag = "widget_style_${style.raw}"
+                        )
+                    }
+                }
+                val isPreviewLight = state.widgetThemeStyle == WidgetThemeStyle.FROSTED_LIGHT ||
+                    (state.widgetThemeStyle == WidgetThemeStyle.AUTO_SYNC && state.themeMode == AppThemeMode.LIGHT)
+                val previewGradient = when (state.widgetThemeStyle) {
+                    WidgetThemeStyle.FROSTED_LIGHT -> listOf(Color(0xFFEEF4FF), Color(0xFFE2ECFF))
+                    WidgetThemeStyle.SMOKED_DARK -> listOf(Color(0xFF0B1120), Color(0xFF141C2E))
+                    WidgetThemeStyle.ACCENT_TINT -> listOf(Color(0xFF1D3B8A), Color(0xFF3B288A))
+                    WidgetThemeStyle.AUTO_SYNC -> if (isPreviewLight) {
+                        listOf(Color(0xFFEEF4FF), Color(0xFFE2ECFF))
+                    } else {
+                        listOf(Color(0xFF102347), Color(0xFF162E5E))
+                    }
+                }
+                val previewPrimaryText = if (isPreviewLight) Color(0xFF0F172A) else Color.White
+                val previewSubText = if (isPreviewLight) Color(0xFF475569) else Color(0xFFBFD7FF)
+
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_widget_studio_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Widgets,
+                                        contentDescription = "Home Widget Studio",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Home Widget Studio", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "1-tap Present / Absent / Medical, 15s Undo & Evening Poll right on your home screen",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Live miniature Smart Widget preview
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Brush.linearGradient(previewGradient))
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isPreviewLight) Color.White else Color.White.copy(alpha = 0.28f),
+                                    shape = RoundedCornerShape(20.dp)
+                                )
+                                .padding(14.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "80endance • ${state.activeTerm.name}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = previewPrimaryText.copy(alpha = 0.85f)
+                                    )
+                                    Text(
+                                        text = "${state.currentStreak}d streak",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = previewPrimaryText
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = String.format(Locale.US, "%.1f%%", state.currentTermStats.percentage),
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (state.currentTermStats.eligible) {
+                                            if (isPreviewLight) Color(0xFF0F766E) else Color(0xFF34D399)
+                                        } else {
+                                            if (isPreviewLight) Color(0xFFDC2626) else Color(0xFFFB7185)
+                                        }
+                                    )
+                                    Column {
+                                        Text(
+                                            text = if (state.currentTermStats.eligible) "Eligible (>= ${state.currentTermStats.thresholdPercent}%)" else "Below ${state.currentTermStats.thresholdPercent}%",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = previewPrimaryText
+                                        )
+                                        Text(
+                                            text = "1-tap check-in • Evening Poll ready",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = previewSubText
+                                        )
+                                    }
+                                }
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Surface(
+                                        color = Color(0xFF15803D),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1.1f)
+                                    ) {
+                                        Text(
+                                            text = "Present ✓",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth(),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color.White.copy(alpha = if (isPreviewLight) 0.55f else 0.16f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "Absent ✕",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = previewPrimaryText,
+                                            modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth(),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color(0xFFD97706),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(0.95f)
+                                    ) {
+                                        Text(
+                                            text = "Medical",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth(),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        SlidableLiquidGlassSegmentedBar(
+                            options = widgetStyleOptions,
+                            selectedIndex = WidgetThemeStyle.entries.indexOf(state.widgetThemeStyle).coerceAtLeast(0),
+                            onOptionSelected = { idx ->
+                                WidgetThemeStyle.entries.getOrNull(idx)?.let(onUpdateWidgetThemeStyle)
+                            },
+                            barHeight = 42.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_widget_style_bar")
+                        )
+
+                        LiquidGlassButton(
+                            onClick = {
+                                val manager = AppWidgetManager.getInstance(context)
+                                val provider = ComponentName(context, AttendanceWidgetProvider::class.java)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.isRequestPinAppWidgetSupported) {
+                                    manager.requestPinAppWidget(provider, null, null)
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "Long-press your home screen and add the 80endance widget.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            },
+                            tint = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.primary,
+                            minHeight = 48.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_pin_smart_widget_button")
+                        ) {
+                            Icon(Icons.Rounded.Widgets, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Pin Smart Widget to Home Screen")
                         }
                     }
                 }

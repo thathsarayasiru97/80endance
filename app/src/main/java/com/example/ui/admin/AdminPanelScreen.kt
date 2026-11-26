@@ -25,12 +25,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
@@ -67,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,6 +85,8 @@ import com.example.data.Notice
 import com.example.data.NoticeTargetType
 import com.example.data.UserProfile
 import androidx.compose.ui.draw.clip
+import com.example.system.AppUpdateChecker
+import com.example.system.UpdateCheckResult
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.PulsingLiveDot
 import com.example.ui.theme.LocalAttendanceColors
@@ -115,12 +120,29 @@ fun AdminPanelScreen(
     var editStudentProfile by remember { mutableStateOf<UserProfile?>(null) }
     var previewAvatarStudent by remember { mutableStateOf<UserProfile?>(null) }
 
+    val context = LocalContext.current
     // Settings editor state
     var thresholdText by remember(state.appSettings) { mutableStateOf(state.appSettings.defaultEligibilityPercent.toString()) }
     var exam2026 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2026ExamDate) }
     var exam2027 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2027ExamDate) }
     var exam2028 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2028ExamDate) }
+    var directApkUrlInput by remember(state.appSettings.directApkDownloadUrl) {
+        mutableStateOf(state.appSettings.directApkDownloadUrl.orEmpty())
+    }
+    var directApkVersionInput by remember(state.appSettings.directApkVersion) {
+        mutableStateOf(state.appSettings.directApkVersion.orEmpty())
+    }
+    var latestGithubVersion by remember { mutableStateOf<String?>(null) }
     val todayKey = remember { DateUtils.todayKey() }
+
+    LaunchedEffect(Unit) {
+        val check = AppUpdateChecker.checkForUpdate(context)
+        latestGithubVersion = when (check) {
+            is UpdateCheckResult.UpdateAvailable -> check.info.latestVersion
+            is UpdateCheckResult.UpToDate -> check.latestFoundTag ?: check.currentVersion
+            else -> null
+        }
+    }
 
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let {
@@ -624,6 +646,158 @@ fun AdminPanelScreen(
                                             },
                                             modifier = Modifier.testTag("admin_next_day_poll_switch")
                                         )
+                                    }
+                                }
+                            }
+
+                            // Direct APK Download Override (Update Delivery Optimization)
+                            item {
+                                val savedUrl = state.appSettings.validDirectApkDownloadUrl
+                                val savedVersion = state.appSettings.cleanDirectApkVersion
+                                val isOutdated = savedUrl != null && AppUpdateChecker.isAdminApkOverrideOutdated(
+                                    configuredVersion = savedVersion,
+                                    latestGithubVersion = latestGithubVersion
+                                )
+                                val (statusText, statusBg, statusFg) = when {
+                                    savedUrl == null -> Triple(
+                                        "Not configured — auto-using GitHub release APK",
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    isOutdated -> Triple(
+                                        "Outdated (${savedVersion ?: "no version"}) vs ${latestGithubVersion?.let { AppUpdateChecker.formatVersionLabel(it) } ?: "latest"} — falling back to GitHub",
+                                        semantic.medicalContainer,
+                                        semantic.onMedicalContainer
+                                    )
+                                    else -> Triple(
+                                        "Active Override (${savedVersion?.let { AppUpdateChecker.formatVersionLabel(it) } ?: "latest"})",
+                                        semantic.presentContainer,
+                                        semantic.onPresentContainer
+                                    )
+                                }
+
+                                Card(
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("admin_direct_apk_override_card")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Download,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "Direct APK Download Override",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "Paste a direct HTTPS .apk link and its release version. Automatically falls back to GitHub if empty or outdated.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+
+                                        Surface(
+                                            color = statusBg,
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = statusText,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = statusFg,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                            )
+                                        }
+
+                                        OutlinedTextField(
+                                            value = directApkUrlInput,
+                                            onValueChange = { directApkUrlInput = it.take(512) },
+                                            label = { Text("Direct APK Download URL (https://...)") },
+                                            placeholder = { Text("https://github.com/.../80endance-v4.0.apk") },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("admin_direct_apk_url_input")
+                                        )
+
+                                        OutlinedTextField(
+                                            value = directApkVersionInput,
+                                            onValueChange = { directApkVersionInput = it.take(32) },
+                                            label = { Text("APK Version / Version Code (e.g. 4.0)") },
+                                            placeholder = { Text(latestGithubVersion ?: BuildConfig.VERSION_NAME) },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("admin_direct_apk_version_input")
+                                        )
+
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    viewModel.saveDirectApkOverride(
+                                                        url = directApkUrlInput,
+                                                        version = directApkVersionInput
+                                                    )
+                                                },
+                                                enabled = !state.isBusy,
+                                                modifier = Modifier
+                                                    .weight(1.3f)
+                                                    .testTag("admin_save_direct_apk_button")
+                                            ) {
+                                                Text("Save Link")
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    directApkUrlInput = ""
+                                                    directApkVersionInput = ""
+                                                    viewModel.saveDirectApkOverride("", "")
+                                                },
+                                                enabled = !state.isBusy && (savedUrl != null || directApkUrlInput.isNotBlank()),
+                                                modifier = Modifier
+                                                    .weight(0.9f)
+                                                    .testTag("admin_clear_direct_apk_button")
+                                            ) {
+                                                Text("Clear")
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val testUrl = directApkUrlInput.trim()
+                                                    if (testUrl.startsWith("https://", ignoreCase = true)) {
+                                                        AppUpdateChecker.openSafeHttpsUrl(context, testUrl)
+                                                    }
+                                                },
+                                                enabled = directApkUrlInput.trim().startsWith("https://", ignoreCase = true),
+                                                modifier = Modifier
+                                                    .weight(0.9f)
+                                                    .testTag("admin_test_direct_apk_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                                    contentDescription = "Test direct APK link",
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

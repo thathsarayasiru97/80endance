@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 82dp outer square places the 80% ring (~65.6dp) right inside the 66dp adaptive safe zone, eliminating zoomed-out framing on Samsung One UI and Pixel launchers -->
     <item
-        android:width="66dp"
-        android:height="66dp"
+        android:width="82dp"
+        android:height="82dp"
         android:drawable="@drawable/app_icon_80endance_1795204949999"
         android:gravity="center" />
 </layer-list>

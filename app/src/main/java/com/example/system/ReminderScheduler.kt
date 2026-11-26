@@ -37,6 +37,7 @@ object ReminderScheduler {
     const val ACTION_DAILY_REMINDER = "com.example.action.DAILY_REMINDER"
     const val ACTION_SUNDAY_PREP = "com.example.action.SUNDAY_PREP"
     const val ACTION_QUICK_YES = "com.example.action.QUICK_YES"
+    const val ACTION_QUICK_MEDICAL = "com.example.action.QUICK_MEDICAL"
     const val ACTION_QUICK_EXCUSED = "com.example.action.QUICK_EXCUSED"
     const val ACTION_QUICK_NO = "com.example.action.QUICK_NO"
     const val ACTION_SNOOZE_1H = "com.example.action.SNOOZE_1H"

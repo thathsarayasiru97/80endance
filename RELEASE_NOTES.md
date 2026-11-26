@@ -1,13 +1,10 @@
 ### What's New
-- **Optical Liquid Glass & Zero-Lag Free-Slide Physics:** Refractive liquid-glass bottom bar, segmented switchers, "What-If" slider, toggle switches, poll actions, and dialog CTAs with zero-allocation 120Hz dragging, centered magnetic touch pull, and smooth spring settlement on release.
-- **Streamlined Reports Scope Switcher:** Clean Overall, This Term, and This Month liquid-glass switcher built directly into the GCE A/L summary card.
-- **One-Tap Clear Attendance:** Clear any logged day's attendance directly from the Edit attendance popup.
-- **Smooth Calendar Month Swiping:** Swipe left or right directly on the calendar grid and jump back to Today in one tap.
-- **Dynamic Greeting, A/L Milestones & Scheduled Notices:** Adaptive Home header, batch countdown milestones (300d–30d), and auto-timed notices.
+- **Class Pulse & Streak Arena:** Next-Day Poll v2 with 1-tap anonymous reason chips, Class vs. School turnout split, Weekly Squad Goal tracker, Grade Podium, and an opt-in Class Streak Arena with 1-tap 🔥 Cheer.
+- **Smart Home Widgets 2.0 & Widget Studio:** 1-tap Present, Absent, and Medical check-in with an instant 15-second Undo strip, automatic Evening Poll Mode right on your home screen, Liquid Glass widget themes, and 1-tap widget pinning in Settings.
+- **Liquid Glass 2.0 Personalization Studio:** Choose from Crystal, Balanced, or Frosted material presets, tune Glass Intensity live, pick 5 Ambient Light-Mesh backdrops with optional breathing motion, toggle Frosted Glass Hero Cards, and try new Sunset Amber & Ocean Teal palettes.
+- **120Hz Micro-Interactions & Odometer Counters:** Smooth rolling percentage counters, tactile spring press feedback, and celebratory cheer animations across the app.
+- **Faster 1-Tap Direct APK Updates:** Update prompts now link straight to the latest APK download when available so getting new releases takes fewer taps.
 
-### Bug Fixes
-- Fixed Liquid Glass toggle switches getting stuck in the expanded liquid state when held or interrupted by scrolling.
-- Fixed overall synced attendance totals so locked attendance time periods are always accurately included everywhere.
-- Fixed Liquid Glass pills and sliders jumping prematurely mid-drag before release.
-- Eliminated attendance double-counting across imported baselines, locked periods, and school holidays.
-
+### Bug Fixes & Polish
+- Optimized adaptive and Material You themed app icon with a crisp transparent monochrome vector for Pixel themed icons and balanced icon framing for Samsung and other launchers.
+- Improved home widget sync so attendance check-ins, undo actions, and evening poll votes stay updated immediately across your home screen and app.
