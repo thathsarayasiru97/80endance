@@ -899,3 +899,108 @@ test("v4.0 rules: directApkDownloadUrl on app_settings, reasonTag on next_day_vo
   await assertSucceeds(studentA.collection("class_streak_entries").doc(STUDENT_A_UID).delete());
 });
 
+test("Guest/Observer flag is admin-only and blocked_emails blocks removed users server-side", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentA = testEnv.authenticatedContext(STUDENT_A_UID, {
+    email: "a@royal.lk",
+    email_verified: true,
+  }).firestore();
+  const studentB = testEnv.authenticatedContext(STUDENT_B_UID, {
+    email: "b@royal.lk",
+    email_verified: true,
+  }).firestore();
+
+  const now = new Date(Date.now() - 2000);
+  const later = new Date(Date.now() - 500);
+
+  // Student cannot self-create with guestObserver = true
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).set({
+      ...validProfilePayload(STUDENT_A_UID, "a@royal.lk"),
+      guestObserver: true,
+    })
+  );
+
+  // Valid create for studentA
+  await assertSucceeds(
+    studentA.collection("users").doc(STUDENT_A_UID).set(validProfilePayload(STUDENT_A_UID, "a@royal.lk"))
+  );
+
+  // Student cannot flip own guestObserver flag
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      guestObserver: true,
+      updatedAt: later,
+    })
+  );
+
+  // Admin can mark & unmark guestObserver = true
+  await assertSucceeds(
+    adminDb.collection("users").doc(STUDENT_A_UID).update({
+      guestObserver: true,
+      updatedAt: later,
+    })
+  );
+  // Guest/observer student can still update normal own profile fields & log attendance
+  await assertSucceeds(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      nickname: "TeacherDemo",
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+
+  // Blocked emails: unauth denied; non-admin cannot list or create
+  await assertFails(unauthDb.collection("blocked_emails").doc("a@royal.lk").get());
+  await assertFails(studentA.collection("blocked_emails").get());
+  await assertFails(
+    studentA.collection("blocked_emails").doc("b@royal.lk").set({
+      email: "b@royal.lk",
+      blockedByEmail: "a@royal.lk",
+      blockedAt: now,
+    })
+  );
+
+  // Admin blocks studentA's email
+  await assertSucceeds(
+    adminDb.collection("blocked_emails").doc("a@royal.lk").set({
+      email: "a@royal.lk",
+      userId: STUDENT_A_UID,
+      displayName: "Kavindu Perera",
+      reason: "Removed by admin",
+      blockedByEmail: ADMIN_EMAIL,
+      blockedAt: now,
+    })
+  );
+
+  // StudentA can check ONLY own blocked_emails doc; StudentB cannot probe StudentA's doc
+  await assertSucceeds(studentA.collection("blocked_emails").doc("a@royal.lk").get());
+  await assertFails(studentB.collection("blocked_emails").doc("a@royal.lk").get());
+
+  // Blocked StudentA is immediately denied all Firestore writes (profile, attendance, polls, streaks)
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).update({
+      nickname: "SneakBack",
+      updatedAt: new Date(Date.now() - 100),
+    })
+  );
+  await assertFails(
+    studentA.collection("users").doc(STUDENT_A_UID).collection("attendance").doc("2026-11-26")
+      .set(validAttendancePayload(STUDENT_A_UID, "2026-11-26", "student"))
+  );
+
+  // Admin can still delete removed user's data and unblock the email
+  await assertSucceeds(adminDb.collection("users").doc(STUDENT_A_UID).delete());
+  await assertSucceeds(adminDb.collection("blocked_emails").get());
+  await assertSucceeds(adminDb.collection("blocked_emails").doc("a@royal.lk").delete());
+
+  // After unblocking, StudentA can create profile again
+  await assertSucceeds(
+    studentA.collection("users").doc(STUDENT_A_UID).set(validProfilePayload(STUDENT_A_UID, "a@royal.lk"))
+  );
+});
+
+

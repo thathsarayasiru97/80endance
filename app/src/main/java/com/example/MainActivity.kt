@@ -41,10 +41,24 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -126,6 +140,7 @@ import com.example.ui.components.LiquidGlassBackdropHost
 import com.example.ui.components.LiquidGlassBottomBar
 import com.example.ui.components.LiquidGlassNavItem
 import com.example.ui.components.LiquidGlassNavigationRail
+import com.example.ui.components.SmoothTabContent
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.launch
@@ -597,6 +612,71 @@ private fun AuthenticatedAppShell(
         return
     }
 
+    // Immediate lockout if this email was removed and blocked by an administrator
+    if (state.isAccountBlocked && !isAdmin) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp)
+                    .testTag("blocked_account_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Block,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Text(
+                        text = "Account Access Removed",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "Access for ${user.email.orEmpty()} has been removed by the school administrator.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                        onClick = {
+                            attendanceViewModel.setPresence(false)
+                            BackgroundNotificationService.stop(context)
+                            SyncScheduler.cancelBackgroundBroadcastAlarm(context)
+                            scope.launch {
+                                LocalPreferencesStore(context).clearCachedStudentAudience()
+                            }
+                            AttendanceWidgetStore.saveAndRefresh(context, WidgetSnapshot(signedIn = false))
+                            signOutGoogle(credentialManager, scope)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("blocked_account_sign_out_button")
+                    ) {
+                        Text("Sign Out")
+                    }
+                }
+            }
+        }
+        return
+    }
+
     // First-time Academic Setup OR Edit Profile flow
     val currentProfile = state.profile
     if (currentProfile == null || !currentProfile.setupCompleted || editingProfileInSettings) {
@@ -698,19 +778,9 @@ private fun AuthenticatedAppShell(
                             .statusBarsPadding()
                             .padding(start = if (useRail) 104.dp else 0.dp)
                     ) {
-                        AnimatedContent(
+                        SmoothTabContent(
                             targetState = currentTab,
-                            transitionSpec = {
-                                val movingForward = targetState.ordinal >= initialState.ordinal
-                                val slideIn = slideInHorizontally(
-                                    animationSpec = tween(260, easing = FastOutSlowInEasing)
-                                ) { width -> if (movingForward) width / 8 else -width / 8 }
-                                val slideOut = slideOutHorizontally(
-                                    animationSpec = tween(200, easing = FastOutSlowInEasing)
-                                ) { width -> if (movingForward) -width / 10 else width / 10 }
-                                (slideIn + fadeIn(tween(240)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
-                                    .togetherWith(slideOut + fadeOut(tween(170)))
-                            },
+                            orderOf = { it.ordinal },
                             label = "tab_directional_transition"
                         ) { tab ->
                     when (tab) {

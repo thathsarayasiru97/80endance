@@ -48,8 +48,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -64,6 +66,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -115,6 +119,23 @@ data class LiquidGlassNavItem(
  * while automatically keeping True Black AMOLED mode ultra-subtle.
  */
 @Composable
+private fun rememberAmbientDriftPhaseState(shouldAnimate: Boolean): State<Float> {
+    if (!shouldAnimate) {
+        return remember { mutableFloatStateOf(0f) }
+    }
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient_mesh_motion")
+    return infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 16_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ambient_drift_phase"
+    )
+}
+
+@Composable
 fun LiquidGlassBackdropHost(
     modifier: Modifier = Modifier,
     backdropPresetOverride: AmbientBackdropPreset? = null,
@@ -131,17 +152,8 @@ fun LiquidGlassBackdropHost(
         !isOled &&
         activePreset != AmbientBackdropPreset.PURE_MINIMAL
 
-    val infiniteTransition = rememberInfiniteTransition(label = "ambient_mesh_motion")
-    val driftPhase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2.0 * Math.PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 16_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "ambient_drift_phase"
-    )
-    val effectivePhase = if (shouldAnimate) driftPhase else 0f
+    // Read strictly inside Canvas draw scope (never during composition) to keep 120Hz zero-recomposition
+    val driftPhaseState = rememberAmbientDriftPhaseState(shouldAnimate)
 
     val (orb1Base, orb2Base, orb3Base) = when (activePreset) {
         AmbientBackdropPreset.INDIGO_AURORA -> Triple(
@@ -171,6 +183,36 @@ fun LiquidGlassBackdropHost(
         )
     }
 
+    val intensityBoost = lerp(0.82f, 1.18f, glassStyle.clampedIntensity)
+    val primaryGlow = remember(orb1Base, isOled, isDark, intensityBoost) {
+        orb1Base.copy(
+            alpha = (when {
+                isOled -> 0.08f
+                isDark -> 0.24f
+                else -> 0.16f
+            } * intensityBoost).coerceAtMost(0.36f)
+        )
+    }
+    val secondaryGlow = remember(orb2Base, isOled, isDark, intensityBoost) {
+        orb2Base.copy(
+            alpha = (when {
+                isOled -> 0.05f
+                isDark -> 0.19f
+                else -> 0.14f
+            } * intensityBoost).coerceAtMost(0.30f)
+        )
+    }
+    val tertiaryGlow = remember(orb3Base, isOled, isDark, intensityBoost) {
+        orb3Base.copy(
+            alpha = (when {
+                isOled -> 0.04f
+                isDark -> 0.16f
+                else -> 0.11f
+            } * intensityBoost).coerceAtMost(0.26f)
+        )
+    }
+    val bgColor = colorScheme.background
+
     Box(modifier = modifier.fillMaxSize()) {
         // Layer 0: Atmospheric background captured into ambientBackdrop (sibling to foreground UI)
         Canvas(
@@ -178,32 +220,10 @@ fun LiquidGlassBackdropHost(
                 .fillMaxSize()
                 .layerBackdrop(ambientBackdrop)
         ) {
-            drawRect(color = colorScheme.background)
+            drawRect(color = bgColor)
 
             if (activePreset != AmbientBackdropPreset.PURE_MINIMAL) {
-                val intensityBoost = lerp(0.82f, 1.18f, glassStyle.clampedIntensity)
-                val primaryGlow = orb1Base.copy(
-                    alpha = (when {
-                        isOled -> 0.08f
-                        isDark -> 0.24f
-                        else -> 0.16f
-                    } * intensityBoost).coerceAtMost(0.36f)
-                )
-                val secondaryGlow = orb2Base.copy(
-                    alpha = (when {
-                        isOled -> 0.05f
-                        isDark -> 0.19f
-                        else -> 0.14f
-                    } * intensityBoost).coerceAtMost(0.30f)
-                )
-                val tertiaryGlow = orb3Base.copy(
-                    alpha = (when {
-                        isOled -> 0.04f
-                        isDark -> 0.16f
-                        else -> 0.11f
-                    } * intensityBoost).coerceAtMost(0.26f)
-                )
-
+                val effectivePhase = driftPhaseState.value
                 val dx1 = cos(effectivePhase) * size.width * 0.04f
                 val dy1 = sin(effectivePhase) * size.height * 0.03f
                 val dx2 = sin(effectivePhase * 0.85f) * size.width * 0.045f
@@ -272,11 +292,11 @@ fun FrostedHeroCard(
     content: @Composable BoxScope.() -> Unit
 ) {
     val glassStyle = LocalLiquidGlassStyle.current
-    val useGlass = (forceFrosted || glassStyle.frostedHeroCardsEnabled) && backdrop != null
+    val activeBackdrop = if (forceFrosted || glassStyle.frostedHeroCardsEnabled) backdrop else null
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
     val intensity = glassStyle.clampedIntensity
 
-    if (!useGlass || backdrop == null) {
+    if (activeBackdrop == null) {
         Surface(
             modifier = modifier,
             shape = shape,
@@ -309,7 +329,7 @@ fun FrostedHeroCard(
     Box(
         modifier = modifier
             .drawBackdrop(
-                backdrop = backdrop,
+                backdrop = activeBackdrop,
                 shape = { shape },
                 effects = {
                     vibrancy()
@@ -485,6 +505,7 @@ fun LiquidGlassBottomBar(
 ) {
     if (items.isEmpty()) return
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f || isSystemInDarkTheme()
+    val haptic = LocalHapticFeedback.current
     val safeSelected = selectedIndex.coerceIn(0, items.lastIndex)
     val baseContentColor = if (isDark) {
         Color.White.copy(alpha = 0.88f)
@@ -511,15 +532,42 @@ fun LiquidGlassBottomBar(
         ) {
             items.forEachIndexed { index, item ->
                 val isSelected = index == safeSelected
+                val iconScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.12f else 0.96f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "bottom_tab_icon_scale_$index"
+                )
+                val iconLiftPx by animateFloatAsState(
+                    targetValue = if (isSelected) -2.5f else 0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "bottom_tab_icon_lift_$index"
+                )
                 LiquidBottomTab(
-                    onClick = { onItemSelected(index) },
+                    onClick = {
+                        if (index != safeSelected) {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        onItemSelected(index)
+                    },
                     modifier = Modifier.testTag(item.testTag)
                 ) {
                     Icon(
                         imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
                         contentDescription = item.label,
                         tint = baseContentColor,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier
+                            .size(22.dp)
+                            .graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                                translationY = iconLiftPx
+                            }
                     )
                     Text(
                         text = item.label,

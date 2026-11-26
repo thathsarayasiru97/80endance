@@ -17,6 +17,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -104,13 +105,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.ui.components.AnimatedOdometerText
+import com.example.ui.components.springPressScale
 import com.example.BuildConfig
 import com.example.R
 import com.example.data.AmbientBackdropPreset
@@ -1104,7 +1109,7 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                Text(
+                                AnimatedOdometerText(
                                     text = "${(state.glassIntensity * 100f).roundToInt()}%",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Bold,
@@ -1136,6 +1141,7 @@ fun SettingsScreen(
                         }
 
                         // 5 Ambient Light-Mesh Backdrops
+                        val studioHaptic = LocalHapticFeedback.current
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 text = "Ambient Light-Mesh Backdrop",
@@ -1156,17 +1162,34 @@ fun SettingsScreen(
                                         AmbientBackdropPreset.MIDNIGHT_PRISM -> listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))
                                         AmbientBackdropPreset.PURE_MINIMAL -> listOf(Color(0xFF94A3B8), Color(0xFF64748B))
                                     }
+                                    val pillBg by animateColorAsState(
+                                        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                                        animationSpec = tween(200),
+                                        label = "ambient_pill_bg_${preset.raw}"
+                                    )
+                                    val pillBorder by animateColorAsState(
+                                        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                        animationSpec = tween(200),
+                                        label = "ambient_pill_border_${preset.raw}"
+                                    )
+                                    val pillFg by animateColorAsState(
+                                        targetValue = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                        animationSpec = tween(200),
+                                        label = "ambient_pill_fg_${preset.raw}"
+                                    )
                                     Surface(
-                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                                        color = pillBg,
                                         shape = RoundedCornerShape(50),
                                         modifier = Modifier
+                                            .springPressScale(pressedScale = 0.95f)
                                             .border(
                                                 width = if (isSelected) 1.5.dp else 1.dp,
-                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                                color = pillBorder,
                                                 shape = RoundedCornerShape(50)
                                             )
                                             .clip(RoundedCornerShape(50))
                                             .clickable {
+                                                studioHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                                 onUpdateLiquidGlassStyle(
                                                     state.glassMaterialPreset,
                                                     state.glassIntensity,
@@ -1192,7 +1215,7 @@ fun SettingsScreen(
                                                 text = preset.label,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                color = pillFg
                                             )
                                         }
                                     }
@@ -1279,18 +1302,29 @@ fun SettingsScreen(
                 }
                 val isPreviewLight = state.widgetThemeStyle == WidgetThemeStyle.FROSTED_LIGHT ||
                     (state.widgetThemeStyle == WidgetThemeStyle.AUTO_SYNC && state.themeMode == AppThemeMode.LIGHT)
-                val previewGradient = when (state.widgetThemeStyle) {
-                    WidgetThemeStyle.FROSTED_LIGHT -> listOf(Color(0xFFEEF4FF), Color(0xFFE2ECFF))
-                    WidgetThemeStyle.SMOKED_DARK -> listOf(Color(0xFF0B1120), Color(0xFF141C2E))
-                    WidgetThemeStyle.ACCENT_TINT -> listOf(Color(0xFF1D3B8A), Color(0xFF3B288A))
+                val (targetGradStart, targetGradEnd) = when (state.widgetThemeStyle) {
+                    WidgetThemeStyle.FROSTED_LIGHT -> Color(0xFFEEF4FF) to Color(0xFFE2ECFF)
+                    WidgetThemeStyle.SMOKED_DARK -> Color(0xFF0B1120) to Color(0xFF141C2E)
+                    WidgetThemeStyle.ACCENT_TINT -> Color(0xFF1D3B8A) to Color(0xFF3B288A)
                     WidgetThemeStyle.AUTO_SYNC -> if (isPreviewLight) {
-                        listOf(Color(0xFFEEF4FF), Color(0xFFE2ECFF))
+                        Color(0xFFEEF4FF) to Color(0xFFE2ECFF)
                     } else {
-                        listOf(Color(0xFF102347), Color(0xFF162E5E))
+                        Color(0xFF102347) to Color(0xFF162E5E)
                     }
                 }
-                val previewPrimaryText = if (isPreviewLight) Color(0xFF0F172A) else Color.White
-                val previewSubText = if (isPreviewLight) Color(0xFF475569) else Color(0xFFBFD7FF)
+                val animGradStart by animateColorAsState(targetGradStart, tween(280), label = "widget_prev_g1")
+                val animGradEnd by animateColorAsState(targetGradEnd, tween(280), label = "widget_prev_g2")
+                val previewGradient = listOf(animGradStart, animGradEnd)
+                val previewPrimaryText by animateColorAsState(
+                    targetValue = if (isPreviewLight) Color(0xFF0F172A) else Color.White,
+                    animationSpec = tween(240),
+                    label = "widget_prev_text"
+                )
+                val previewSubText by animateColorAsState(
+                    targetValue = if (isPreviewLight) Color(0xFF475569) else Color(0xFFBFD7FF),
+                    animationSpec = tween(240),
+                    label = "widget_prev_subtext"
+                )
 
                 Card(
                     shape = RoundedCornerShape(22.dp),

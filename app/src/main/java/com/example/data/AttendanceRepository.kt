@@ -1587,6 +1587,13 @@ class AttendanceRepository(
                 .awaitOfflineAware()
 
             val remaining = existingRecords?.filterNot { it.dateKey == dateKey }
+                ?: runCatching {
+                    withTimeoutOrNull(2_500L) {
+                        db.collection("users").document(targetUserId).collection("attendance")
+                            .get().await().toObjects(AttendanceRecord::class.java)
+                            .filterNot { it.dateKey == dateKey }
+                    }
+                }.getOrNull()
             if (remaining != null) {
                 updateProfileCounterFields(targetUserId, remaining)
             }
@@ -1632,10 +1639,27 @@ class AttendanceRepository(
                 userDocRef.collection("attendance_periods").get().await().toObjects(AttendancePeriodBlock::class.java)
             }
         }.getOrNull().orEmpty()
+        val settings = runCatching {
+            withTimeoutOrNull(1_500L) {
+                db.collection("app_settings").document("global").get().await().toObject(AppSettings::class.java)
+            }
+        }.getOrNull() ?: AppSettings()
+        val schoolStartKey = settings.effectiveSchoolStartDate(profile?.alExamYear)
+        val rawEvents = runCatching {
+            withTimeoutOrNull(1_500L) {
+                db.collection("calendar_events").whereEqualTo("published", true)
+                    .get().await().toObjects(CalendarEvent::class.java)
+            }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: SriLankaCalendarDefaults.defaultEvents
+        val effectiveEvents = AttendanceCalculator.filterCalendarEventsForStudent(rawEvents, profile, targetUserId)
+        val nonSchoolDates = effectiveEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+
         val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(periodBlocks, lockedBaselineRange)
         val uniqueRecords = AttendanceCalculator.deduplicateRecords(records)
             .filterNot { rec ->
                 DateUtils.isWeekend(rec.dateKey) ||
+                    rec.dateKey in nonSchoolDates ||
+                    rec.dateKey < schoolStartKey ||
                     (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
                     cleanBlocks.any { it.containsDate(rec.dateKey) }
             }
@@ -1658,19 +1682,68 @@ class AttendanceRepository(
                 )
             ).awaitOfflineAware()
         }
+        // Keep student_trend_summaries synced when non-guest profile counters or periods change (including admin edits)
+        if (profile != null && !profile.guestObserver && profile.setupCompleted) {
+            val summary = AttendanceCalculator.buildStudentTrendSummary(
+                userId = targetUserId,
+                records = records,
+                periodBlocks = periodBlocks,
+                priorPresent = profile.priorPresentCount,
+                priorAbsent = profile.priorAbsentCount,
+                grade = profile.grade,
+                alStream = profile.alStream,
+                className = profile.className,
+                lockedRange = lockedBaselineRange,
+                calendarEvents = effectiveEvents,
+                schoolStartDate = schoolStartKey
+            )
+            if (summary.totalCounted > 0) {
+                runCatching { upsertStudentTrendSummaryForUser(targetUserId, summary) }
+            }
+        }
+    }
+
+    private suspend fun upsertStudentTrendSummaryForUser(targetUserId: String, summary: StudentTrendSummary) {
+        if (targetUserId.isBlank()) return
+        val cleanTotalsJson = summary.monthlyTotalsJson.ifBlank { "{}" }.take(8000)
+        val cleanWeekdayJson = summary.monthlyWeekdayJson.ifBlank { "{}" }.take(16000)
+        val cleanAtt = List(5) { idx -> summary.allTimeWeekdayAttended.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
+        val cleanAbs = List(5) { idx -> summary.allTimeWeekdayAbsent.getOrElse(idx) { 0 }.coerceIn(0, 1000) }
+        val payload = mutableMapOf<String, Any>(
+            "userId" to targetUserId,
+            "monthlyTotalsJson" to cleanTotalsJson,
+            "monthlyWeekdayJson" to cleanWeekdayJson,
+            "allTimeWeekdayAttended" to cleanAtt,
+            "allTimeWeekdayAbsent" to cleanAbs,
+            "totalAttended" to summary.totalAttended.coerceIn(0, 3000),
+            "totalAbsent" to summary.totalAbsent.coerceIn(0, 3000),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        summary.grade?.trim()?.take(32)?.takeIf { it.isNotEmpty() }?.let { payload["grade"] = it }
+        summary.alStream?.trim()?.take(48)?.takeIf { it.isNotEmpty() }?.let { payload["alStream"] = it }
+        summary.className?.trim()?.take(32)?.takeIf { it.isNotEmpty() }?.let { payload["className"] = it }
+        db.collection("student_trend_summaries").document(targetUserId)
+            .set(payload)
+            .awaitOfflineAware()
     }
 
     suspend fun reconcileUserCountersWithPeriodBlocks(
         userId: String,
         records: List<AttendanceRecord>,
         periodBlocks: List<AttendancePeriodBlock>,
-        lockedBaselineRange: Pair<String, String>?
+        lockedBaselineRange: Pair<String, String>?,
+        calendarEvents: List<CalendarEvent> = emptyList(),
+        schoolStartDate: String? = null
     ) {
         if (userId.isBlank() || auth.currentUser?.uid != userId) return
+        val nonSchoolDates = calendarEvents.filter { it.nonSchoolDay }.map { it.dateKey }.toSet()
+        val validSchoolStart = schoolStartDate?.trim()?.takeIf { it.length == 10 }
         val cleanBlocks = AttendanceCalculator.deduplicatePeriodBlocks(periodBlocks, lockedBaselineRange)
         val uniqueRecords = AttendanceCalculator.deduplicateRecords(records)
             .filterNot { rec ->
                 DateUtils.isWeekend(rec.dateKey) ||
+                    rec.dateKey in nonSchoolDates ||
+                    (validSchoolStart != null && rec.dateKey < validSchoolStart) ||
                     (lockedBaselineRange != null && rec.dateKey <= lockedBaselineRange.second) ||
                     cleanBlocks.any { it.containsDate(rec.dateKey) }
             }
@@ -2545,6 +2618,214 @@ class AttendanceRepository(
         val exceptionToLog = firestoreError ?: (error as? Exception)
         if (exceptionToLog != null && auth.currentUser?.uid == expectedUid) {
             handleFirestoreError(exceptionToLog, operationType, path)
+        }
+    }
+
+    // --- GUEST / OBSERVER MODE & BLOCKED EMAIL MANAGEMENT (ADMIN) ---
+
+    fun observeIsEmailBlocked(email: String): Flow<Boolean> = flow {
+        val uid = auth.currentUser?.uid.orEmpty()
+        val cleanEmail = email.trim().lowercase()
+        if (uid.isBlank() || cleanEmail.length < 3 || !cleanEmail.contains('@')) {
+            emit(false)
+            return@flow
+        }
+        val path = "blocked_emails/$cleanEmail"
+        emitAll(
+            db.collection("blocked_emails").document(cleanEmail)
+                .snapshots()
+                .map { snapshot -> snapshot.exists() }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.GET, path, uid)
+                    emit(false)
+                }
+        )
+    }
+
+    fun observeBlockedEmailsAdmin(): Flow<List<BlockedEmailEntry>> = flow {
+        val uid = requireUserId()
+        val path = "blocked_emails"
+        emitAll(
+            db.collection("blocked_emails")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        BlockedEmailEntry::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.blockedAt?.seconds ?: 0L }
+                }
+                .catch { error ->
+                    logStreamErrorIfActive(error, OperationType.LIST, path, uid)
+                    throw error
+                }
+        )
+    }
+
+    /**
+     * Marks or unmarks a user as a Guest / Observer (`guestObserver = true/false`).
+     * When marked as a Guest / Observer, detaches their data from shared school-wide
+     * collections (`student_trend_summaries`, `class_streak_entries`, and active `next_day_votes`),
+     * while leaving all their personal records intact so the app continues to work identically
+     * as a self-contained demo for teachers and old boys.
+     */
+    suspend fun setUserGuestObserverAdmin(
+        targetUser: UserProfile,
+        guestObserver: Boolean
+    ): Result<Unit> {
+        val targetUid = targetUser.userId.ifBlank { targetUser.id }
+        val path = "users/$targetUid"
+        return try {
+            requireUserId()
+            require(targetUid.isNotBlank()) { "Invalid user ID" }
+            val updates = mutableMapOf<String, Any>(
+                "guestObserver" to guestObserver,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (guestObserver) {
+                updates["onlineNow"] = false
+            }
+            db.collection("users").document(targetUid).update(updates).awaitOfflineAware()
+            if (guestObserver) {
+                runCatching {
+                    db.collection("student_trend_summaries").document(targetUid).delete().awaitOfflineAware()
+                }
+                runCatching {
+                    db.collection("class_streak_entries").document(targetUid).delete().awaitOfflineAware()
+                }
+                val today = DateUtils.todayKey()
+                val tomorrow = DateUtils.addDays(today, 1)
+                listOf("${today}_$targetUid", "${tomorrow}_$targetUid").forEach { voteId ->
+                    runCatching {
+                        db.collection("next_day_votes").document(voteId).delete().awaitOfflineAware()
+                    }
+                }
+            }
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteStudentTrendSummary(userId: String): Result<Unit> {
+        if (userId.isBlank()) return Result.success(Unit)
+        return try {
+            db.collection("student_trend_summaries").document(userId).delete().awaitOfflineAware()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteClassStreakEntry(userId: String): Result<Unit> {
+        if (userId.isBlank()) return Result.success(Unit)
+        return try {
+            db.collection("class_streak_entries").document(userId).delete().awaitOfflineAware()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Permanently removes a user's profile, subcollections (`attendance`, `attendance_periods`,
+     * `personal_markers`), shared summaries/streaks/votes, and adds their lowercase email to
+     * `/blocked_emails/{email}` so they cannot sign back in or write data.
+     */
+    suspend fun removeAndBlockUserAdmin(
+        targetUser: UserProfile,
+        reason: String? = null
+    ): Result<Unit> {
+        val targetUid = targetUser.userId.ifBlank { targetUser.id }
+        val normalizedEmail = targetUser.email.trim().lowercase()
+        val path = "blocked_emails/$normalizedEmail"
+        return try {
+            requireUserId()
+            require(targetUid.isNotBlank()) { "Invalid user ID" }
+            val adminEmail = auth.currentUser?.email?.trim()?.lowercase().orEmpty()
+            require(normalizedEmail.isNotBlank() && normalizedEmail.contains('@')) {
+                "User does not have a valid email address to block"
+            }
+            require(normalizedEmail != adminEmail) {
+                "You cannot block your own administrator email"
+            }
+
+            // 1. Add email to /blocked_emails/{normalizedEmail} first so all writes from that user stop immediately
+            val blockPayload = mutableMapOf<String, Any>(
+                "email" to normalizedEmail,
+                "userId" to targetUid.take(128),
+                "displayName" to targetUser.fullName.take(100),
+                "blockedByEmail" to adminEmail.ifBlank { "admin@80endance.app" }.take(120),
+                "blockedAt" to FieldValue.serverTimestamp()
+            )
+            reason?.trim()?.take(200)?.takeIf { it.isNotEmpty() }?.let {
+                blockPayload["reason"] = it
+            }
+            db.collection("blocked_emails").document(normalizedEmail)
+                .set(blockPayload)
+                .awaitOfflineAware()
+
+            // 2. Delete user subcollections (attendance, attendance_periods, personal_markers)
+            val userRef = db.collection("users").document(targetUid)
+            for (subName in listOf("attendance", "attendance_periods", "personal_markers")) {
+                runCatching {
+                    val snap = withTimeoutOrNull(4_000L) { userRef.collection(subName).get().await() }
+                    snap?.documents?.chunked(400)?.forEach { chunk ->
+                        val b = db.batch()
+                        chunk.forEach { doc -> b.delete(doc.reference) }
+                        b.commit().awaitOfflineAware()
+                    }
+                }
+            }
+
+            // 3. Delete shared documents (trend summary, streak entry, recent poll votes)
+            runCatching {
+                db.collection("student_trend_summaries").document(targetUid).delete().awaitOfflineAware()
+            }
+            runCatching {
+                db.collection("class_streak_entries").document(targetUid).delete().awaitOfflineAware()
+            }
+            val today = DateUtils.todayKey()
+            val tomorrow = DateUtils.addDays(today, 1)
+            listOf("${today}_$targetUid", "${tomorrow}_$targetUid").forEach { voteId ->
+                runCatching {
+                    db.collection("next_day_votes").document(voteId).delete().awaitOfflineAware()
+                }
+            }
+
+            // 4. Delete the user profile document itself
+            userRef.delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun unblockEmailAdmin(email: String): Result<Unit> {
+        val cleanEmail = email.trim().lowercase()
+        val path = "blocked_emails/$cleanEmail"
+        return try {
+            requireUserId()
+            require(cleanEmail.isNotBlank()) { "Invalid email" }
+            db.collection("blocked_emails").document(cleanEmail).delete().awaitOfflineAware()
+            scheduleSyncIfOffline()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
         }
     }
 }

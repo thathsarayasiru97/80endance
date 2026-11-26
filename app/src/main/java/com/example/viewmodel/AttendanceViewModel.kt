@@ -146,7 +146,8 @@ data class StudentAppState(
     val streakArenaOptIn: Boolean = false,
     val streakArenaUseAnonymousAlias: Boolean = false,
     val cheeredPeerIdsToday: Set<String> = emptySet(),
-    val classPulseSummary: ClassPulseSummary = ClassPulseSummary()
+    val classPulseSummary: ClassPulseSummary = ClassPulseSummary(),
+    val isAccountBlocked: Boolean = false
 ) {
     val effectiveSchoolStartDateKey: String
         get() = appSettings.effectiveSchoolStartDate(profile?.alExamYear)
@@ -206,7 +207,9 @@ private data class LocalSessionState(
     val sessionDismissedBroadcastIds: Set<String> = emptySet(),
     val sessionAckResolvedFeedbackIds: Set<String> = emptySet(),
     val autoOfferedSwipeDeckThisLaunch: Boolean = false,
-    val clockTick: Pair<String, Int> = DateUtils.todayKey() to DateUtils.currentHourMinute().first
+    val clockTick: Pair<String, Int> = DateUtils.todayKey() to DateUtils.currentHourMinute().first,
+    val isEmailBlocked: Boolean = false,
+    val localGuestVote: NextDaySchoolVote? = null
 )
 
 class AttendanceViewModel(
@@ -293,6 +296,7 @@ class AttendanceViewModel(
     private val _sessionDismissedBroadcastIds = MutableStateFlow<Set<String>>(emptySet())
     private val _sessionAckResolvedFeedbackIds = MutableStateFlow<Set<String>>(emptySet())
     private val _autoOfferedSwipeDeckThisLaunch = MutableStateFlow(false)
+    private val _localGuestVote = MutableStateFlow<NextDaySchoolVote?>(null)
 
     private val adminStreamFlow: Flow<AdminStreamBundle> = if (isVerifiedAdmin) {
         combine(
@@ -305,7 +309,7 @@ class AttendanceViewModel(
             }
         ) { studentsPair, nowMs ->
             val onlineList = studentsPair.first
-                .filter { it.isCurrentlyOnline(nowMs) }
+                .filter { !it.guestObserver && it.isCurrentlyOnline(nowMs) }
                 .sortedByDescending { it.lastSeenAt?.toDate()?.time ?: 0L }
             AdminStreamBundle(
                 students = studentsPair.first,
@@ -395,16 +399,27 @@ class AttendanceViewModel(
         _sessionDismissedCheckIn,
         _sessionDismissedBroadcastIds,
         _sessionAckResolvedFeedbackIds,
-        combine(_autoOfferedSwipeDeckThisLaunch, pollClockTickFlow) { autoOffered, tick -> autoOffered to tick }
-    ) { prefsPair, dismissedCheckIn, dismissedBroadcasts, ackFeedback, autoAndTick ->
+        combine(
+            _autoOfferedSwipeDeckThisLaunch,
+            pollClockTickFlow,
+            repository.observeIsEmailBlocked(userEmail),
+            _localGuestVote
+        ) { autoOffered, tick, blocked, guestVote ->
+            listOf<Any?>(autoOffered, tick, blocked, guestVote)
+        }
+    ) { prefsPair, dismissedCheckIn, dismissedBroadcasts, ackFeedback, tailList ->
+        @Suppress("UNCHECKED_CAST")
+        val tick = tailList[1] as Pair<String, Int>
         LocalSessionState(
             prefs = prefsPair.first,
             prefsLoaded = prefsPair.second,
             sessionDismissedCheckIn = dismissedCheckIn,
             sessionDismissedBroadcastIds = dismissedBroadcasts,
             sessionAckResolvedFeedbackIds = ackFeedback,
-            autoOfferedSwipeDeckThisLaunch = autoAndTick.first,
-            clockTick = autoAndTick.second
+            autoOfferedSwipeDeckThisLaunch = tailList[0] as Boolean,
+            clockTick = tick,
+            isEmailBlocked = tailList[2] as Boolean,
+            localGuestVote = tailList[3] as? NextDaySchoolVote
         )
     }
 
@@ -484,7 +499,8 @@ class AttendanceViewModel(
             records = bundle.records,
             calendarEvents = effectiveEvents,
             countExcusedAsPresent = true,
-            todayKey = todayKey
+            todayKey = todayKey,
+            periodBlocks = periodBlocks
         )
         val weekly = AttendanceCalculator.calculateWeeklySummary(
             records = bundle.records,
@@ -570,6 +586,7 @@ class AttendanceViewModel(
             )
         }
 
+        val isGuestObserver = profile?.guestObserver == true
         // Compute & deduplicate-sync anonymous numeric trend summary for school-wide & cohort analytics
         val localTrendSummary = if (bundle.profileLoaded && profile?.setupCompleted == true) {
             AttendanceCalculator.buildStudentTrendSummary(
@@ -588,7 +605,16 @@ class AttendanceViewModel(
         } else {
             null
         }
-        if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
+        if (isGuestObserver) {
+            // Detached guest/observer: ensure no shared trend summary or streak entry remains on server
+            if (lastSyncedTrendSignature != "GUEST_DETACHED") {
+                lastSyncedTrendSignature = "GUEST_DETACHED"
+                viewModelScope.launch {
+                    repository.deleteStudentTrendSummary(currentUserId)
+                    repository.deleteClassStreakEntry(currentUserId)
+                }
+            }
+        } else if (localTrendSummary != null && localTrendSummary.totalCounted > 0) {
             val trendSig = "${localTrendSummary.totalAttended}|${localTrendSummary.totalAbsent}|${localTrendSummary.grade}|${localTrendSummary.alStream}|${localTrendSummary.className}|${localTrendSummary.monthlyTotalsJson}|${localTrendSummary.monthlyWeekdayJson}|${localTrendSummary.allTimeWeekdayAttended.joinToString(",")}|${localTrendSummary.allTimeWeekdayAbsent.joinToString(",")}"
             if (trendSig != lastSyncedTrendSignature) {
                 lastSyncedTrendSignature = trendSig
@@ -597,11 +623,11 @@ class AttendanceViewModel(
                 }
             }
         }
-        // Reconcile UserProfile presentCount/absentCount in Firestore if locked period blocks were not yet included
-        if (bundle.profileLoaded && profile?.setupCompleted == true && periodBlocks.isNotEmpty()) {
+        // Reconcile UserProfile presentCount/absentCount in Firestore if locked period blocks or non-school days changed
+        if (bundle.profileLoaded && profile?.setupCompleted == true) {
             val storedEffectivePresent = profile.presentCount + profile.priorPresentCount + profile.medicalCount + profile.schoolEventCount
             val storedEffectiveAbsent = profile.absentCount + profile.priorAbsentCount
-            val counterSig = "${overallStats.effectiveAttended}|${overallStats.absentDays}"
+            val counterSig = "${overallStats.effectiveAttended}|${overallStats.absentDays}|${periodBlocks.size}"
             if ((storedEffectivePresent != overallStats.effectiveAttended || storedEffectiveAbsent != overallStats.absentDays) &&
                 counterSig != lastReconciledCounterSignature
             ) {
@@ -612,7 +638,9 @@ class AttendanceViewModel(
                         userId = currentUserId,
                         records = recordsSnapshot,
                         periodBlocks = periodBlocks,
-                        lockedBaselineRange = lockedRange
+                        lockedBaselineRange = lockedRange,
+                        calendarEvents = effectiveEvents,
+                        schoolStartDate = schoolStartKey
                     )
                 }
             }
@@ -732,8 +760,13 @@ class AttendanceViewModel(
             todayKey = todayKey,
             hourOfDay = nowHour
         )
+        val effectivePollVotes = if (isGuestObserver && localState.localGuestVote?.targetDateKey == pollWindow.targetDateKey) {
+            extras.nextDayVotes.filterNot { it.userId == currentUserId } + localState.localGuestVote
+        } else {
+            extras.nextDayVotes
+        }
         val pollSummary = AttendanceCalculator.calculateNextDayPollSummary(
-            votes = extras.nextDayVotes,
+            votes = effectivePollVotes,
             currentUserId = currentUserId,
             myClassName = profile?.className,
             targetDateKey = pollWindow.targetDateKey
@@ -759,8 +792,8 @@ class AttendanceViewModel(
             .map { it.removePrefix("$todayKey:") }
             .toSet()
 
-        // Keep opt-in zero-PII class streak entry synced whenever opted in and values change
-        if (localState.prefsLoaded && profile != null && profile.setupCompleted && profile.className.isNotBlank() && prefs.streakArenaOptIn) {
+        // Keep opt-in zero-PII class streak entry synced whenever opted in and values change (skip for guest/observer accounts)
+        if (!isGuestObserver && localState.prefsLoaded && profile != null && profile.setupCompleted && profile.className.isNotBlank() && prefs.streakArenaOptIn) {
             val alias = if (prefs.streakArenaUseAnonymousAlias) {
                 "Anonymous Student"
             } else {
@@ -808,9 +841,11 @@ class AttendanceViewModel(
             calendarEvents = effectiveEvents,
             allCalendarEventsForAdmin = if (isVerifiedAdmin) rawEvents else emptyList(),
             adminAllStudents = if (isVerifiedAdmin) {
-                extras.adminBundle.students.map { st ->
-                    st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
-                }
+                extras.adminBundle.students
+                    .filterNot { it.guestObserver }
+                    .map { st ->
+                        st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
+                    }
             } else emptyList(),
             academicCatalog = extras.academicCatalog,
             appSettings = settings,
@@ -865,7 +900,8 @@ class AttendanceViewModel(
             streakArenaOptIn = prefs.streakArenaOptIn,
             streakArenaUseAnonymousAlias = prefs.streakArenaUseAnonymousAlias,
             cheeredPeerIdsToday = cheeredTodaySet,
-            classPulseSummary = classPulseSummary
+            classPulseSummary = classPulseSummary,
+            isAccountBlocked = localState.isEmailBlocked
         )
     }.stateIn(
         scope = viewModelScope,
@@ -879,7 +915,10 @@ class AttendanceViewModel(
 
     fun setPresence(online: Boolean) {
         viewModelScope.launch {
-            repository.updatePresence(currentUserId, online)
+            val isGuest = uiState.value.profile?.guestObserver == true
+            val isBlocked = uiState.value.isAccountBlocked
+            if (isBlocked) return@launch
+            repository.updatePresence(currentUserId, if (isGuest) false else online)
         }
     }
 
@@ -1348,7 +1387,8 @@ class AttendanceViewModel(
             records = simulatedRecords,
             calendarEvents = previousState.calendarEvents,
             countExcusedAsPresent = true,
-            todayKey = todayKey
+            todayKey = todayKey,
+            periodBlocks = previousState.periodBlocks
         )
         val afterWeek = AttendanceCalculator.calculateWeeklySummary(
             records = simulatedRecords,
@@ -1776,7 +1816,7 @@ class AttendanceViewModel(
         val profile = snapshot.profile
         viewModelScope.launch {
             localPrefs.saveStreakArenaPreferences(optedIn, useAnonymousAlias)
-            if (profile != null && profile.className.isNotBlank()) {
+            if (profile != null && !profile.guestObserver && profile.className.isNotBlank()) {
                 val alias = if (useAnonymousAlias) {
                     "Anonymous Student"
                 } else {
@@ -1818,6 +1858,13 @@ class AttendanceViewModel(
         if (targetUserId.isBlank() || targetUserId == currentUserId) return
         if (targetUserId in uiState.value.cheeredPeerIdsToday) {
             _snackbarMessage.value = "You already cheered $displayAlias today!"
+            return
+        }
+        if (uiState.value.profile?.guestObserver == true) {
+            viewModelScope.launch {
+                localPrefs.markPeerCheeredToday(todayKey, targetUserId)
+                _snackbarMessage.value = "Sent a streak cheer to $displayAlias!"
+            }
             return
         }
         viewModelScope.launch {
@@ -1913,6 +1960,35 @@ class AttendanceViewModel(
         val effectiveReason = reasonTag ?: snapshot.nextDayPollSummary.myVoteReasonTag?.takeIf { tag ->
             NextDayVoteReason.fromRaw(tag)?.forGoing == going
         }
+        val myVoteEntry = NextDaySchoolVote(
+            id = "${window.targetDateKey}_$currentUserId",
+            userId = currentUserId,
+            targetDateKey = window.targetDateKey,
+            going = going,
+            grade = snapshot.profile?.grade,
+            alStream = snapshot.profile?.alStream,
+            className = snapshot.profile?.className,
+            reasonTag = effectiveReason
+        )
+        // Detached Guest/Observer mode: keep poll vote local-only so UI works 100% identically without affecting live school poll counts
+        if (snapshot.profile?.guestObserver == true) {
+            _localGuestVote.value = myVoteEntry
+            viewModelScope.launch {
+                val fetchedVotes = repository.getNextDayVotesForDate(window.targetDateKey)
+                val merged = fetchedVotes.filterNot { it.userId == currentUserId } + myVoteEntry
+                val summary = AttendanceCalculator.calculateNextDayPollSummary(
+                    votes = merged,
+                    currentUserId = currentUserId,
+                    myClassName = snapshot.profile?.className,
+                    targetDateKey = window.targetDateKey
+                )
+                val comingPct = summary.goingPercent.roundToInt()
+                val reasonSuffix = NextDayVoteReason.fromRaw(effectiveReason)?.let { " • ${it.label}" }.orEmpty()
+                _snackbarMessage.value =
+                    "Voted ${if (going) "Coming" else "Not Coming"}$reasonSuffix • $comingPct% coming (${summary.totalVotes} voted)"
+            }
+            return
+        }
         viewModelScope.launch {
             val res = repository.submitNextDayVote(
                 userId = currentUserId,
@@ -1926,16 +2002,6 @@ class AttendanceViewModel(
                     NotificationManagerCompat.from(appContext).cancel(ReminderScheduler.POLL_NOTIFICATION_ID)
                 }
                 val fetchedVotes = repository.getNextDayVotesForDate(window.targetDateKey)
-                val myVoteEntry = NextDaySchoolVote(
-                    id = "${window.targetDateKey}_$currentUserId",
-                    userId = currentUserId,
-                    targetDateKey = window.targetDateKey,
-                    going = going,
-                    grade = snapshot.profile?.grade,
-                    alStream = snapshot.profile?.alStream,
-                    className = snapshot.profile?.className,
-                    reasonTag = effectiveReason
-                )
                 val merged = fetchedVotes.filterNot { it.userId == currentUserId } + myVoteEntry
                 val summary = AttendanceCalculator.calculateNextDayPollSummary(
                     votes = merged,

@@ -7,9 +7,11 @@ import com.example.data.AcademicCatalog
 import com.example.data.AcademicTerm
 import com.example.data.AppSettings
 import com.example.data.AttendanceCalculator
+import com.example.data.AttendancePeriodBlock
 import com.example.data.AttendanceRecord
 import com.example.data.AttendanceRepository
 import com.example.data.AttendanceStatus
+import com.example.data.BlockedEmailEntry
 import com.example.data.BroadcastNotification
 import com.example.data.CalendarEvent
 import com.example.data.CalendarEventTargetType
@@ -52,6 +54,10 @@ data class AdminUiState(
     val academicCatalog: AcademicCatalog = AcademicCatalog.defaultCatalog(),
     val selectedStudent: UserProfile? = null,
     val selectedStudentRecords: List<AttendanceRecord> = emptyList(),
+    val selectedStudentPeriodBlocks: List<AttendancePeriodBlock> = emptyList(),
+    val blockedEmails: List<BlockedEmailEntry> = emptyList(),
+    val activeStudentCount: Int = 0,
+    val guestObserverCount: Int = 0,
     val isBusy: Boolean = false,
     val errorMessage: String? = null
 )
@@ -85,6 +91,15 @@ class AdminViewModel(
             }
         }
 
+    private val selectedPeriodBlocksFlow: Flow<List<AttendancePeriodBlock>> =
+        _selectedStudentId.flatMapLatest { uid ->
+            if (uid.isNullOrBlank()) {
+                flowOf(emptyList())
+            } else {
+                repository.observePeriodBlocks(uid).safeStream(emptyList(), "selectedPeriodBlocks")
+            }
+        }
+
     private val presenceTickFlow: Flow<Long> = kotlinx.coroutines.flow.flow {
         while (true) {
             emit(System.currentTimeMillis())
@@ -102,17 +117,22 @@ class AdminViewModel(
         combine(
             presenceTickFlow,
             repository.observeAcademicCatalog().safeStream(AcademicCatalog.defaultCatalog(), "catalog"),
-            repository.observeAllStudentTrendSummaries().safeStream(emptyList(), "trendSummaries")
-        ) { nowMs, catalog, trendSummaries -> Triple(nowMs, catalog, trendSummaries) }
-    ) { settings, feedback, broadcasts, communityStats, tickCatalogAndTrends ->
+            repository.observeAllStudentTrendSummaries().safeStream(emptyList(), "trendSummaries"),
+            repository.observeBlockedEmailsAdmin().safeStream(emptyList(), "blockedEmails")
+        ) { nowMs, catalog, trendSummaries, blockedEmails ->
+            listOf<Any>(nowMs, catalog, trendSummaries, blockedEmails)
+        }
+    ) { settings, feedback, broadcasts, communityStats, tail ->
+        @Suppress("UNCHECKED_CAST")
         AdminSecondaryBundle(
             settings = settings,
             feedback = feedback,
             broadcasts = broadcasts,
             communityStats = communityStats,
-            nowMs = tickCatalogAndTrends.first,
-            academicCatalog = tickCatalogAndTrends.second,
-            trendSummaries = tickCatalogAndTrends.third
+            nowMs = tail[0] as Long,
+            academicCatalog = tail[1] as AcademicCatalog,
+            trendSummaries = tail[2] as List<StudentTrendSummary>,
+            blockedEmails = tail[3] as List<BlockedEmailEntry>
         )
     }
 
@@ -125,28 +145,31 @@ class AdminViewModel(
             adminSecondaryFlow,
             _selectedStudentId,
             selectedRecordsFlow,
+            selectedPeriodBlocksFlow,
             _isBusy
-        ) { secondary, selectedId, selectedRecords, busy ->
-            AdminExtras(secondary, selectedId, selectedRecords, busy)
+        ) { secondary, selectedId, selectedRecords, selectedPeriods, busy ->
+            AdminExtras(secondary, selectedId, selectedRecords, selectedPeriods, busy)
         }
     ) { rawStudents, notices, terms, events, extras ->
         val sec = extras.secondary
         val trendSummaryByUserId = sec.trendSummaries.associateBy { it.userId.ifBlank { it.id } }
         val students = rawStudents.map { st ->
-            st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
+            if (st.guestObserver) st else st.withReconciledTrendSummary(trendSummaryByUserId[st.userId])
         }
-        // Reconcile the public /app_stats/community counter whenever admin observes an exact count mismatch
+        val activeStudents = students.filterNot { it.guestObserver }
+        val guestCount = students.count { it.guestObserver }
+        // Reconcile the public /app_stats/community counter using strictly active non-guest student accounts
         if (students.isNotEmpty() &&
-            students.size != sec.communityStats.totalAccounts &&
-            students.size != lastSyncedAccountCount
+            activeStudents.size != sec.communityStats.totalAccounts &&
+            activeStudents.size != lastSyncedAccountCount
         ) {
-            lastSyncedAccountCount = students.size
+            lastSyncedAccountCount = activeStudents.size
             viewModelScope.launch {
-                repository.syncCommunityAccountCountAdmin(students.size)
+                repository.syncCommunityAccountCountAdmin(activeStudents.size)
             }
         }
         val selectedStudent = students.firstOrNull { it.userId == extras.selectedId }
-        val onlineNowCount = students.count { it.isCurrentlyOnline(sec.nowMs) }
+        val onlineNowCount = activeStudents.count { it.isCurrentlyOnline(sec.nowMs) }
         AdminUiState(
             students = students,
             notices = notices,
@@ -160,6 +183,10 @@ class AdminViewModel(
             academicCatalog = sec.academicCatalog,
             selectedStudent = selectedStudent,
             selectedStudentRecords = extras.selectedRecords,
+            selectedStudentPeriodBlocks = extras.selectedPeriodBlocks,
+            blockedEmails = sec.blockedEmails,
+            activeStudentCount = activeStudents.size,
+            guestObserverCount = guestCount,
             isBusy = extras.busy
         )
     }.stateIn(
@@ -208,7 +235,7 @@ class AdminViewModel(
             res.onSuccess {
                 val isFutureSchedule = scheduledAtMillis != null && scheduledAtMillis > System.currentTimeMillis()
                 _snackbar.value = when {
-                    isFutureSchedule -> "Notice scheduled for ${DateUtils.formatScheduledDateTime(scheduledAtMillis!!)}"
+                    isFutureSchedule -> "Notice scheduled for ${DateUtils.formatScheduledDateTime(scheduledAtMillis)}"
                     noticeId == null -> "Notice published"
                     else -> "Notice updated"
                 }
@@ -277,6 +304,68 @@ class AdminViewModel(
             )
             res.onSuccess { _snackbar.value = "Deleted attendance record ($dateKey)" }
                 .onFailure { e -> _snackbar.value = e.message ?: "Delete failed" }
+        }
+    }
+
+    fun deleteStudentPeriodBlock(student: UserProfile, periodId: String) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.deletePeriodBlock(student.userId, periodId)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = "Unlocked time period for ${student.greetingName}"
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not unlock period"
+            }
+        }
+    }
+
+    fun toggleStudentGuestObserver(student: UserProfile, guestObserver: Boolean) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.setUserGuestObserverAdmin(student, guestObserver)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = if (guestObserver) {
+                    "${student.greetingName} marked as Guest / Observer (detached from school stats & polls)"
+                } else {
+                    "${student.greetingName} restored as an active student account"
+                }
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not update Guest / Observer status"
+            }
+        }
+    }
+
+    fun removeAndBlockStudent(
+        student: UserProfile,
+        reason: String? = null,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.removeAndBlockUserAdmin(student, reason)
+            _isBusy.value = false
+            res.onSuccess {
+                _selectedStudentId.value = null
+                _snackbar.value = "Removed ${student.fullName} & blocked ${student.email.lowercase()}"
+                onDone()
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not remove & block user"
+            }
+        }
+    }
+
+    fun unblockEmail(email: String) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.unblockEmailAdmin(email)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbar.value = "Unblocked ${email.lowercase()}"
+            }.onFailure { e ->
+                _snackbar.value = e.message ?: "Could not unblock email"
+            }
         }
     }
 
@@ -662,13 +751,15 @@ class AdminViewModel(
         val communityStats: CommunityStats,
         val nowMs: Long,
         val academicCatalog: AcademicCatalog,
-        val trendSummaries: List<StudentTrendSummary> = emptyList()
+        val trendSummaries: List<StudentTrendSummary> = emptyList(),
+        val blockedEmails: List<BlockedEmailEntry> = emptyList()
     )
 
     private data class AdminExtras(
         val secondary: AdminSecondaryBundle,
         val selectedId: String?,
         val selectedRecords: List<AttendanceRecord>,
+        val selectedPeriodBlocks: List<AttendancePeriodBlock>,
         val busy: Boolean
     )
 }

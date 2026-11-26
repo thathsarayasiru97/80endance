@@ -111,8 +111,12 @@ import com.example.ui.components.FrostedHeroCard
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.NoticeBoardSheet
 import com.example.ui.components.PinnedNoticeSlideshow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.example.ui.components.AnimatedOdometerText
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.ProfilePhotoDialog
+import com.example.ui.components.springPressScale
 import com.example.ui.components.AdminOnlineNowPill
 import com.example.ui.components.AdminOnlineUsersSheet
 import com.example.ui.components.AdminRegisteredMembersSheet
@@ -1729,9 +1733,20 @@ private fun NextDaySchoolPollCard(
             }
 
             // Optional 1-tap anonymous reason chips after choosing Coming / Skipping
-            if (myVote != null) {
-                val matchingReasons = remember(myVote) {
-                    NextDayVoteReason.entries.filter { it.forGoing == myVote }
+            val pollHaptic = LocalHapticFeedback.current
+            AnimatedVisibility(
+                visible = myVote != null,
+                enter = expandVertically(
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(150)) + fadeOut(tween(120))
+            ) {
+                val activeVote = myVote ?: true
+                val matchingReasons = remember(activeVote) {
+                    NextDayVoteReason.entries.filter { it.forGoing == activeVote }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
@@ -1746,24 +1761,43 @@ private fun NextDaySchoolPollCard(
                     ) {
                         matchingReasons.forEach { reason ->
                             val isSelected = summary.myVoteReasonTag == reason.raw
-                            Surface(
-                                color = if (isSelected) {
-                                    if (myVote) semantic.presentContainer else semantic.absentContainer
+                            val chipBg by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    if (activeVote) semantic.presentContainer else semantic.absentContainer
                                 } else {
                                     MaterialTheme.colorScheme.surfaceContainerLow
                                 },
+                                animationSpec = tween(180),
+                                label = "poll_reason_bg_${reason.raw}"
+                            )
+                            val chipBorder by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    if (activeVote) semantic.present else semantic.absent
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                                animationSpec = tween(180),
+                                label = "poll_reason_border_${reason.raw}"
+                            )
+                            val chipFg by animateColorAsState(
+                                targetValue = if (isSelected) {
+                                    if (activeVote) semantic.onPresentContainer else semantic.onAbsentContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                animationSpec = tween(180),
+                                label = "poll_reason_fg_${reason.raw}"
+                            )
+                            Surface(
+                                color = chipBg,
                                 shape = RoundedCornerShape(50),
-                                border = BorderStroke(
-                                    width = 1.dp,
-                                    color = if (isSelected) {
-                                        if (myVote) semantic.present else semantic.absent
-                                    } else {
-                                        MaterialTheme.colorScheme.outlineVariant
-                                    }
-                                ),
+                                border = BorderStroke(width = 1.dp, color = chipBorder),
                                 modifier = Modifier
+                                    .springPressScale(pressedScale = 0.94f)
+                                    .clip(RoundedCornerShape(50))
                                     .clickable {
-                                        onVote(myVote, if (isSelected) "" else reason.raw)
+                                        pollHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onVote(activeVote, if (isSelected) "" else reason.raw)
                                     }
                                     .testTag("poll_reason_chip_${reason.raw}")
                             ) {
@@ -1771,11 +1805,7 @@ private fun NextDaySchoolPollCard(
                                     text = reason.label,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) {
-                                        if (myVote) semantic.onPresentContainer else semantic.onAbsentContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
+                                    color = chipFg,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
                             }
@@ -1795,13 +1825,13 @@ private fun NextDaySchoolPollCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
+                        AnimatedOdometerText(
                             text = "Coming $comingPctInt% (${summary.goingCount})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = semantic.present
                         )
-                        Text(
+                        AnimatedOdometerText(
                             text = "Not Coming $notComingPctInt% (${summary.notGoingCount})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,

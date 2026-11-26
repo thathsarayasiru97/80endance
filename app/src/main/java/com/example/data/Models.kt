@@ -261,6 +261,7 @@ data class UserProfile(
     val appVersionName: String? = null,
     val appVersionCode: Int? = null,
     val onlineNow: Boolean = false,
+    val guestObserver: Boolean = false,
     @ServerTimestamp val lastSeenAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -306,6 +307,8 @@ data class UserProfile(
     /**
      * Reconciles cached [presentCount] and [absentCount] with the student's synced
      * [StudentTrendSummary] (which includes locked attendance time periods).
+     * Never coerces against the stale stored presentCount/absentCount so that unlocking
+     * or deleting a locked time period accurately decreases the totals too.
      */
     fun withReconciledTrendSummary(summary: StudentTrendSummary?): UserProfile {
         if (summary == null || summary.totalCounted <= 0) return this
@@ -315,9 +318,9 @@ data class UserProfile(
             return this
         }
         val reconciledPresent = (summary.totalAttended - priorPresentCount - medicalCount - schoolEventCount)
-            .coerceAtLeast(presentCount)
+            .coerceAtLeast(0)
         val reconciledAbsent = (summary.totalAbsent - priorAbsentCount)
-            .coerceAtLeast(absentCount)
+            .coerceAtLeast(0)
         return copy(
             presentCount = reconciledPresent,
             absentCount = reconciledAbsent
@@ -325,8 +328,8 @@ data class UserProfile(
     }
 
     /**
-     * Treats a student as live online only if [onlineNow] is true and their heartbeat
-     * [lastSeenAt] arrived within the last 4 minutes (prevents stale online states).
+     * Treats a student as live online only if [onlineNow] is true, not detached as a guest/observer,
+     * and their heartbeat [lastSeenAt] arrived within the last 4 minutes.
      */
     fun isCurrentlyOnline(nowMillis: Long = System.currentTimeMillis()): Boolean {
         if (!onlineNow) return false
@@ -793,6 +796,17 @@ data class BatchCountdownMilestone(
     val badgeText: String
 )
 
-
-
-
+/**
+ * Admin-managed blocklist entry keyed by lowercase email address in `/blocked_emails/{blockedEmail}`.
+ */
+@Keep
+@IgnoreExtraProperties
+data class BlockedEmailEntry(
+    @DocumentId val id: String = "",
+    val email: String = "",
+    val userId: String? = null,
+    val displayName: String? = null,
+    val reason: String? = null,
+    val blockedByEmail: String = "",
+    @ServerTimestamp val blockedAt: Timestamp? = null
+)

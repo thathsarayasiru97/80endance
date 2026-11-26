@@ -1,6 +1,13 @@
 package com.example.ui.admin
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,23 +32,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
-import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lightbulb
-import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -55,7 +63,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,17 +73,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
-import com.example.data.AppSettings
 import com.example.data.CalendarEvent
 import com.example.data.DateUtils
 import com.example.data.FeedbackStatus
@@ -84,13 +94,16 @@ import com.example.data.FeedbackType
 import com.example.data.Notice
 import com.example.data.NoticeTargetType
 import com.example.data.UserProfile
-import androidx.compose.ui.draw.clip
 import com.example.system.AppUpdateChecker
 import com.example.system.UpdateCheckResult
 import com.example.ui.components.ProfileAvatar
 import com.example.ui.components.PulsingLiveDot
+import com.example.ui.components.RollingCounterText
+import com.example.ui.components.SmoothTabContent
+import com.example.ui.components.springPressScale
 import com.example.ui.theme.LocalAttendanceColors
 import com.example.viewmodel.AdminViewModel
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -121,27 +134,28 @@ fun AdminPanelScreen(
     var previewAvatarStudent by remember { mutableStateOf<UserProfile?>(null) }
 
     val context = LocalContext.current
-    // Settings editor state
-    var thresholdText by remember(state.appSettings) { mutableStateOf(state.appSettings.defaultEligibilityPercent.toString()) }
-    var exam2026 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2026ExamDate) }
-    var exam2027 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2027ExamDate) }
-    var exam2028 by remember(state.appSettings) { mutableStateOf(state.appSettings.al2028ExamDate) }
-    var directApkUrlInput by remember(state.appSettings.directApkDownloadUrl) {
-        mutableStateOf(state.appSettings.directApkDownloadUrl.orEmpty())
-    }
-    var directApkVersionInput by remember(state.appSettings.directApkVersion) {
-        mutableStateOf(state.appSettings.directApkVersion.orEmpty())
-    }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     var latestGithubVersion by remember { mutableStateOf<String?>(null) }
+    var isCheckingGithubRelease by remember { mutableStateOf(false) }
     val todayKey = remember { DateUtils.todayKey() }
 
-    LaunchedEffect(Unit) {
-        val check = AppUpdateChecker.checkForUpdate(context)
-        latestGithubVersion = when (check) {
-            is UpdateCheckResult.UpdateAvailable -> check.info.latestVersion
-            is UpdateCheckResult.UpToDate -> check.latestFoundTag ?: check.currentVersion
-            else -> null
+    fun refreshGithubRelease() {
+        if (isCheckingGithubRelease) return
+        scope.launch {
+            isCheckingGithubRelease = true
+            val check = AppUpdateChecker.checkForUpdate(context)
+            latestGithubVersion = when (check) {
+                is UpdateCheckResult.UpdateAvailable -> check.info.latestVersion
+                is UpdateCheckResult.UpToDate -> check.latestFoundTag ?: check.currentVersion
+                else -> latestGithubVersion
+            }
+            isCheckingGithubRelease = false
         }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshGithubRelease()
     }
 
     LaunchedEffect(snackbarMessage) {
@@ -159,24 +173,71 @@ fun AdminPanelScreen(
                     IconButton(onClick = onBack, modifier = Modifier.testTag("admin_back_button")) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to Settings")
                     }
+                },
+                actions = {
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedTab = 6
+                        },
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = if (selectedTab == 6) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            },
+                            contentColor = if (selectedTab == 6) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            }
+                        ),
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .testTag("admin_topbar_config_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = "Open Config & APK Override",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Config",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            if (selectedTab == 0) {
+            val showFab = selectedTab == 0 || selectedTab == 3
+            AnimatedVisibility(
+                visible = showFab,
+                enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(),
+                exit = scaleOut() + fadeOut()
+            ) {
                 FloatingActionButton(
-                    onClick = { editingNotice = null; showNoticeDialog = true },
-                    modifier = Modifier.testTag("admin_add_notice_fab")
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (selectedTab == 0) {
+                            editingNotice = null
+                            showNoticeDialog = true
+                        } else {
+                            editingCalendarEvent = null
+                            showAddEventDialog = true
+                        }
+                    },
+                    modifier = Modifier
+                        .springPressScale()
+                        .testTag(if (selectedTab == 0) "admin_add_notice_fab" else "admin_add_event_fab")
                 ) {
-                    Icon(Icons.Rounded.Add, contentDescription = "Add notice")
-                }
-            } else if (selectedTab == 3) {
-                FloatingActionButton(
-                    onClick = { editingCalendarEvent = null; showAddEventDialog = true },
-                    modifier = Modifier.testTag("admin_add_event_fab")
-                ) {
-                    Icon(Icons.Rounded.Add, contentDescription = "Add calendar event")
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = if (selectedTab == 0) "Add notice" else "Add calendar event"
+                    )
                 }
             }
         }
@@ -204,24 +265,45 @@ fun AdminPanelScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         PulsingLiveDot(color = semantic.present, dotSize = 8.dp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${state.onlineNowCount} online right now",
+                        RollingCounterText(
+                            count = state.onlineNowCount,
+                            suffix = " online right now",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = semantic.present
                         )
                     }
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(50)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "${state.students.size} accounts",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
+                        if (state.guestObserverCount > 0) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Text(
+                                    text = "${state.guestObserverCount} guest",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            RollingCounterText(
+                                count = state.activeStudentCount,
+                                suffix = " students",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -229,20 +311,48 @@ fun AdminPanelScreen(
             val openFeedbackCount = remember(state.feedbackItems) {
                 state.feedbackItems.count { it.statusEnum == FeedbackStatus.OPEN }
             }
+            fun selectTab(index: Int) {
+                if (selectedTab != index) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    selectedTab = index
+                }
+            }
             PrimaryScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
-                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Notices") })
-                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Students (${state.students.size})") })
-                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Notify") }, modifier = Modifier.testTag("admin_tab_notify"))
-                Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text("Calendar") })
+                Tab(selected = selectedTab == 0, onClick = { selectTab(0) }, text = { Text("Notices") })
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectTab(1) },
+                    text = { Text("Students (${state.activeStudentCount})") }
+                )
+                Tab(
+                    selected = selectedTab == 6,
+                    onClick = { selectTab(6) },
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text("Config", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    modifier = Modifier.testTag("admin_tab_config")
+                )
+                Tab(selected = selectedTab == 2, onClick = { selectTab(2) }, text = { Text("Notify") }, modifier = Modifier.testTag("admin_tab_notify"))
+                Tab(selected = selectedTab == 3, onClick = { selectTab(3) }, text = { Text("Calendar") })
                 Tab(
                     selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
+                    onClick = { selectTab(4) },
                     text = { Text("Catalog") },
                     modifier = Modifier.testTag("admin_tab_catalog")
                 )
                 Tab(
                     selected = selectedTab == 5,
-                    onClick = { selectedTab = 5 },
+                    onClick = { selectTab(5) },
                     text = {
                         Text(
                             if (openFeedbackCount > 0) "Feedback ($openFeedbackCount)" else "Feedback"
@@ -256,7 +366,12 @@ fun AdminPanelScreen(
                     .fillMaxSize()
                     .widthIn(max = 600.dp)
             ) {
-                when (selectedTab) {
+                SmoothTabContent(
+                    targetState = selectedTab,
+                    orderOf = { it },
+                    label = "admin_tab_transition"
+                ) { activeTab ->
+                when (activeTab) {
                     0 -> {
                         LazyColumn(
                             contentPadding = PaddingValues(16.dp),
@@ -372,14 +487,15 @@ fun AdminPanelScreen(
                                     st.alStream.contains(searchQuery, ignoreCase = true) ||
                                     st.email.contains(searchQuery, ignoreCase = true)
                                 val matchesFilter = when (studentFilter) {
-                                    "online" -> st.isCurrentlyOnline(state.presenceNowMillis)
-                                    "risk" -> st.quickOverallPercent < state.appSettings.defaultEligibilityPercent
-                                    "eligible" -> st.quickOverallPercent >= state.appSettings.defaultEligibilityPercent
+                                    "online" -> !st.guestObserver && st.isCurrentlyOnline(state.presenceNowMillis)
+                                    "risk" -> !st.guestObserver && st.quickOverallPercent < state.appSettings.defaultEligibilityPercent
+                                    "eligible" -> !st.guestObserver && st.quickOverallPercent >= state.appSettings.defaultEligibilityPercent
+                                    "guests" -> st.guestObserver
                                     else -> true
                                 }
                                 matchesQuery && matchesFilter
                             }.sortedWith(
-                                compareByDescending<UserProfile> { it.isCurrentlyOnline(state.presenceNowMillis) }
+                                compareByDescending<UserProfile> { !it.guestObserver && it.isCurrentlyOnline(state.presenceNowMillis) }
                                     .thenByDescending { it.lastSeenAt?.seconds ?: 0L }
                                     .thenBy { it.fullName.lowercase() }
                             )
@@ -404,7 +520,7 @@ fun AdminPanelScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    FilterChip(selected = studentFilter == "all", onClick = { studentFilter = "all" }, label = { Text("All") })
+                                    FilterChip(selected = studentFilter == "all", onClick = { studentFilter = "all" }, label = { Text("All (${state.students.size})") })
                                     FilterChip(
                                         selected = studentFilter == "online",
                                         onClick = { studentFilter = "online" },
@@ -413,6 +529,12 @@ fun AdminPanelScreen(
                                     )
                                     FilterChip(selected = studentFilter == "risk", onClick = { studentFilter = "risk" }, label = { Text("Below 80%") })
                                     FilterChip(selected = studentFilter == "eligible", onClick = { studentFilter = "eligible" }, label = { Text("Eligible") })
+                                    FilterChip(
+                                        selected = studentFilter == "guests",
+                                        onClick = { studentFilter = "guests" },
+                                        label = { Text("Guests (${state.guestObserverCount})") },
+                                        modifier = Modifier.testTag("admin_filter_guests")
+                                    )
                                 }
                             }
                             items(filteredStudents, key = { it.userId }) { student ->
@@ -431,6 +553,7 @@ fun AdminPanelScreen(
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .springPressScale()
                                         .clickable { viewModel.selectStudent(student.userId) }
                                 ) {
                                     Row(
@@ -461,7 +584,26 @@ fun AdminPanelScreen(
                                             }
                                         }
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(student.fullName, style = MaterialTheme.typography.titleSmall)
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(student.fullName, style = MaterialTheme.typography.titleSmall)
+                                                if (student.guestObserver) {
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                                                        shape = RoundedCornerShape(6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "GUEST",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                             Text(
                                                 text = "${student.className} • ${student.alStream} • ${student.alExamYear} A/L",
                                                 style = MaterialTheme.typography.bodySmall,
@@ -604,263 +746,7 @@ fun AdminPanelScreen(
                                 )
                             }
 
-                            // Next-Day School Poll Dev Feature Toggle
-                            item {
-                                Card(
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("admin_next_day_poll_card")
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(14.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(end = 12.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Text(
-                                                text = "Next-Day School Poll (Dev Toggle)",
-                                                style = MaterialTheme.typography.titleSmall,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = "8:00 PM – 5:00 AM daily \"Going to school tomorrow?\" notification + live dashboard poll. Keep OFF until enough students join.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Switch(
-                                            checked = state.appSettings.nextDayPollEnabled,
-                                            onCheckedChange = { enabled ->
-                                                viewModel.setNextDayPollEnabled(enabled)
-                                            },
-                                            modifier = Modifier.testTag("admin_next_day_poll_switch")
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Direct APK Download Override (Update Delivery Optimization)
-                            item {
-                                val savedUrl = state.appSettings.validDirectApkDownloadUrl
-                                val savedVersion = state.appSettings.cleanDirectApkVersion
-                                val isOutdated = savedUrl != null && AppUpdateChecker.isAdminApkOverrideOutdated(
-                                    configuredVersion = savedVersion,
-                                    latestGithubVersion = latestGithubVersion
-                                )
-                                val (statusText, statusBg, statusFg) = when {
-                                    savedUrl == null -> Triple(
-                                        "Not configured — auto-using GitHub release APK",
-                                        MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    isOutdated -> Triple(
-                                        "Outdated (${savedVersion ?: "no version"}) vs ${latestGithubVersion?.let { AppUpdateChecker.formatVersionLabel(it) } ?: "latest"} — falling back to GitHub",
-                                        semantic.medicalContainer,
-                                        semantic.onMedicalContainer
-                                    )
-                                    else -> Triple(
-                                        "Active Override (${savedVersion?.let { AppUpdateChecker.formatVersionLabel(it) } ?: "latest"})",
-                                        semantic.presentContainer,
-                                        semantic.onPresentContainer
-                                    )
-                                }
-
-                                Card(
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("admin_direct_apk_override_card")
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(14.dp),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Download,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "Direct APK Download Override",
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                                Text(
-                                                    text = "Paste a direct HTTPS .apk link and its release version. Automatically falls back to GitHub if empty or outdated.",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-
-                                        Surface(
-                                            color = statusBg,
-                                            shape = RoundedCornerShape(10.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = statusText,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = statusFg,
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                                            )
-                                        }
-
-                                        OutlinedTextField(
-                                            value = directApkUrlInput,
-                                            onValueChange = { directApkUrlInput = it.take(512) },
-                                            label = { Text("Direct APK Download URL (https://...)") },
-                                            placeholder = { Text("https://github.com/.../80endance-v4.0.apk") },
-                                            singleLine = true,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .testTag("admin_direct_apk_url_input")
-                                        )
-
-                                        OutlinedTextField(
-                                            value = directApkVersionInput,
-                                            onValueChange = { directApkVersionInput = it.take(32) },
-                                            label = { Text("APK Version / Version Code (e.g. 4.0)") },
-                                            placeholder = { Text(latestGithubVersion ?: BuildConfig.VERSION_NAME) },
-                                            singleLine = true,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .testTag("admin_direct_apk_version_input")
-                                        )
-
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Button(
-                                                onClick = {
-                                                    viewModel.saveDirectApkOverride(
-                                                        url = directApkUrlInput,
-                                                        version = directApkVersionInput
-                                                    )
-                                                },
-                                                enabled = !state.isBusy,
-                                                modifier = Modifier
-                                                    .weight(1.3f)
-                                                    .testTag("admin_save_direct_apk_button")
-                                            ) {
-                                                Text("Save Link")
-                                            }
-                                            OutlinedButton(
-                                                onClick = {
-                                                    directApkUrlInput = ""
-                                                    directApkVersionInput = ""
-                                                    viewModel.saveDirectApkOverride("", "")
-                                                },
-                                                enabled = !state.isBusy && (savedUrl != null || directApkUrlInput.isNotBlank()),
-                                                modifier = Modifier
-                                                    .weight(0.9f)
-                                                    .testTag("admin_clear_direct_apk_button")
-                                            ) {
-                                                Text("Clear")
-                                            }
-                                            OutlinedButton(
-                                                onClick = {
-                                                    val testUrl = directApkUrlInput.trim()
-                                                    if (testUrl.startsWith("https://", ignoreCase = true)) {
-                                                        AppUpdateChecker.openSafeHttpsUrl(context, testUrl)
-                                                    }
-                                                },
-                                                enabled = directApkUrlInput.trim().startsWith("https://", ignoreCase = true),
-                                                modifier = Modifier
-                                                    .weight(0.9f)
-                                                    .testTag("admin_test_direct_apk_button")
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                                                    contentDescription = "Test direct APK link",
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Global Defaults & A/L Exam Dates
-                            item {
-                                Card(
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text("Global Policy & A/L Exam Countdowns", style = MaterialTheme.typography.titleSmall)
-                                        OutlinedTextField(
-                                            value = thresholdText,
-                                            onValueChange = { thresholdText = it.filter(Char::isDigit).take(3) },
-                                            label = { Text("Min Eligibility % (default 80)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        OutlinedTextField(
-                                            value = exam2026,
-                                            onValueChange = { exam2026 = it.take(10) },
-                                            label = { Text("2026 A/L Exam Date (YYYY-MM-DD)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        OutlinedTextField(
-                                            value = exam2027,
-                                            onValueChange = { exam2027 = it.take(10) },
-                                            label = { Text("2027 A/L Exam Date (YYYY-MM-DD)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        OutlinedTextField(
-                                            value = exam2028,
-                                            onValueChange = { exam2028 = it.take(10) },
-                                            label = { Text("2028 A/L Exam Date (YYYY-MM-DD)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Button(
-                                            onClick = {
-                                                val dateRegex = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-                                                if (exam2026.matches(dateRegex) && exam2027.matches(dateRegex) && exam2028.matches(dateRegex)) {
-                                                    viewModel.saveGlobalSettings(
-                                                        state.appSettings.copy(
-                                                            defaultEligibilityPercent = (thresholdText.toIntOrNull() ?: 80).coerceIn(50, 100),
-                                                            al2026ExamDate = exam2026,
-                                                            al2027ExamDate = exam2027,
-                                                            al2028ExamDate = exam2028
-                                                        )
-                                                    )
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) { Text("Save Global Defaults") }
-                                    }
-                                }
-                            }
-
+                            // Calendar Events List (App Config, Direct APK Override & Feature Flags moved to Config tab)
                             item {
                                 Text("Calendar Events (${sortedEvents.size})", style = MaterialTheme.typography.titleSmall)
                             }
@@ -1037,116 +923,66 @@ fun AdminPanelScreen(
                             item { Spacer(modifier = Modifier.height(32.dp)) }
                         }
                     }
+
+                    6 -> {
+                        AdminConfigTab(
+                            appSettings = state.appSettings,
+                            students = state.students,
+                            blockedEmails = state.blockedEmails,
+                            latestGithubVersion = latestGithubVersion,
+                            isCheckingGithubRelease = isCheckingGithubRelease,
+                            isBusy = state.isBusy,
+                            onRefreshGithubRelease = { refreshGithubRelease() },
+                            onSaveDirectApkOverride = { url, version ->
+                                viewModel.saveDirectApkOverride(url, version)
+                            },
+                            onSetNextDayPollEnabled = { enabled ->
+                                viewModel.setNextDayPollEnabled(enabled)
+                            },
+                            onSaveGlobalSettings = { updatedSettings ->
+                                viewModel.saveGlobalSettings(updatedSettings)
+                            },
+                            onUnblockEmail = { email ->
+                                viewModel.unblockEmail(email)
+                            }
+                        )
+                    }
+                }
                 }
             }
         }
     }
 
-    // Selected Student Detail Sheet
+    // Selected Student Detail Sheet (Full Monthly Calendar View + Locked Periods + Guest Observer + Remove & Block)
     state.selectedStudent?.let { student ->
         ModalBottomSheet(onDismissRequest = { viewModel.selectStudent(null) }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    ProfileAvatar(
-                        customAvatarBase64 = student.customAvatarBase64,
-                        googlePhotoUrl = student.photoUrl,
-                        displayName = student.fullName,
-                        size = 64.dp,
-                        onClick = { previewAvatarStudent = student },
-                        modifier = Modifier.testTag("admin_detail_student_avatar")
-                    )
-                    val detailOnline = student.isCurrentlyOnline(state.presenceNowMillis)
-                    val detailLastSeen = DateUtils.formatLastSeen(
-                        timestampMillis = student.lastSeenAt?.toDate()?.time,
-                        isOnline = detailOnline,
-                        nowMillis = state.presenceNowMillis
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(student.fullName, style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            "${student.className} • ${student.alStream} • ${student.email}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = detailLastSeen,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (detailOnline) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (detailOnline) semantic.present else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = if (!student.customAvatarBase64.isNullOrBlank()) {
-                                "Custom uploaded photo (tap to enlarge)"
-                            } else if (!student.photoUrl.isNullOrBlank()) {
-                                "Google account photo (tap to enlarge)"
-                            } else {
-                                "No profile photo uploaded"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+            AdminStudentCalendarSheet(
+                student = student,
+                records = state.selectedStudentRecords,
+                periodBlocks = state.selectedStudentPeriodBlocks,
+                calendarEvents = state.calendarEvents,
+                terms = state.terms,
+                appSettings = state.appSettings,
+                presenceNowMillis = state.presenceNowMillis,
+                onAvatarClick = { previewAvatarStudent = student },
+                onEditProfile = { editStudentProfile = student },
+                onToggleGuestObserver = { isGuest ->
+                    viewModel.toggleStudentGuestObserver(student, isGuest)
+                },
+                onLogOrOverrideDate = { dateKey ->
+                    overrideDateKey = dateKey
+                    overrideStudent = student
+                },
+                onDeleteDateAttendance = { dateKey ->
+                    viewModel.deleteStudentAttendance(student, dateKey)
+                },
+                onDeletePeriodBlock = { periodId ->
+                    viewModel.deleteStudentPeriodBlock(student, periodId)
+                },
+                onRemoveAndBlockStudent = { reason ->
+                    viewModel.removeAndBlockStudent(student, reason)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = {
-                            overrideDateKey = DateUtils.todayKey()
-                            overrideStudent = student
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Log / Fix Day") }
-                    OutlinedButton(
-                        onClick = { editStudentProfile = student },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Edit Balance/Class") }
-                }
-
-                Text("Recent Attendance Logs (${state.selectedStudentRecords.size})", style = MaterialTheme.typography.titleSmall)
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp)
-                ) {
-                    items(state.selectedStudentRecords, key = { it.dateKey }) { rec ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("${rec.dateKey} — ${rec.statusEnum.label}", style = MaterialTheme.typography.titleSmall)
-                                    if (!rec.note.isNullOrBlank()) {
-                                        Text(rec.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                Row {
-                                    IconButton(onClick = { overrideDateKey = rec.dateKey; overrideStudent = student }) {
-                                        Icon(Icons.Rounded.Edit, contentDescription = "Edit day")
-                                    }
-                                    IconButton(onClick = { viewModel.deleteStudentAttendance(student, rec.dateKey) }) {
-                                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete day")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+            )
         }
     }
 

@@ -466,7 +466,8 @@ class AttendanceWidgetProvider : AppWidgetProvider() {
                 records = records,
                 calendarEvents = effectiveEvents,
                 countExcusedAsPresent = true,
-                todayKey = todayKey
+                todayKey = todayKey,
+                periodBlocks = periodBlocks
             )
             val weekly = AttendanceCalculator.calculateWeeklySummary(
                 records = records,

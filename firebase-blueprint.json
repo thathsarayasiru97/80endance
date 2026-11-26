@@ -34,6 +34,7 @@
         "photoUrl": { "type": "string", "description": "Optional Google account profile photo URL." },
         "customAvatarBase64": { "type": "string", "description": "Optional compressed custom avatar JPEG encoded as Base64 for cross-device sync." },
         "onlineNow": { "type": "boolean", "description": "Whether the student currently has the app open in foreground." },
+        "guestObserver": { "type": "boolean", "description": "Admin-managed demo/observer flag detaching teachers or old boys from live school stats, polls, streaks, and online presence." },
         "lastSeenAt": { "type": "string", "format": "date-time", "description": "Server timestamp of the student's latest presence heartbeat." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
@@ -242,6 +243,20 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
       },
       "required": ["userId", "displayAlias", "grade", "alStream", "className", "currentStreak", "bestStreak", "weeklyAttended", "weeklyTotal", "weekKey", "cheerCount", "optedIn", "updatedAt"]
+    },
+    "BlockedEmailEntry": {
+      "title": "BlockedEmailEntry",
+      "description": "Admin-managed blocklist of removed accounts keyed by lowercase email address.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "Normalized lowercase email address blocked from accessing the app." },
+        "userId": { "type": "string", "description": "Optional former Firebase Auth UID of the removed account." },
+        "displayName": { "type": "string", "description": "Optional display name of the removed user for admin reference." },
+        "reason": { "type": "string", "description": "Optional short admin reason." },
+        "blockedByEmail": { "type": "string", "description": "Admin email that created the block." },
+        "blockedAt": { "type": "string", "format": "date-time", "description": "Server timestamp when blocked." }
+      },
+      "required": ["email", "blockedByEmail", "blockedAt"]
     }
   },
   "firestore": {
@@ -292,6 +307,10 @@
     "/class_streak_entries/{userId}": {
       "schema": { "$ref": "#/entities/ClassStreakEntry" },
       "description": "Zero-PII opt-in class streak arena entries with rate-limited +1 peer cheers."
+    },
+    "/blocked_emails/{blockedEmail}": {
+      "schema": { "$ref": "#/entities/BlockedEmailEntry" },
+      "description": "Admin-managed blocklist keyed by lowercase email; users may only read their own email entry."
     }
   }
 }

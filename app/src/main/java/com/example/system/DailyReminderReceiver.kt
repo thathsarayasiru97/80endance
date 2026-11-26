@@ -344,7 +344,8 @@ class DailyReminderReceiver : BroadcastReceiver() {
             records = mergedRecords,
             calendarEvents = effectiveEvents,
             countExcusedAsPresent = true,
-            todayKey = todayKey
+            todayKey = todayKey,
+            periodBlocks = periodBlocks
         )
         val weekly = AttendanceCalculator.calculateWeeklySummary(
             records = mergedRecords,
